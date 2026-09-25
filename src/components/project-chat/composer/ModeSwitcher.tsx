@@ -1,7 +1,6 @@
 import { Check, ChevronDown, ClipboardList, ShieldCheck, Zap } from "lucide-react";
 import type { PermissionMode } from "shared";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
-import { withAlpha } from "../../dashboard/helpers";
 import { MODE_OPTIONS, modeOption, useDismiss } from "./composer-utils";
 import { useNativeOptionsMenu } from "./useNativeOptionsMenu";
 
@@ -78,10 +77,9 @@ export function ModeSwitcher({
             ? current.description
             : `${current.label} — ${current.description}`
         }
-        className="flex items-center gap-1.5 h-7 px-2 rounded-lg text-[11px] font-medium transition-colors hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-        style={{ color: styles.textSecondary }}
+        className="flex items-center gap-1.5 h-7 px-2 rounded-lg border border-clay-rim bg-well text-muted text-[12px] font-semibold transition-colors duration-100 hover:border-accent hover:bg-accent-tint disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-clay-rim"
       >
-        <Icon size={12} className="shrink-0" style={{ color: styles.accent }} />
+        <Icon size={12} className="shrink-0 text-accent" />
         {/* R87-A1 (owner: "when I make it smaller, at a point every single
             thing becomes minimized… it should smoothly be handled"): the
             label COLLAPSES (animated max-width + fade) instead of hard-
@@ -108,8 +106,10 @@ export function ModeSwitcher({
         <div
           role="menu"
           aria-label="Operating mode"
-          className="absolute bottom-9 left-0 w-64 rounded-2xl border p-1.5 z-50"
-          style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+          // R126-3d-4: the flyout = the clay card (card + rim + .ac-clay-sm
+          // — the small-surface shadow step; the bentoShadow/border JS legs
+          // retired).
+          className="absolute bottom-9 left-0 w-64 rounded-2xl border border-clay-rim bg-card p-1.5 z-50 ac-clay-sm"
         >
           {MODE_OPTIONS.map((option) => {
             const OptionIcon = ICONS[option.icon];
@@ -126,17 +126,18 @@ export function ModeSwitcher({
                   if (!isSelected) onChange(option.id);
                 }}
                 className={`w-full flex items-start gap-2 text-left px-2 py-1.5 rounded-lg transition-colors ${
-                  isSelected ? "" : "hover:bg-hover"
+                  isSelected ? "bg-accent-tint" : "hover:bg-hover"
                 }`}
-                style={{
-                  background: isSelected ? withAlpha(styles.accent, 0.09) : "transparent",
-                }}
               >
-                <OptionIcon size={12} className="shrink-0 mt-0.5" style={{ color: styles.accent }} />
+                <OptionIcon size={12} className="shrink-0 mt-0.5 text-accent" />
                 <span className="min-w-0 flex-1 flex items-center gap-1">
                   <span
-                    className="text-[12px] font-medium"
-                    style={{ color: isSelected ? styles.accent : styles.text }}
+                    // R126-3d-4: the selected row = accentTint + accentDeep
+                    // ink (the pickers' selected-row grammar); the JS color
+                    // ternary is gone.
+                    className={`text-[12px] font-medium ${
+                      isSelected ? "text-accent-deep" : "text-muted"
+                    }`}
                   >
                     {option.label}
                   </span>
@@ -147,7 +148,7 @@ export function ModeSwitcher({
                   ) : null}
                 </span>
                 {isSelected ? (
-                  <Check size={12} className="shrink-0 mt-0.5" style={{ color: styles.accent }} />
+                  <Check size={12} className="shrink-0 mt-0.5 text-accent-deep" />
                 ) : null}
               </button>
             );

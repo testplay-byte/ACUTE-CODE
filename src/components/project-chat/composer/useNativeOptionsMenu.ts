@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isNativeBrowserAvailable } from "../../../lib/native-browser";
 import {
   hideMenuOverlay,
+  // R126-3h: the shared payload-theme builder (the deep-tier/badge-tone/
+  // clay legs ride the payload now — the local pre-R126 literal below is
+  // retired).
+  menuThemeFromStyles,
   onMenuOverlayClose,
   onMenuOverlayPick,
   showMenuOverlay,
@@ -91,19 +95,12 @@ export interface NativeOptionsMenu {
 }
 
 /** The MenuTheme fields the overlay page paints with (the same subset
- * RightSidebar sends — JSON-safe strings + the dark flag). */
+ * RightSidebar sends — JSON-safe strings + the dark flag).
+ * R126-3h: the local literal is retired — the shared menuThemeFromStyles
+ * builder (lib/menu-overlay.ts) owns the fields, now including the
+ * deep-tier/badge-tone/clay legs. */
 function toMenuTheme(styles: ReturnType<typeof useThemeStyles>): MenuTheme {
-  return {
-    card: styles.card,
-    border: styles.border,
-    softShadow: styles.softShadow,
-    text: styles.text,
-    textSecondary: styles.textSecondary,
-    textTertiary: styles.textTertiary,
-    accent: styles.accent,
-    subtleHover: styles.subtleHover,
-    isDark: styles.isDark,
-  };
+  return menuThemeFromStyles(styles);
 }
 
 export function useNativeOptionsMenu(config: NativeOptionsMenuConfig): NativeOptionsMenu {

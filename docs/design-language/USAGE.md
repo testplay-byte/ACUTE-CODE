@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-24 round-126 -->
 # Usage — how to speak the language when editing UI
 
 Owner direction (round-98): "whenever we try to make edits in our UI, the
@@ -10,6 +10,12 @@ below), and the first three shared primitives (`Kicker` / `SectionCard` /
 `SettingsRow`) give the waves something to import instead of re-implementing
 (§3 below).
 
+**ROUND-126 (the Clay Companion redesign):** the language is the Android
+app's, adapted — every UI change now also answers the mobile constitution's
+three laws (minimal by default; animate the moment, never the surface; a
+companion, not a control panel). The checklist gains the clay checks (the
+surface ladder, the status grammar, the material laws).
+
 ## 1. The checklist (run it for every UI change)
 
 1. **Tokens**: every color from the pipeline (TOKENS §1), every size from
@@ -20,7 +26,18 @@ below), and the first three shared primitives (`Kicker` / `SectionCard` /
    loading/error idiom; add the row if you create one. The round-100 wave
    starts every card/label/row from `src/components/ui/` (§3 below).
 3. **Motion**: every transition maps to a MOTION §2–4 row; new keyframes
-   need a registry slot in the same round.
+   need a registry slot in the same round. Springs are IMPORTED from
+   `src/lib/motion.ts` (SPRING/SHEET_SPRING/TAB_SPRING) — never hand-rolled.
+4. **Clay (R126)**: cards carry the rim + `.ac-clay` shadow (TOKENS §5/§9);
+   recessed content sinks into `bg-well` (§10); status rides the badge tone
+   containers / deep text tiers (§11) — never flat-hue text, never
+   white-on-saturated fills, never alpha-hack chips.
+5. **Copy-length (R126, mobile law)**: card/option descriptions are ONE
+   line or absent; button labels 1–3 words; no explanation footnotes —
+   if a paragraph is needed to explain the screen, the screen is wrong.
+6. **Screens**: the change fits an archetype (SCREENS §1) and respects the
+   navigation model (SCREENS §2) — nav chrome changes need the SCREENS.md
+   contract updated in the same round.
 4. **States**: every surface answers loading / empty / error / ready
    (the round-97 state-awareness contract); skeletons via the shared
    primitives; errors `role="alert"` with cause + Retry.

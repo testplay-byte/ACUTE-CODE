@@ -195,9 +195,48 @@ export function applyServerAppearance(value: unknown): void {
     return;
   }
   applyingRemoteAppearance = true;
+  // R126 (the Clay Companion redesign — the SERVER leg of the one-time
+  // nova→clay identity migration): a server "nova" from a pre-redesign
+  // install would resurrect the retired default right after the local
+  // persist migration flipped it to clay (boot hydrates from the server
+  // AFTER zustand rehydrates localStorage). The guard maps server "nova"
+  // to clay EXACTLY ONCE per profile — a dedicated localStorage flag (not
+  // the persist version: this boundary also serves the live events frame).
+  // The flag is set inside the echo-guarded block, but the SERVER
+  // convergence push runs AFTER the guard lifts (pushAppearanceToServer is
+  // a no-op while applyingRemoteAppearance is true — the echo guard exists
+  // precisely so an applied remote value never bounces back; the migration
+  // push is the ONE sanctioned counter-push, and it must actually fire or
+  // the next boot's flag-set hydration would apply the stale server
+  // "nova" verbatim). A deliberate nova picked AFTER the flag is set rides
+  // untouched forever.
+  let appliedThemeId = typeof themeId === "string" ? themeId : undefined;
+  let r126ConvergeServer = false;
+  const R126_FLAG = "acute-code.theme.r126-nova-migrated";
+  if (appliedThemeId === "nova") {
+    let alreadyMigrated = false;
+    try {
+      alreadyMigrated =
+        typeof localStorage !== "undefined" && localStorage.getItem(R126_FLAG) === "1";
+    } catch {
+      alreadyMigrated = false;
+    }
+    if (!alreadyMigrated) {
+      appliedThemeId = "clay";
+      r126ConvergeServer = true;
+      try {
+        if (typeof localStorage !== "undefined") {
+          localStorage.setItem(R126_FLAG, "1");
+        }
+      } catch {
+        // A refused flag store only means the guard may re-map once more
+        // on the next boot — self-healing, never a crash.
+      }
+    }
+  }
   try {
-    if (typeof themeId === "string") {
-      useThemeStore.getState().setTheme(themeId);
+    if (appliedThemeId !== undefined) {
+      useThemeStore.getState().setTheme(appliedThemeId);
     }
     if (mode === "system" || mode === "light" || mode === "dark") {
       useThemeStore.getState().setMode(mode);
@@ -218,6 +257,13 @@ export function applyServerAppearance(value: unknown): void {
     }
   } finally {
     applyingRemoteAppearance = false;
+  }
+  // R126: the migration's counter-push — OUTSIDE the echo guard so it
+  // actually fires (see the block comment above). Fire-and-forget exactly
+  // like every other push; a failed PUT leaves the flag set and the local
+  // clay standing, and the NEXT deliberate flip re-converges the server.
+  if (r126ConvergeServer) {
+    pushAppearanceToServer({ themeId: "clay" });
   }
 }
 
@@ -307,7 +353,13 @@ export function usePrefersColorSchemeDark(): boolean {
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set) => ({
-      themeId: "nova",
+      // R126 (the Clay Companion redesign): clay is the app's identity
+      // language now — the default flips from nova, and a ONE-TIME migration
+      // (the version bump below) walks every existing profile off the
+      // never-re-designed nova onto the new default ONCE. A user who
+      // deliberately picks nova (or any other flavor) AFTER the migration
+      // keeps that pick forever — the migration never runs again.
+      themeId: "clay",
       mode: "dark",
       density: "comfortable",
       // R97-H: the defaults keep the pre-R97 look byte-identical.
@@ -363,11 +415,24 @@ export const useThemeStore = create<ThemeState>()(
         pushAppearanceToServer({ timestampsMode });
       },
     }),
-    // version stays 1: zustand shallow-merges persisted state over the new
-    // defaults, so existing users keep their theme/mode and gain the defaults
-    // (a persisted "light"/"dark" remains valid vocabulary; only never-before-
-    // persisted profiles gain the ability to store "system").
-    { name: "acute-code.theme", version: 1 },
+    // R126: version 1→2 — the ONE-TIME nova→clay identity migration. The
+    // Clay Companion redesign changed the app's default language; profiles
+    // still holding the pre-redesign nova default move to clay so they
+    // actually SEE the redesign (a silent keep would have buried the new
+    // language under persisted localStorage). Any OTHER persisted flavor is
+    // a deliberate pick and rides untouched; after this migration runs the
+    // profile is v2 forever and future defaults never re-clobber a choice.
+    {
+      name: "acute-code.theme",
+      version: 2,
+      migrate: (persisted, _version) => {
+        const state = persisted as Partial<ThemeState> | undefined;
+        if (state && state.themeId === "nova") {
+          return { ...state, themeId: "clay" } as Partial<ThemeState>;
+        }
+        return state ?? {};
+      },
+    },
   ),
 );
 

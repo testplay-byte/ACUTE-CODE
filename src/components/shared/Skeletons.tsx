@@ -13,9 +13,14 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
  * Deliberately DECORATIVE (aria-hidden) — a loading REGION announces itself
  * once on its container (`role="status" aria-label="Loading …"`), not per
  * block; the call sites own that label. Colors flow from the theme bridge
- * (styles.subtle) so skeletons adapt to every theme/mode like real surfaces.
+ * so skeletons adapt to every theme/mode like real surfaces.
  */
 
+// R126 (R126-3a, TOKENS §10 law 4 / MOTION §4 "skeleton pulse"): skeletons
+// ride the WELL — the recessed step one DOWN from the card (surfaceWell),
+// never the invisible 2% `subtle` wash. Fill-only change: the export
+// surface (props, DOM, pulse class) is identical for every existing
+// consumer; only the paint moved onto the ladder.
 /** One pulsing block — a card, a tile, a bubble, a chart slab. */
 export function SkeletonBlock({
   className = "",
@@ -29,7 +34,7 @@ export function SkeletonBlock({
     <div
       aria-hidden
       className={`animate-pulse rounded-xl ${className}`}
-      style={{ background: styles.subtle, ...style }}
+      style={{ background: styles.surfaceWell, ...style }}
     />
   );
 }

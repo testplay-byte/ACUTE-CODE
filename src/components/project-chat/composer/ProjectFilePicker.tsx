@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { Check, FileText, Search } from "lucide-react";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
-import { withAlpha } from "../../dashboard/helpers";
 import { filterProjectFiles } from "./composer-utils";
 
 /**
@@ -47,8 +46,8 @@ export function ProjectFilePicker({
           type="button"
           onClick={onCancel}
           aria-label="Back to Add Context menu"
-          className="text-[10px] font-medium"
-          style={{ color: styles.accent }}
+          // R126-3d-4: accent-as-TEXT rides the DEEP tier (TOKENS §1d).
+          className="text-[10px] font-medium text-accent-deep"
         >
           Back
         </button>
@@ -86,15 +85,13 @@ export function ProjectFilePicker({
                 onClick={() => toggle(path)}
                 title={path}
                 className={`w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg font-mono text-[10px] truncate transition-colors ${
-                  isSelected ? "" : "hover:bg-hover"
+                  // R126-3d-4: the selected row = accentTint + accentDeep
+                  // ink (the pickers' selected-row grammar).
+                  isSelected ? "bg-accent-tint text-accent-deep" : "hover:bg-hover text-muted"
                 }`}
-                style={{
-                  color: styles.textSecondary,
-                  background: isSelected ? withAlpha(styles.accent, 0.1) : "transparent",
-                }}
               >
                 {isSelected ? (
-                  <Check size={11} className="shrink-0" style={{ color: styles.accent }} />
+                  <Check size={11} className="shrink-0 text-accent-deep" />
                 ) : (
                   <FileText size={11} className="shrink-0" style={{ color: styles.textTertiary }} />
                 )}
@@ -109,12 +106,12 @@ export function ProjectFilePicker({
         onClick={() => onConfirm([...selected])}
         disabled={selected.size === 0}
         aria-label={`Attach ${selected.size} project file${selected.size === 1 ? "" : "s"}`}
-        className="mt-1.5 mx-1 h-7 rounded-lg text-[11px] font-semibold border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        style={{
-          borderColor: withAlpha(styles.accent, 0.45),
-          color: styles.accent,
-          background: withAlpha(styles.accent, 0.08),
-        }}
+        className="mt-1.5 mx-1 h-7 rounded-lg text-[11px] font-semibold transition-colors bg-accent-deep disabled:bg-subtle disabled:cursor-not-allowed"
+        // R126-3d-4: the quiet-solid accentDeep CTA (COMPONENTS §4 — the
+        // class fill + the accentText INK on the JS leg; text-accent-text
+        // is a PHANTOM utility). Disabled = bg-subtle + tertiary ink,
+        // opacity intact.
+        style={{ color: selected.size === 0 ? styles.textTertiary : styles.accentText }}
       >
         {selected.size === 0 ? "Select files" : `Attach ${selected.size} file${selected.size === 1 ? "" : "s"}`}
       </button>

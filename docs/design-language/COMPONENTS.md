@@ -1,10 +1,18 @@
-<!-- last-reviewed: 2026-09-23 round-120 -->
+<!-- last-reviewed: 2026-09-24 round-126 -->
 # Components — the primitive catalog and composition rules
 
 Serves DESIGN-SYSTEM §5 (anatomy inventory). The inventory there names the
 behavioral contracts; this file names the **shared visual primitives** —
 the "one spelling" rule that kills the AI-slop repetition smell (round-98
 C2's mandate: no idiom re-implemented per file).
+
+**ROUND-126 (the Clay Companion redesign):** the card/chip/button grammar
+moves onto the clay surface ladder (TOKENS §10) + the status grammar
+(TOKENS §11). The mobile primitives' recipes (`mobile/src/design/
+primitives.tsx` — ClayCard, ChromeButton, Chip, Badge, ClayIconChip,
+SegmentedControl) are the adapted references: same materials, PC densities.
+§7's chat anatomy rides the R119/R120 owner-approved contracts UNCHANGED —
+only its materials re-skin.
 
 ## 1. The primitives (one spelling each)
 
@@ -41,9 +49,11 @@ Chips are the app's densest idiom. One grammar:
 - **Stat chip**: `meta-mono` tier (10px mono tabular — ROUND-100 R100-C: the
   9.5px `stat` step is RETIRED, TOKENS §2's hard floor), `subtle` bg,
   hairline border, tertiary text — usage: `s · ↑in · ↓out · tok/s · model`.
-- **Status chip**: semantic-tinted (`withAlpha(semantic, 0.1)` bg +
-  semantic text): success/done, warning/waiting (queued, retry wait,
-  thinking stop), danger/failure. `role="status"` unless it IS an alert.
+- **Status chip — ROUND-126 (R126)**: the badge TONE CONTAINERS
+  (TOKENS §11): `bg-badge-success` + `text-badge-success-fg` (and
+  warning/danger/running/accent/neutral likewise) — the tinted container +
+  deep-on-tint ink pair, never `withAlpha` hacks, never flat-hue text, never
+  white-on-saturated fills. `role="status"` unless it IS an alert.
 - **Identity chip**: mono, `subtle` bg, truncate — models, task ids, paths.
 - **Action chip**: quiet until hover (the hover-actions cluster pattern:
   Copy/Revert/Timestamp reveal on group-hover-within — keyboard parity via
@@ -55,12 +65,21 @@ Never more than one tinted status chip per row; never a chip inside a chip.
 
 Two card species only:
 
-1. **Bento card** (default outside the chat route): `card` surface,
-   1.5px `border-line`, 16px radius, `softShadow`; hover = border-strong +
-   shadow bloom (120ms). Sections inside step 12/16px.
+1. **Clay card — ROUND-126 (R126, mobile ClayCard adapted)** (default
+   outside the chat route): `card` surface, the warm `clayRim` hairline on
+   all four sides (`border-clay-rim`), 16px radius (`rounded-2xl`),
+   `--ac-clay-shadow` (`.ac-clay`) + the dark-mode-only matte top edge
+   (`.ac-clay-edge-dark`); hover = rim→border-strong swap (120ms, no lift,
+   no bloom). Compact tiles use `.ac-clay-sm`. Sections inside step 12/16px;
+   recessed content sinks into `bg-well` (TOKENS §10's ladder). The
+   pre-R126 bento card (1.5px border + softShadow) is RETIRED — waves
+   convert as they touch each screen.
 2. **Chat surface** (the borderless route): no border, no shadow —
    surface-on-background separation via 2–3px gaps. Depth is expressed by
-   the working/folded state, not by shadow.
+   the working/folded state, not by shadow. Recessed wells INSIDE the chat
+   card (the activity well, terminal blocks) use `bg-well` /
+   `.ac-mono-block` like everywhere else — the borderless ROUTE law governs
+   the route's panels, not its inner recesses.
 
 Section headers inside cards: `label` type (11px uppercase tracked) or
 `section` type (13px semibold) — pick per density, then be consistent
@@ -68,15 +87,23 @@ within the card.
 
 ## 4. The button grammar
 
+**ROUND-126 (R126, mobile ChromeButton/QuietButton adapted):** the
+working-UI button family is quiet-solid clay — gradient fills, bento hard
+shadows, and glow hovers are RETIRED from working screens (they survive in
+the WIZARD only, per WIZARD-DNA).
+
 | Species | Anatomy | Motion |
 |---|---|---|
-| Primary | 135° accent→accent2 gradient, `bentoShadow`, white ink (WIZARD-DNA §4) | hover scale 1.03 + bloom; press 0.98 |
-| Secondary | `card` pill + 1.5px border | press 0.95 |
+| Primary (working UI) | **quiet-solid**: `bg-accent-deep` fill + `text-accent-text` ink, `rounded-lg` (12px input radius reads better on PC than mobile's 14 at our densities), h-9 (36px) standard, `font-semibold` 13px label | press: scale 0.98 on SPRING + shadow collapse to `.ac-clay-pressed`; disabled = `bg-subtle` + `text-tertiary`, opacity intact |
+| Secondary | outlined: `bg-transparent` + 1px `border-strong` + `text-secondary`, same radius/height | press 0.98; hover `bg-subtle` |
 | Ghost | text/icon only, `subtle-hover` wash | press 0.95 |
-| Icon | 28–32px square hit target, radius 8px (`rounded-lg` — ROUND-100 R100-C: the 9–10px figure is retired; 8px is step 2 of the 5-step scale, TOKENS §4) | same as ghost |
+| Danger | `bg-danger-deep`-family: outlined danger (1px danger border + danger-deep text) for co-primary; solid `#DC2626`+white ONLY for the one destructive confirm | press 0.98 |
+| Icon | 28–32px square hit target, `rounded-lg` | same as ghost |
 
-Press feedback (`active:scale-95`) is universal — a button without it is a
-bug.
+Press feedback (`active:scale-95` universal floor; `0.98` + shadow collapse
+on clay-primary buttons) — a button without it is a bug. **One primary per
+screen** (mobile law, adopted): the primary is the screen's single intent,
+everything else is secondary/ghost.
 
 ## 5. The layout grammar
 
@@ -257,7 +284,13 @@ they use comes from the `--ac-clay-*` / `--ac-chrome-*` vars (TOKENS §9
 | Pattern | Class | What it paints | Where it's allowed |
 |---|---|---|---|
 | Clay card shadow | `.ac-clay` | the layered clay depth: a tight directional contact shadow under a large very soft ambient one, warm-tinted (TOKENS §9) — box-shadow only, composes with any inline fill | top-level card surfaces: StatCard (dashboard + usage), the TitleBar |
-| Clay small shadow | `.ac-clay-sm` | the same recipe's small-surface step (`--ac-clay-shadow-sm`) | compact tiles/chips wanting clay depth (no consumer yet — adopt with a consumer, then name it here) |
+| Clay small shadow | `.ac-clay-sm` | the same recipe's small-surface step (`--ac-clay-shadow-sm`) | compact tiles/chips wanting clay depth |
+| **The recessed well (R126)** | `.ac-well` | `surfaceWell` fill + the clay-rim hairline — ONE step DOWN from the card (TOKENS §10) | accordions/activity wells, input fills, skeletons, recent-activity rows — the workhorse recess |
+| **The clay rim (R126)** | `.ac-clay-rim` | the warm hairline rim on all four sides (light's default card edge) | any card edge not already carrying `border-clay-rim` |
+| **The dark top edge (R126)** | `.ac-clay-edge-dark` | the matte 14%-white top edge — auto-suppressed in light mode by the class itself | dark-mode-only card top edges (mobile AMENDMENT 1) |
+| **The pressed leg (R126)** | `.ac-clay-pressed` | the press collapse shadow (contact leg alone) | the active state of clay-primary buttons/cards |
+| **The upward leg (R126)** | `.ac-clay-sheet` | the upward two-leg shadow | rising surfaces: toasts, docks, popovers anchored below |
+| **The mono block (R126)** | `.ac-mono-block` | the recessed mono surface (fill + border + own ink) | terminal output, command blocks, code tails |
 | Platinum ramp | `.ac-chrome-metal` | the full metal surface fill (160° hi→mid→lo ramp) | signature surfaces only — the wizard's hero block |
 | Liquid sheen | `.ac-chrome-sheen` | the ambient 9s highlight pass (MOTION §3 `ac-chrome-pass`), its band half as wide + half as bright since R108-e; sets `position:relative; overflow:hidden` itself | signature surfaces only — the wizard's CTAs + hero block; NEVER working-UI buttons |
 

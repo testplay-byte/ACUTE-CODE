@@ -2,13 +2,9 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
-  Activity,
-  CircleDollarSign,
   HeartPulse,
   ShieldCheck,
-  TrendingUp,
   Wrench,
-  Zap,
 } from "lucide-react";
 import { clearUsageData, type UsageStatsHealthIssue } from "../../lib/api";
 import { useUsageStats } from "../../hooks/use-usage";
@@ -16,18 +12,16 @@ import { formatTokenCount } from "../../lib/format";
 import { ease } from "../../lib/motion";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-import { StatCard } from "../dashboard/StatCard";
-import { bdr, utcDateLabel, withAlpha } from "../dashboard/helpers";
-import { SkeletonBlock } from "../shared/Skeletons";
+import { utcDateLabel, withAlpha } from "../dashboard/helpers";
 import { ConfirmDialog } from "../settings/ConfirmDialog";
-// R100-E2: the round-100 card primitive (USAGE.md §3; TOKENS.md §4) — the
-// health sub-blocks ride it; their testids + aria-labels ride the
-// passthrough props.
-import { SectionCard } from "../ui/SectionCard";
+import { Kicker } from "../ui/Kicker";
 import { ModelDonut } from "./ModelDonut";
 import { ModelStackChart } from "./ModelStackChart";
 import { UsageHeatmap } from "./UsageHeatmap";
-import { formatCompactTokens, formatCost } from "./usage-helpers";
+import { RangeSelector } from "./RangeSelector";
+import { UsageStatRow, type StatCell } from "./UsageStatRow";
+import { CLAY_CARD, CLAY_CARD_SM, formatCompactTokens, formatCost } from "./usage-helpers";
+import { cn } from "../../lib/utils";
 
 /**
  * ROUND-98 (R98-I2, owner: "Data & statistics"): the ONE panel rendered in
@@ -50,12 +44,28 @@ import { formatCompactTokens, formatCost } from "./usage-helpers";
  *
  * The panel OWNS its query (useUsageStats) + the months picker (6/12/24)
  * so both mount sites stay one-liners. State gates per R97-I: loading =
- * the shared Skeleton primitives with ONE role="status" announcement;
+ * well-pulsing skeleton blocks with ONE role="status" announcement;
  * error = role="alert" with the exact cause and ONE Retry that re-drives
  * the query.
+ *
+ * ROUND-126 (R126-3b, the Clay Companion redesign): the material pass —
+ * the stat row is the ONE-clay-card 4-cell grammar (UsageStatRow, SCREENS
+ * §3), the months picker is the SEGMENTED-CONTROL grammar (RangeSelector —
+ * bg-well track + the gliding bg-accent-deep knob on TAB_SPRING), the
+ * health sub-blocks are compact clay tiles, and the skeleton blocks ride
+ * the WELL (`bg-well` — TOKENS §10 law 4). The DANGER ZONE keeps its
+ * dedicated grammar UNCHANGED (COMPONENTS §6: the quiet red-OUTLINED box,
+ * 1.5px withAlpha(danger, 0.4) border, no fill, no shadow, LAST — the
+ * documented exception).
  */
 
 const MONTHS_OPTIONS = [6, 12, 24] as const;
+
+/** One well-pulsing skeleton block — R126-3b's `bg-well` spelling (TOKENS
+ *  §10 law 4: skeletons ride the well, never bg-subtle). */
+function WellSkeleton({ className }: { className?: string }) {
+  return <div aria-hidden className={cn("animate-pulse rounded-2xl bg-well", className)} />;
+}
 
 /** The months-switch settle — opacity ONLY, 150ms (MOTION §2 quick tier).
  * Keyed by the window so the swapped stats/heatmap/donut dip-and-settle
@@ -104,7 +114,7 @@ export function DataStatsPanel() {
     },
   });
 
-  const { card, border, text, textSecondary, accent, accentText, softShadow } = styles;
+  const { text, textSecondary } = styles;
 
   /* R97-I gates — the error branch FIRST (a failed GET must never hang on
    * "loading…"), then the loading branch (demo mode leaves the query idle
@@ -113,31 +123,28 @@ export function DataStatsPanel() {
     const cause = stats.error instanceof Error ? stats.error.message : String(stats.error);
     return (
       <div data-testid="data-stats-panel" className="flex w-full flex-col gap-4">
+        {/* R126 (TOKENS §11): the retryable error card is the danger
+            BADGE-TONE container — tinted container + deep-on-tint ink, never
+            a flat-hue danger text on an alpha wash (the pre-R126 withAlpha
+            grammar died with §11); the Retry button is the outlined danger
+            species (COMPONENTS §4). */}
         <div
           role="alert"
-          className="rounded-2xl border-[1.5px] px-4 py-3.5"
-          style={{
-            borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
-            background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-          }}
+          className="rounded-xl bg-badge-danger px-4 py-3.5 text-badge-danger-fg"
         >
           {/* R100-E2: 13px/600 (the error heading is a section header, the
               weight law's 600 tier — the old 12.5px-bold was off-ladder). */}
-          <div className="text-[13px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+          <div className="text-[13px] font-semibold">
             Could not load data &amp; statistics
           </div>
-          <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: textSecondary }}>
+          <p className="mt-1.5 text-[12px] leading-relaxed">
             The agent sidecar may be down or the request was rejected — {cause}.
           </p>
           <button
             type="button"
             onClick={() => void stats.refetch()}
             aria-label="Retry loading data and statistics"
-            className="mt-3 h-8 cursor-pointer rounded-lg border px-3.5 text-[12px] font-semibold transition-opacity hover:opacity-85"
-            style={{
-              borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
-              color: SEMANTIC_COLORS.danger,
-            }}
+            className="mt-3 h-8 cursor-pointer rounded-lg border border-danger-deep px-3.5 text-[12px] font-semibold text-danger-deep transition-opacity duration-100 hover:opacity-85 active:scale-[0.98]"
           >
             Retry
           </button>
@@ -155,27 +162,37 @@ export function DataStatsPanel() {
         className="flex w-full flex-col gap-4"
       >
         {/* R99-E anti-jitter: the skeleton mirrors the READY geometry
-            section-for-section (header → stat cards → heatmap → stack →
-            donut → agent health → danger zone — same heights, same order)
-            so the loading→ready swap never shifts the layout. */}
-        <SkeletonBlock className="h-[56px] rounded-xl" />
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
+            section-for-section (header → the ONE-card stat row → heatmap →
+            stack → donut → agent health → danger zone — same heights, same
+            order) so the loading→ready swap never shifts the layout.
+            R126-3b: the blocks pulse in the WELL (bg-well). */}
+        <WellSkeleton className="h-[56px] rounded-xl" />
+        <div className={cn(CLAY_CARD, "grid grid-cols-2 md:grid-cols-4")}>
           {[0, 1, 2, 3].map((i) => (
-            <SkeletonBlock key={i} className="h-[92px] rounded-[20px]" style={{ border: bdr("1.5px", border) }} />
+            <div
+              key={i}
+              className={cn(
+                "h-[92px] animate-pulse bg-well",
+                i === 1 || i === 3 ? "border-l border-clay-rim" : "",
+                i >= 2 ? "border-t border-clay-rim md:border-t-0" : "",
+              )}
+            />
           ))}
         </div>
-        <SkeletonBlock className="h-[184px] rounded-[24px] md:h-[192px]" style={{ border: bdr("1.5px", border) }} />
-        <SkeletonBlock className="h-[264px] rounded-[24px] md:h-[272px]" style={{ border: bdr("1.5px", border) }} />
-        <SkeletonBlock className="h-[184px] rounded-[24px] md:h-[192px]" style={{ border: bdr("1.5px", border) }} />
+        <WellSkeleton className="h-[184px] md:h-[192px]" />
+        <WellSkeleton className="h-[264px] md:h-[272px]" />
+        <WellSkeleton className="h-[184px] md:h-[192px]" />
         <div>
-          <SkeletonBlock className="mb-2.5 h-[13px] w-[120px] rounded-sm" />
+          <div className="mb-2.5">
+            <WellSkeleton className="h-[13px] w-[120px] rounded-sm" />
+          </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
             {[0, 1].map((i) => (
-              <SkeletonBlock key={i} className="h-[72px] rounded-2xl" style={{ border: bdr("1.5px", border) }} />
+              <WellSkeleton key={i} className="h-[72px]" />
             ))}
           </div>
         </div>
-        <SkeletonBlock className="h-[96px] rounded-2xl" style={{ border: bdr("1.5px", border) }} />
+        <WellSkeleton className="h-[96px]" />
       </div>
     );
   }
@@ -185,10 +202,7 @@ export function DataStatsPanel() {
     // Demo mode (the query stays idle): the honest empty panel.
     return (
       <div data-testid="data-stats-panel" className="flex w-full flex-col gap-4">
-        <div
-          className="rounded-2xl border-[1.5px] p-8 text-center"
-          style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
-        >
+        <div className={cn(CLAY_CARD, "p-8 text-center")}>
           <p className="text-[13px] font-semibold" style={{ color: text }}>
             No usage statistics available
           </p>
@@ -206,7 +220,8 @@ export function DataStatsPanel() {
 
   return (
     <div data-testid="data-stats-panel" className="flex w-full flex-col gap-4">
-      {/* 1 — the months window picker (drives the whole panel's query). */}
+      {/* 1 — the months window picker (drives the whole panel's query).
+          R126-3b: the SEGMENTED-CONTROL grammar (the shared RangeSelector). */}
       <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
         <div>
           {/* R100-E2: the panel title snapped 16px/font-black → 13px/600 (the
@@ -219,69 +234,55 @@ export function DataStatsPanel() {
             Tokens, cost, model mix and agent health over the selected window.
           </p>
         </div>
-        <div
-          role="group"
-          aria-label="Statistics months window"
-          className="flex shrink-0 items-center gap-1 rounded-xl border-[1.5px] p-1"
-          style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
-        >
-          {MONTHS_OPTIONS.map((option) => {
-            const active = option === months;
-            return (
-              <button
-                key={option}
-                type="button"
-                onClick={() => {
-                  setMonths(option);
-                  setClearedCount(null);
-                }}
-                aria-pressed={active}
-                aria-label={`Last ${option} months`}
-                className="cursor-pointer rounded-lg px-2.5 py-1.5 text-[12px] font-semibold tabular-nums transition-colors duration-200"
-                style={{ backgroundColor: active ? accent : "transparent", color: active ? accentText : textSecondary }}
-              >
-                {option}mo
-              </button>
-            );
-          })}
-        </div>
+        <RangeSelector
+          options={MONTHS_OPTIONS}
+          selected={months}
+          onChange={(value) => {
+            setMonths(value as (typeof MONTHS_OPTIONS)[number]);
+            setClearedCount(null);
+          }}
+          groupLabel="Statistics months window"
+          optionAriaLabel={(option) => `Last ${option} months`}
+          suffix="mo"
+          testId="stats-months-selector"
+        />
       </div>
 
-      {/* 2 — the headline stat cards (the dashboard StatCard primitive;
-          h-[92px] + tabular-nums — the anti-jitter contract). */}
-      <QuickFade windowKey={months} className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
-        <StatCard
-          value={formatTokenCount(totals.totalTokens)}
-          label="Tokens"
-          icon={Zap}
-          title={`Input + output tokens in the window — ${totals.inputTokens.toLocaleString()} in / ${totals.outputTokens.toLocaleString()} out`}
-          styles={styles}
-          highlight
-        />
-        <StatCard
-          value={formatCompactTokens(peak.tokens)}
-          label={peak.date ? `Peak day · ${utcDateLabel(peak.date)}` : "Peak day"}
-          icon={TrendingUp}
-          title={
-            peak.date
-              ? `Highest input+output day (${peak.date}) — ${peak.tokens.toLocaleString()} tokens`
-              : "No traffic in this window yet"
-          }
-          styles={styles}
-        />
-        <StatCard
-          value={formatCost(totals.costUsd)}
-          label="Cost"
-          icon={CircleDollarSign}
-          title={`Total recorded cost over the window · ${totals.requests.toLocaleString()} turns · ${totals.providerCalls.toLocaleString()} provider calls (the real SDK-call count)`}
-          styles={styles}
-        />
-        <StatCard
-          value={totals.requests.toLocaleString()}
-          label="Turns"
-          icon={Activity}
-          title={`Turns recorded in the window (one usage row per turn since R24) · ${totals.providerCalls.toLocaleString()} provider calls`}
-          styles={styles}
+      {/* 2 — the headline stat row (R126-3b: the ONE-clay-card 4-cell
+          grammar, UsageStatRow; h-[92px] cells + tabular-nums — the
+          anti-jitter contract). */}
+      <QuickFade windowKey={months}>
+        <UsageStatRow
+          testId="data-stats-stat-row"
+          ariaLabel="Data and statistics overview"
+          cells={[
+            {
+              value: formatTokenCount(totals.totalTokens),
+              label: "Tokens",
+              sub: `${formatCompactTokens(totals.inputTokens)} in · ${formatCompactTokens(totals.outputTokens)} out`,
+              title: `Input + output tokens in the window — ${totals.inputTokens.toLocaleString()} in / ${totals.outputTokens.toLocaleString()} out`,
+            },
+            {
+              value: formatCompactTokens(peak.tokens),
+              label: peak.date ? `Peak day · ${utcDateLabel(peak.date)}` : "Peak day",
+              sub: peak.date ? peak.date : "no traffic yet",
+              title: peak.date
+                ? `Highest input+output day (${peak.date}) — ${peak.tokens.toLocaleString()} tokens`
+                : "No traffic in this window yet",
+            },
+            {
+              value: formatCost(totals.costUsd),
+              label: "Cost",
+              sub: `${totals.requests.toLocaleString()} turns`,
+              title: `Total recorded cost over the window · ${totals.requests.toLocaleString()} turns · ${totals.providerCalls.toLocaleString()} provider calls (the real SDK-call count)`,
+            },
+            {
+              value: totals.requests.toLocaleString(),
+              label: "Turns",
+              sub: `${totals.providerCalls.toLocaleString()} provider calls`,
+              title: `Turns recorded in the window (one usage row per turn since R24) · ${totals.providerCalls.toLocaleString()} provider calls`,
+            },
+          ] satisfies StatCell[]}
         />
       </QuickFade>
 
@@ -307,14 +308,8 @@ export function DataStatsPanel() {
           render their honest empty one-liner so the layout is stable
           window-over-window (no content jumping). */}
       <section data-testid="agent-health-section" aria-label="Agent health">
-        <div className="mb-2.5 flex items-center gap-2">
-          <ShieldCheck size={13} style={{ color: accent, opacity: 0.7 }} aria-hidden />
-          <span
-            className="text-[11px] font-medium uppercase leading-none tracking-[0.08em]"
-            style={{ color: styles.textTertiary }}
-          >
-            Agent health
-          </span>
+        <div className="mb-2.5">
+          <Kicker icon={ShieldCheck}>Agent health</Kicker>
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
           <HealthBlock
@@ -324,7 +319,7 @@ export function DataStatsPanel() {
             noun="turn errors"
             emptyLine="No turn errors in the window — clean run."
             issues={data.health.turnErrors}
-            tone={SEMANTIC_COLORS.warning}
+            tone={styles.warningDeep}
             months={months}
             styles={styles}
           />
@@ -335,7 +330,7 @@ export function DataStatsPanel() {
             noun="tool failures"
             emptyLine="No tool failures in the window — clean run."
             issues={data.health.toolFailures}
-            tone={SEMANTIC_COLORS.danger}
+            tone={styles.dangerDeep}
             months={months}
             styles={styles}
           />
@@ -345,7 +340,9 @@ export function DataStatsPanel() {
       {/* 7 — THE DANGER ZONE, always LAST (the GitHub settings pattern): a
           quiet red-OUTLINED box — no filled background, no shadow — with the
           description-left / red-action-button-right row. The exact
-          enumeration of what stays untouched lives in the ConfirmDialog. */}
+          enumeration of what stays untouched lives in the ConfirmDialog.
+          R126-3b: this grammar is the DOCUMENTED EXCEPTION (COMPONENTS §6) —
+          it rides unchanged, byte-identical, in both modes. */}
       <section
         data-testid="clear-usage-card"
         aria-label="Danger zone"
@@ -389,7 +386,7 @@ export function DataStatsPanel() {
         {clearedCount !== null && !clear.isError ? (
           <div
             className="mt-2 text-[11px] font-semibold tabular-nums"
-            style={{ color: SEMANTIC_COLORS.success }}
+            style={{ color: styles.successDeep }}
             role="status"
             data-testid="clear-usage-success"
           >
@@ -416,8 +413,8 @@ export function DataStatsPanel() {
   );
 }
 
-/** One quiet agent-health sub-block — card surface + hairline border (NO
- * semantic tint, NO shadow); the severity lives in the icon and the count
+/** One quiet agent-health sub-block — compact clay tile (rim + `.ac-clay-sm`,
+ *  NO semantic tint, NO glow); the severity lives in the icon and the count
  * color alone. The empty state is the honest one-liner, never a fabricated
  * "healthy" row; the count line rides an aria-label that reads the window. */
 function HealthBlock({
@@ -445,11 +442,10 @@ function HealthBlock({
   const { text, textSecondary, textTertiary } = styles;
   const count = issues.reduce((sum, issue) => sum + issue.count, 0);
   return (
-    /* R100-E2: the SectionCard primitive (rounded-2xl / 1.5px border-line /
-       bg-card) — the testid + aria-label passthrough keeps the sub-block's
-       accessible name; the QUIET card contract (no tint, no shadow) is
-       unchanged. */
-    <SectionCard testId={testId} ariaLabel={label} className="min-h-[72px] p-3.5">
+    /* R126-3b: the compact clay tile (CLAY_CARD_SM) — the testid +
+       aria-label passthrough keeps the sub-block's accessible name; the
+       QUIET card contract (no tint, no glow) is unchanged. */
+    <section data-testid={testId} aria-label={label} className={cn(CLAY_CARD_SM, "min-h-[72px] p-3.5")}>
       <div className="flex items-center gap-2">
         <span className="shrink-0 leading-none" style={{ color: tone, opacity: 0.85 }} aria-hidden>
           {icon}
@@ -486,6 +482,6 @@ function HealthBlock({
           ))}
         </div>
       )}
-    </SectionCard>
+    </section>
   );
 }

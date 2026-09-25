@@ -742,16 +742,22 @@ describe("ProviderKeysCard — first-free-slot + the R92-D3/R47 Tauri fix", () =
     await waitFor(() => expect(screen.getByText("sk-o…aaaa")).toBeTruthy());
 
     // The eye is the SAME bordered h-10 w-10 button as Key 1's — not the old
-    // bare w-6 icon (the owner's key-row parity directive).
+    // bare w-6 icon (the owner's key-row parity directive). R126-3f-2
+    // re-pin: the bordered family is now the well + the 1px clay rim on
+    // the class leg (the 1.5px bento border is retired).
     const eye = screen.getByRole("button", { name: "Reveal key 2" });
     expect(eye.className).toContain("h-10");
     expect(eye.className).toContain("w-10");
-    expect(eye.className).toContain("border-[1.5px]");
+    expect(eye.className).toContain("border-clay-rim");
+    expect(eye.className).toContain("bg-well");
 
-    // The trash is the same bordered family too (hover-red lives in style).
+    // The trash is the same bordered family too — R126-3f-2 re-pin: the
+    // OUTLINED DANGER species (border-danger-deep + text-danger-deep on
+    // the class leg).
     const trash = screen.getByRole("button", { name: "Remove key 2" });
     expect(trash.className).toContain("h-10");
-    expect(trash.className).toContain("border-[1.5px]");
+    expect(trash.className).toContain("border-danger-deep");
+    expect(trash.className).toContain("text-danger-deep");
 
     // No Copy while masked; reveal → the labeled Copy button appears.
     expect(screen.queryByRole("button", { name: "Copy key 2" })).toBeNull();
@@ -1019,7 +1025,9 @@ describe("Connection card — key + model scoped test (ROUND-47 R47-c1)", () => 
     fireEvent.click(screen.getByRole("button", { name: /test connection/i }));
 
     const refusal = await screen.findByText("key rejected by provider (HTTP 401)");
-    expect(refusal.style.color).toBe("#ef4444");
+    // R126-3f-2 re-pin: the honest refusal rides the §11 deep pair on the
+    // class leg (text-danger-deep) — the inline #ef4444 leg is retired.
+    expect(refusal.className).toContain("text-danger-deep");
   });
 });
 
@@ -1822,7 +1830,8 @@ describe("Key field — unified eye + paste-to-replace (R60-B)", () => {
     fireEvent.click(await screen.findByTestId("show-stored-key-button"));
     const err = await screen.findByRole("alert");
     expect(err.textContent).toContain("reveal failed (sidecar keyring unavailable)");
-    expect(err.style.color).toBe("#ef4444");
+    // R126-3f-2 re-pin: the §11 deep pair on the class leg.
+    expect(err.className).toContain("text-danger-deep");
     // The block stays on the masked stored value — nothing half-revealed.
     expect(screen.getByTestId("stored-key-masked")).toBeTruthy();
   });
@@ -2400,7 +2409,8 @@ describe("Honest load states (R62-2b)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Couldn't load providers");
     expect(alert.textContent).toContain("providers route exploded");
-    expect(alert.style.color).toBe("#ef4444");
+    // R126-3f-2 re-pin: the §11 deep pair on the class leg.
+    expect(alert.className).toContain("text-danger-deep");
   });
 
   it("a failed models-config load shows the error line INSTEAD of the misleading 'No models yet'", async () => {

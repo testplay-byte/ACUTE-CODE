@@ -48,10 +48,10 @@ import { setLinkOpeningMode } from "../lib/open-link";
 import { resolveThemeMode, useThemeStore } from "../lib/theme-store";
 import { THEMES, getContrastText } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
-// R97-I part 3 (the state-awareness sweep): the settings cards' honest
-// error states ride the documented semantic tokens (§1/§6) — never a
-// divergent hardcoded red.
-import { SEMANTIC_COLORS } from "../lib/semantics";
+// R126-3f-1: the segmented knobs glide on TAB_SPRING — the registry's
+// numbers, imported never hand-rolled (MOTION §2).
+import { motion } from "framer-motion";
+import { TAB_SPRING } from "../lib/motion";
 import { AgentsScreen } from "../components/agents/AgentsScreen";
 import { ModelsProvidersTab } from "../components/settings/ModelsProvidersTab";
 import { SubAgentsTab } from "../components/settings/SubAgentsTab";
@@ -90,6 +90,10 @@ import { bdr, withAlpha } from "../components/dashboard/helpers";
 import { Kicker } from "../components/ui/Kicker";
 import { SectionCard } from "../components/ui/SectionCard";
 import { SettingsRow } from "../components/ui/SettingsRow";
+// R126-3f-1: the five hand-rolled inline switch copies in this file ride
+// the ONE shared toggle now (the primitive carries the accentDeep/well
+// materials; geometry + aria contract byte-identical to the copies).
+import { ToggleSwitch } from "../components/ui/toggle-switch";
 import { cn } from "../lib/utils";
 
 // R98-I1 (owner: "add a dedicated section for functionality… separate the
@@ -223,55 +227,74 @@ function AppearanceTab() {
     // mode + theme sections are MERGED, the tool cards lose their mock
     // previews, and the never-configured "Sidebar Tint" section is removed
     // (UI-only — the theme-store field stays, other surfaces still read it).
+    //
+    // R126-3f-1 (the Clay Companion reskin): the segmented controls speak
+    // the usage wave's RangeSelector grammar (the well track + the gliding
+    // accentDeep knob on TAB_SPRING), the theme grid rides clay cards, the
+    // pick-one cards speak the chip grammar, and the pref sections' header
+    // rows ride SettingsRow (the mobile hub grammar at PC density).
     <div className="mx-auto flex max-w-3xl flex-col gap-4">
       {/* ── Theme: light/dark segmented control directly above the grid ── */}
       <section>
         <Kicker as="h2" className="mb-2">
           Theme
         </Kicker>
-        {/* R100-E1 ladder sweep: radii snap to the 5-step scale (16 card /
-            12 inner knob), labels follow the weight law (500 active, 400
-            rest), max-w-[320px] → max-w-80 (the scale spelling). */}
+        {/* R126-3f-1: the mode control = the RangeSelector grammar from the
+            usage wave — the well track (bg-well + the clay rim, rounded-lg)
+            + ONE solid accentDeep knob gliding in INDEX space on TAB_SPRING
+            (MOTION §4's segmented-control row); selected label rides the
+            accentText pair at 12px/600, unselected 12px/400 muted. The
+            radiogroup/radio/aria-checked contract is byte-identical to the
+            pre-R126 control. */}
         <div
-          className="relative mb-3 grid w-full max-w-80 grid-cols-3 gap-1.5 rounded-2xl p-1"
           role="radiogroup"
           aria-label="Theme mode"
-          style={{ background: styles.toggleTrack, border: bdr("1.5px", styles.border) }}
+          className="mb-3 flex h-8 w-full max-w-80 items-center rounded-lg border border-clay-rim bg-well p-1"
         >
-          {/* R113-b: the third mode — "system" follows the OS preference
-              live (the store's usePrefersColorSchemeDark subscription). The
-              sliding knob tracks the ACTIVE option's index across the
-              3-column track. */}
-          <div
-            className="absolute bottom-1 top-1 w-[calc((100%-8px)/3)] rounded-xl transition-all duration-300"
-            style={{
-              left: `calc(${(["light", "system", "dark"] as const).indexOf(mode)} * (100% - 8px) / 3 + 4px)`,
-              background: styles.toggleActive,
-            }}
-          />
-          {(["light", "system", "dark"] as const).map((m) => {
-            const Icon = m === "light" ? Sun : m === "system" ? Monitor : Moon;
-            const active = mode === m;
-            return (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                role="radio"
-                aria-checked={active}
-                aria-label={`${m} mode`}
-                className={cn(
-                  "relative z-10 flex h-10 cursor-pointer items-center justify-center gap-1.5 rounded-xl border-none bg-transparent text-[13px] capitalize transition-colors",
-                  active ? "font-medium" : "font-normal",
-                )}
-                style={{ color: active ? getContrastText(styles.toggleActive) : styles.textTertiary }}
-              >
-                <Icon size={14} />
-                {m}
-              </button>
-            );
-          })}
+          <div className="relative flex h-full min-w-0 flex-1">
+            {/* R113-b: the third mode — "system" follows the OS preference
+                live (the store's usePrefersColorSchemeDark subscription). The
+                knob tracks the ACTIVE option's index across the equal-width
+                segments — pure index-space motion, never DOM-measured. */}
+            <motion.span
+              aria-hidden
+              data-testid="theme-mode-knob"
+              className="absolute inset-y-0 rounded-full bg-accent-deep"
+              style={{ width: `${100 / 3}%` }}
+              initial={false}
+              animate={{ left: `${(["light", "system", "dark"] as const).indexOf(mode) * (100 / 3)}%` }}
+              transition={TAB_SPRING}
+            />
+            {(["light", "system", "dark"] as const).map((m) => {
+              const Icon = m === "light" ? Sun : m === "system" ? Monitor : Moon;
+              const active = mode === m;
+              return (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  role="radio"
+                  aria-checked={active}
+                  aria-label={`${m} mode`}
+                  className={cn(
+                    "relative z-10 flex h-full min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-full border-none bg-transparent text-[12px] capitalize transition-colors duration-100",
+                    active ? "font-semibold" : "font-normal text-muted hover:text-ink",
+                  )}
+                  style={active ? { color: styles.accentText } : undefined}
+                >
+                  <Icon size={14} />
+                  {m}
+                </button>
+              );
+            })}
+          </div>
         </div>
-        {/* 2-column grid (1 per row on mobile) — modern, compact, shows more at once */}
+        {/* 2-column grid (1 per row on mobile) — modern, compact, shows more at once.
+            R126-3f-1: every card is a CLAY CARD (rounded-2xl + bg-card + the
+            1px clay rim + .ac-clay — TOKENS §5/§9); selection = the
+            accentDeep edge + the check tile on the quiet-solid pair; hover =
+            the rim→strong swap on the CSS leg (COMPONENTS §3, 120ms max).
+            The Clay Studio card carries the "Default" badge — the §11 accent
+            badge tone (bg-badge-accent + text-badge-accent-fg). */}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {THEMES.map((t) => {
             const selected = t.id === themeId;
@@ -285,38 +308,32 @@ function AppearanceTab() {
                 aria-pressed={selected}
                 aria-label={`Theme ${t.name}`}
                 className={cn(
-                  "relative flex cursor-pointer items-center gap-3 rounded-2xl border-[1.5px] bg-card px-4 py-3 text-left transition-colors hover:bg-hover",
-                  // R108-e: the selected card is the accent border + ring +
-                  // bentoShadowSm — the owner-approved selection grammar.
-                  // (R107-g had added a chrome hairline glint on the chosen
-                  // card; removed per the owner's round-108 verdict — no
-                  // gradient glints on working UI.)
-                  selected ? "border-accent" : "border-line",
+                  "relative flex cursor-pointer items-center gap-3 rounded-2xl border bg-card px-4 py-3 text-left ac-clay transition-colors duration-100",
+                  selected ? "border-accent-deep" : "border-clay-rim hover:border-line-strong",
                 )}
-                style={
-                  selected
-                    ? { boxShadow: `${styles.bentoShadowSm}, 0 0 0 3px ${withAlpha(styles.accent, 0.18)}` }
-                    : undefined
-                }
               >
                 <span
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full border text-[13px] font-semibold"
-                  style={{ background: t.accent, borderColor: styles.border, color: getContrastText(t.accent) }}
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-clay-rim text-[13px] font-semibold"
+                  style={{ background: t.accent, color: getContrastText(t.accent) }}
                 >
                   Aa
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-medium" style={{ color: styles.text }}>
-                    {t.name}
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate text-[13px] font-medium" style={{ color: styles.text }}>
+                      {t.name}
+                    </span>
+                    {t.id === "clay" ? (
+                      <span className="inline-flex shrink-0 items-center rounded-full bg-badge-accent px-2 py-0.5 text-[10px] font-semibold text-badge-accent-fg">
+                        Default
+                      </span>
+                    ) : null}
                   </span>
-                  {/* Swatch strip: subtle bg + strong border so dark swatches
-                       stay visible against the dark card bg (owner R28 fix).
-                       R100-E1: 14px swatches on the scale (h-3.5/w-3.5),
-                       4px radius (rounded-sm), 2px pad (p-0.5). */}
-                  <span
-                    className="mt-1 flex gap-1 rounded-sm p-0.5"
-                    style={{ background: withAlpha(styles.text, 0.06), border: `1px solid ${withAlpha(styles.text, 0.18)}` }}
-                  >
+                  {/* Swatch strip: the WELL recess (bg-well + the rim hairline,
+                       TOKENS §10) so dark swatches stay visible against the
+                       dark card bg (owner R28 fix kept: each swatch carries
+                       its own 0.22 ink hairline). */}
+                  <span className="mt-1 flex gap-1 rounded-sm border border-clay-rim bg-well p-0.5">
                     {colors.map((c, i) => (
                       <span
                         key={i}
@@ -329,10 +346,11 @@ function AppearanceTab() {
                 {selected ? (
                   <span
                     className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[12px]"
-                    style={{ background: styles.accent, color: getContrastText(styles.accent) }}
+                    style={{ background: styles.accentDeep, color: styles.accentText }}
                   >
                     {/* R100-E1: the one-spelling rule — lucide glyph, not a
-                        text ✓ (the wave-D discipline). */}
+                        text ✓ (the wave-D discipline). R126: the tile is the
+                        quiet-solid pair (accentDeep fill + accentText ink). */}
                     <Check size={12} aria-hidden />
                   </span>
                 ) : null}
@@ -342,54 +360,60 @@ function AppearanceTab() {
         </div>
       </section>
 
-      {/* ── Chat density (owner design frame 2) ─────────────────────────── */}
+      {/* ── Chat density (owner design frame 2) ───────────────────────────
+          R126-3f-1: the pref's header row rides SettingsRow (the mobile hub
+          grammar at PC density — label + one-line description + the control
+          slot), and the control itself speaks the RangeSelector grammar (the
+          well track + the gliding accentDeep knob on TAB_SPRING). */}
       <section>
-        <Kicker as="h2" className="mb-2">
-          Chat Density
-        </Kicker>
-        <div
-          className="relative grid w-full max-w-80 grid-cols-2 gap-1.5 rounded-2xl p-1"
-          role="radiogroup"
-          aria-label="Chat density"
-          style={{ background: styles.toggleTrack, border: bdr("1.5px", styles.border) }}
-        >
+        <SettingsRow label="Chat Density" description="Compact fits more on screen.">
           <div
-            className="absolute bottom-1 top-1 w-[calc(50%-6px)] rounded-xl transition-all duration-300"
-            style={{ left: density === "compact" ? "calc(50% + 2px)" : "4px", background: styles.toggleActive }}
-          />
-          {(["comfortable", "compact"] as const).map((d) => {
-            const active = density === d;
-            return (
-              <button
-                key={d}
-                onClick={() => setDensity(d)}
-                role="radio"
-                aria-checked={active}
-                aria-label={`${d} density`}
-                className={cn(
-                  "relative z-10 flex h-10 cursor-pointer items-center justify-center rounded-xl border-none bg-transparent text-[13px] capitalize transition-colors",
-                  active ? "font-medium" : "font-normal",
-                )}
-                style={{ color: active ? getContrastText(styles.toggleActive) : styles.textTertiary }}
-              >
-                {d}
-              </button>
-            );
-          })}
-        </div>
-        <p className="mt-2 text-[11px]" style={{ color: styles.textTertiary }}>
-          Compact fits more on screen.
-        </p>
+            role="radiogroup"
+            aria-label="Chat density"
+            className="flex h-8 shrink-0 items-center rounded-lg border border-clay-rim bg-well p-1"
+          >
+            <div className="relative flex h-full">
+              {/* The gliding knob — index-space motion over the two
+                  equal-width segments (never DOM-measured). */}
+              <motion.span
+                aria-hidden
+                data-testid="chat-density-knob"
+                className="absolute inset-y-0 rounded-full bg-accent-deep"
+                style={{ width: "50%" }}
+                initial={false}
+                animate={{ left: density === "compact" ? "50%" : "0%" }}
+                transition={TAB_SPRING}
+              />
+              {(["comfortable", "compact"] as const).map((d) => {
+                const active = density === d;
+                return (
+                  <button
+                    key={d}
+                    onClick={() => setDensity(d)}
+                    role="radio"
+                    aria-checked={active}
+                    aria-label={`${d} density`}
+                    className={cn(
+                      "relative z-10 flex h-full w-20 cursor-pointer items-center justify-center rounded-full border-none bg-transparent text-[12px] capitalize transition-colors duration-100",
+                      active ? "font-semibold" : "font-normal text-muted hover:text-ink",
+                    )}
+                    style={active ? { color: styles.accentText } : undefined}
+                  >
+                    {d}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </SettingsRow>
       </section>
 
-      {/* ── R97-H: chat text size (the owner's customizability ask) ──── */}
+      {/* ── R97-H: chat text size (the owner's customizability ask) ────
+          R126-3f-1: the section's header row rides SettingsRow (label +
+          the one-line description); the pick-one cards below speak the chip
+          grammar. */}
       <section>
-        <Kicker as="h2" className="mb-2">
-          Text Size
-        </Kicker>
-        <p className="mt-0 mb-3 text-[12px]" style={{ color: styles.textSecondary }}>
-          The chat's reading surfaces — answers, thinking, narration.
-        </p>
+        <SettingsRow label="Text Size" description="The chat's reading surfaces — answers, thinking, narration." />
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           {(
             [
@@ -411,12 +435,7 @@ function AppearanceTab() {
 
       {/* ── R97-H: message timestamps ────────────────────────────────── */}
       <section>
-        <Kicker as="h2" className="mb-2">
-          Timestamps
-        </Kicker>
-        <p className="mt-0 mb-3 text-[12px]" style={{ color: styles.textSecondary }}>
-          When a message was sent, revealed by hovering it.
-        </p>
+        <SettingsRow label="Timestamps" description="When a message was sent, revealed by hovering it." />
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {(
             [
@@ -437,12 +456,7 @@ function AppearanceTab() {
 
       {/* ── Tool activity (ROUND-35: the owner's tool-calls preferences) ── */}
       <section>
-        <Kicker as="h2" className="mb-2">
-          Tool activity
-        </Kicker>
-        <p className="mt-0 mb-3 text-[12px]" style={{ color: styles.textSecondary }}>
-          How the agent's tool activity appears in the chat.
-        </p>
+        <SettingsRow label="Tool activity" description="How the agent's tool activity appears in the chat." />
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           {/* R97-J (m8): the section rides the shared ChoiceCard now — the
               R97-H extraction left this inline duplicate behind (byte-
@@ -470,11 +484,17 @@ function AppearanceTab() {
 }
 
 /** R97-H: the appearance tab's radio card — the exact Tool-activity card
- * pattern (radio circle + one-line description, active accent ring)
- * extracted so the sections speak the same design without duplicating the
- * markup. R100-E1 ladder sweep: 16px card radius (rounded-2xl, the card
- * step), 500 label weight (the law's active/selected tier), hover = the
- * CSS bg wash (the translate fidget is gone — TOKENS §6). */
+ * pattern (radio circle + one-line description) extracted so the sections
+ * speak the same design without duplicating the markup. R100-E1 ladder
+ * sweep: 16px card radius (rounded-2xl, the card step), 500 label weight
+ * (the law's active/selected tier), hover = the CSS bg wash.
+ *
+ * R126-3f-1 (the chip-grammar conversion, COMPONENTS §2 + TOKENS §10): the
+ * RESTING card = THE WELL (bg-well + the 1px clay rim — the recess, one
+ * step down from the section card); the SELECTED state = the chip grammar's
+ * selection — bg-accent-tint fill + the accentDeep ink + the FILLED radio
+ * in accentDeep (the accentText dot inside). The pre-R126 accent ring +
+ * withAlpha wash + boxShadow halo are retired. */
 function ChoiceCard({
   active,
   label,
@@ -492,37 +512,23 @@ function ChoiceCard({
       onClick={onSelect}
       aria-pressed={active}
       className={cn(
-        "relative rounded-2xl border-[1.5px] p-3 text-left transition-colors hover:bg-hover",
-        active ? "border-accent" : "border-line bg-card",
+        "relative rounded-2xl border border-clay-rim p-3 text-left transition-colors duration-100",
+        active ? "bg-accent-tint" : "bg-well hover:bg-hover",
       )}
-      style={
-        active
-          ? {
-              background: withAlpha(styles.accent, 0.06),
-              borderColor: styles.accent,
-              boxShadow: `0 0 0 3px ${withAlpha(styles.accent, 0.15)}`,
-            }
-          : undefined
-      }
     >
       <div className="flex items-center gap-2">
         <span
-          className="w-4 h-4 rounded-full border-[1.5px] grid place-items-center shrink-0"
-          style={{
-            borderColor: active ? styles.accent : styles.border,
-            background: active ? styles.accent : "transparent",
-          }}
+          className={cn(
+            "grid h-4 w-4 shrink-0 place-items-center rounded-full border",
+            active ? "border-accent-deep bg-accent-deep" : "border-line bg-transparent",
+          )}
           aria-hidden
         >
-          {active && <span className="w-1.5 h-1.5 rounded-full" style={{ background: styles.accentText }} />}
+          {active && <span className="h-1.5 w-1.5 rounded-full" style={{ background: styles.accentText }} />}
         </span>
-        <span className="text-[13px] font-medium" style={{ color: styles.text }}>
-          {label}
-        </span>
+        <span className={cn("text-[13px] font-medium", active ? "text-accent-deep" : "text-ink")}>{label}</span>
       </div>
-      <p className="mt-1.5 text-[11px] leading-snug" style={{ color: styles.textSecondary }}>
-        {desc}
-      </p>
+      <p className="mt-1.5 text-[11px] leading-snug text-muted">{desc}</p>
     </button>
   );
 }
@@ -584,7 +590,7 @@ function AdvancedTab() {
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
           The engine&apos;s behavior switches, grouped by category. Sub-agent keys, model, parallelism, and supervision
           live on the{" "}
-          <Link to="/settings?tab=subagents" className="font-medium underline" style={{ color: styles.accent }}>
+          <Link to="/settings?tab=subagents" className="font-medium underline" style={{ color: styles.accentDeep }}>
             Sub-agents
           </Link>{" "}
           page.
@@ -626,7 +632,7 @@ function DataInsightsCrossLinkCard() {
       </div>
       <div className="text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
         Total tokens, peak day, the activity heatmap, the model mix, and agent health live on the{" "}
-        <Link to="/settings?tab=data" className="font-medium underline" style={{ color: styles.accent }}>
+        <Link to="/settings?tab=data" className="font-medium underline" style={{ color: styles.accentDeep }}>
           Data &amp; Statistics
         </Link>{" "}
         tab — the usage ledger the engine records on every turn.
@@ -640,9 +646,15 @@ function DataInsightsCrossLinkCard() {
  * ETERNAL "loading …" line — data undefined never resolves, so a 401 or a
  * down sidecar looked like latency. Each card now renders this (the round's
  * retryable-error shape, cf. AgentChatPanel's ChatLoadErrorCard: role=alert,
- * the danger token via withAlpha, the exact cause, ONE Retry action that
- * re-drives the query) INSIDE its own <section>, so the card's testid and
- * column rhythm survive. */
+ * the exact cause, ONE Retry action that re-drives the query) INSIDE its own
+ * <section>, so the card's testid and column rhythm survive.
+ *
+ * R126-3f-1 (TOKENS §11 killed the flat-hue grammar): the container is the
+ * DANGER BADGE TONE — bg-badge-danger + text-badge-danger-fg (the tinted
+ * container + deep-on-tint ink pair, the sibling waves' spelling); Retry is
+ * the outlined-danger species (1px border-danger-deep + text-danger-deep,
+ * press 0.98). The withAlpha danger washes + the flat-hue danger text died
+ * with the round. */
 function SettingsLoadErrorCard({
   what,
   error,
@@ -652,24 +664,17 @@ function SettingsLoadErrorCard({
   error: unknown;
   onRetry: () => void;
 }) {
-  const styles = useThemeStyles();
   const cause = error instanceof Error ? error.message : String(error);
   return (
     <div
       role="alert"
       data-settings-load-error
-      className="rounded-2xl border px-4 py-3.5"
-      style={{
-        borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
-        background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-      }}
+      className="rounded-xl bg-badge-danger px-4 py-3 text-badge-danger-fg"
     >
       {/* R100-E1: 13px/600 (the error heading is a section header, the
           weight law's 600 tier — the old 12.5px-bold was off-ladder twice). */}
-      <div className="text-[13px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
-        Could not load {what} settings
-      </div>
-      <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
+      <div className="text-[13px] font-semibold">Could not load {what} settings</div>
+      <p className="mt-1.5 text-[12px] leading-relaxed">
         The agent sidecar may be down or the request was rejected — {cause}. Nothing was changed; Retry
         re-reads the saved value.
       </p>
@@ -677,8 +682,7 @@ function SettingsLoadErrorCard({
         type="button"
         onClick={onRetry}
         aria-label={`Retry loading ${what} settings`}
-        className="mt-3 h-8 cursor-pointer rounded-lg border px-3.5 text-[12px] font-semibold transition-opacity hover:opacity-85"
-        style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+        className="mt-3 h-8 cursor-pointer rounded-lg border border-danger-deep px-3.5 text-[12px] font-semibold text-danger-deep transition-opacity duration-100 hover:opacity-85 active:scale-[0.98]"
       >
         Retry
       </button>
@@ -818,8 +822,11 @@ function ThinkingLoopCard() {
   };
 
   const inputStyle = {
-    background: styles.subtle,
-    border: bdr("1.5px", styles.border),
+    // R126-3f-1: the well + rim (TOKENS §10) — inputs and steppers are
+    // recesses, one step down from the card; the 1.5px bento border died
+    // with the clay grammar (TOKENS §5).
+    background: styles.surfaceWell,
+    border: bdr("1px", styles.clayRim),
     color: styles.text,
   } as const;
 
@@ -831,35 +838,21 @@ function ThinkingLoopCard() {
       </div>
       {/* The master switch — OFF by default (the owner's directive: the model
           thinks as much as it needs to). R100-E1: the row rides SettingsRow
-          (13px/400 label + 11px tertiary description + right control slot). */}
+          (13px/400 label + 11px tertiary description + right control slot).
+          R126-3f-1: the control rides the shared ToggleSwitch now (the
+          accentDeep/well materials live in the primitive; geometry + the
+          aria/testid contract byte-identical to the inline copy it replaces). */}
       <SettingsRow
         label="Stop stuck reasoning"
         description="When ON, a model that keeps reasoning with no text, tool call, or finish for the stall window below is stopped (one de-escalating retry, then an honest notice). OFF (default) — the model thinks as long as it needs to."
       >
-        <button
-          type="button"
-          role="switch"
-          aria-checked={current.enabled}
-          aria-label="Toggle the thinking-loop guard"
-          data-testid="thinking-loop-switch"
+        <ToggleSwitch
+          checked={current.enabled}
+          onToggle={() => update.mutate({ enabled: !current.enabled })}
+          label="Toggle the thinking-loop guard"
           disabled={busy}
-          onClick={() => update.mutate({ enabled: !current.enabled })}
-          className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
-          style={{
-            background: current.enabled ? styles.accent : withAlpha(styles.text, 0.18),
-            border: bdr("1.5px", current.enabled ? styles.accent : styles.border),
-          }}
-        >
-          <span
-            className="absolute top-1/2 block -translate-y-1/2 rounded-full shadow transition-all"
-            style={{
-              left: current.enabled ? "calc(100% - 21px)" : "3px",
-              height: 18,
-              width: 18,
-              background: current.enabled ? styles.accentText : styles.toggleActive,
-            }}
-          />
-        </button>
+          testId="thinking-loop-switch"
+        />
       </SettingsRow>
 
       {/* The thresholds — editable only while the guard is ON (the honest
@@ -905,11 +898,11 @@ function ThinkingLoopCard() {
       </div>
 
       {error ? (
-        <div className="mt-2 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+        <div className="mt-2 text-[11px] text-danger-deep" role="alert">
           {error}
         </div>
       ) : null}
-      <div className="mt-3 text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
+      <div className="mt-3 text-[11px] leading-relaxed tabular-nums" style={{ color: styles.textTertiary }}>
         {current.enabled
           ? `The guard fires after ${current.stallSeconds}s of pure reasoning with ${current.reasoningBytesKB}KB accumulated — one de-escalating retry, then an honest amber notice (never a red “generation failed”).`
           : "OFF — the model can think as much as it needs to. Turn it on only if a model ever gets stuck in a true reasoning loop."}
@@ -1053,8 +1046,11 @@ function RetryConfigCard() {
   };
 
   const inputStyle = {
-    background: styles.subtle,
-    border: bdr("1.5px", styles.border),
+    // R126-3f-1: the well + rim (TOKENS §10) — inputs and steppers are
+    // recesses, one step down from the card; the 1.5px bento border died
+    // with the clay grammar (TOKENS §5).
+    background: styles.surfaceWell,
+    border: bdr("1px", styles.clayRim),
     color: styles.text,
   } as const;
 
@@ -1065,35 +1061,18 @@ function RetryConfigCard() {
         <span className="text-[13px] font-semibold text-ink">Auto-retry</span>
       </div>
       {/* R100-E1: the three switch rows ride SettingsRow (the primitive's
-          13px/400 label + 11px tertiary description anatomy). */}
+          13px/400 label + 11px tertiary description anatomy). R126-3f-1:
+          the controls ride the shared ToggleSwitch (accentDeep/well). */}
       <div className="flex flex-col gap-1">
         {RETRY_SWITCHES.map(({ key, label, description }) => (
           <SettingsRow key={key} label={label} description={description}>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={current[key]}
-              aria-label={`Toggle auto-retry for ${label.toLowerCase()}`}
-              data-testid={`retry-switch-${key}`}
+            <ToggleSwitch
+              checked={current[key]}
+              onToggle={() => toggle.mutate({ [key]: !current[key] })}
+              label={`Toggle auto-retry for ${label.toLowerCase()}`}
               disabled={busy}
-              onClick={() => toggle.mutate({ [key]: !current[key] })}
-              className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
-              style={{
-                background: current[key] ? styles.accent : withAlpha(styles.text, 0.18),
-                border: bdr("1.5px", current[key] ? styles.accent : styles.border),
-              }}
-            >
-              <span
-                className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full shadow transition-all"
-                style={{
-                  left: current[key] ? "calc(100% - 21px)" : "3px",
-                  height: 18,
-                  width: 18,
-                  // R93-A4: contrast-aware knob (Mono Stone dark → #111111).
-                  background: current[key] ? styles.accentText : styles.toggleActive,
-                }}
-              />
-            </button>
+              testId={`retry-switch-${key}`}
+            />
           </SettingsRow>
         ))}
       </div>
@@ -1219,15 +1198,15 @@ function RetryConfigCard() {
           />
         </SettingsRow>
 
-        {/* Reset to defaults */}
+        {/* Reset to defaults — R126-3f-1: the outlined secondary species
+            (COMPONENTS §4: 1px border-strong + text-secondary, hover wash). */}
         <div className="mt-3">
           <button
             type="button"
             disabled={busy}
             data-testid="retry-reset"
             onClick={resetDefaults}
-            className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ borderColor: styles.border, color: styles.textSecondary }}
+            className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border border-line-strong text-muted transition-colors duration-100 hover:bg-hover inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RotateCcw size={11} />
             Reset to defaults
@@ -1236,11 +1215,11 @@ function RetryConfigCard() {
       </div>
 
       {error ? (
-        <div className="mt-2 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+        <div className="mt-2 text-[11px] text-danger-deep" role="alert">
           {error}
         </div>
       ) : null}
-      <div className="mt-3 text-[11px] leading-relaxed" style={{ color: styles.textTertiary }}>
+      <div className="mt-3 text-[11px] leading-relaxed tabular-nums" style={{ color: styles.textTertiary }}>
         When a switch is off, that failure type shows immediately with the provider&apos;s real error text instead of
         auto-retrying ({current.maxAttempts} attempts: {scheduleLabel}).
       </div>
@@ -1316,7 +1295,7 @@ function DebugModeCard() {
           <>
             Post-turn debug analyst
             {error ? (
-              <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+              <div className="mt-1.5 text-[11px] text-danger-deep" role="alert">
                 {error}
               </div>
             ) : null}
@@ -1324,30 +1303,14 @@ function DebugModeCard() {
         }
         description="While ON, the agent answers normally — then a separate, context-free analyst reviews the whole conversation (every tool call's full result, what was resolved, what failed) and streams its execution report live in a dedicated section under the answer. The report never feeds back into the conversation, so follow-up messages stay clean. Applies to the next message you send."
       >
-        <button
-          type="button"
-          role="switch"
-          aria-checked={current.enabled}
-          aria-label="Toggle debug mode"
+        {/* R126-3f-1: the shared ToggleSwitch (accentDeep/well materials);
+            geometry + aria contract byte-identical to the inline copy. */}
+        <ToggleSwitch
+          checked={current.enabled}
+          onToggle={() => toggle.mutate(!current.enabled)}
+          label="Toggle debug mode"
           disabled={busy}
-          onClick={() => toggle.mutate(!current.enabled)}
-          className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
-          style={{
-            background: current.enabled ? styles.accent : withAlpha(styles.text, 0.18),
-            border: bdr("1.5px", current.enabled ? styles.accent : styles.border),
-          }}
-        >
-          <span
-            className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full shadow transition-all"
-            style={{
-              left: current.enabled ? "calc(100% - 21px)" : "3px",
-              height: 18,
-              width: 18,
-              // R93-A4: contrast-aware knob (Mono Stone dark → #111111).
-              background: current.enabled ? styles.accentText : styles.toggleActive,
-            }}
-          />
-        </button>
+        />
       </SettingsRow>
     </SectionCard>
   );
@@ -1433,7 +1396,7 @@ function DesktopNotificationsCard() {
           <>
             OS notifications
             {error ? (
-              <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+              <div className="mt-1.5 text-[11px] text-danger-deep" role="alert">
                 {error}
               </div>
             ) : null}
@@ -1441,30 +1404,14 @@ function DesktopNotificationsCard() {
         }
         description="While ON, task-complete, task-failed, and permission-needed alerts fire a native OS notification when the app window is not visible (the same rule the in-app toasts already follow). Sub-agent activity stays in-app only. Applies to the very next notification."
       >
-        <button
-          type="button"
-          role="switch"
-          aria-checked={current.enabled}
-          aria-label="Toggle desktop notifications"
+        {/* R126-3f-1: the shared ToggleSwitch (accentDeep/well materials);
+            geometry + aria contract byte-identical to the inline copy. */}
+        <ToggleSwitch
+          checked={current.enabled}
+          onToggle={() => toggle.mutate(!current.enabled)}
+          label="Toggle desktop notifications"
           disabled={busy}
-          onClick={() => toggle.mutate(!current.enabled)}
-          className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
-          style={{
-            background: current.enabled ? styles.accent : withAlpha(styles.text, 0.18),
-            border: bdr("1.5px", current.enabled ? styles.accent : styles.border),
-          }}
-        >
-          <span
-            className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full shadow transition-all"
-            style={{
-              left: current.enabled ? "calc(100% - 21px)" : "3px",
-              height: 18,
-              width: 18,
-              // R93-A4: contrast-aware knob (Mono Stone dark → #111111).
-              background: current.enabled ? styles.accentText : styles.toggleActive,
-            }}
-          />
-        </button>
+        />
       </SettingsRow>
     </SectionCard>
   );
@@ -1533,7 +1480,7 @@ function MemoryCard() {
           <>
             Project memory system
             {error ? (
-              <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+              <div className="mt-1.5 text-[11px] text-danger-deep" role="alert">
                 {error}
               </div>
             ) : null}
@@ -1541,30 +1488,14 @@ function MemoryCard() {
         }
         description="While ON, agents auto-load each project's saved facts, decisions and preferences at every turn and can save new ones (memory_save / memory_recall / memory_list). Turn it OFF to run every session on its own context alone — no memory is injected and the memory tools are not offered. Saved memories are kept and restored when re-enabled."
       >
-        <button
-          type="button"
-          role="switch"
-          aria-checked={current.enabled}
-          aria-label="Toggle agent memory"
+        {/* R126-3f-1: the shared ToggleSwitch (accentDeep/well materials);
+            geometry + aria contract byte-identical to the inline copy. */}
+        <ToggleSwitch
+          checked={current.enabled}
+          onToggle={() => toggle.mutate(!current.enabled)}
+          label="Toggle agent memory"
           disabled={busy}
-          onClick={() => toggle.mutate(!current.enabled)}
-          className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
-          style={{
-            background: current.enabled ? styles.accent : withAlpha(styles.text, 0.18),
-            border: bdr("1.5px", current.enabled ? styles.accent : styles.border),
-          }}
-        >
-          <span
-            className="absolute top-1/2 block h-4.5 w-4.5 -translate-y-1/2 rounded-full shadow transition-all"
-            style={{
-              left: current.enabled ? "calc(100% - 21px)" : "3px",
-              height: 18,
-              width: 18,
-              // R93-A4: contrast-aware knob (Mono Stone dark → #111111).
-              background: current.enabled ? styles.accentText : styles.toggleActive,
-            }}
-          />
-        </button>
+        />
       </SettingsRow>
     </SectionCard>
   );
@@ -1648,8 +1579,11 @@ function BrowserTab() {
 
   const busy = update.isPending;
   const inputStyle = {
-    background: styles.subtle,
-    border: bdr("1.5px", styles.border),
+    // R126-3f-1: the well + rim (TOKENS §10) — inputs and steppers are
+    // recesses, one step down from the card; the 1.5px bento border died
+    // with the clay grammar (TOKENS §5).
+    background: styles.surfaceWell,
+    border: bdr("1px", styles.clayRim),
     color: styles.text,
   } as const;
 
@@ -1681,13 +1615,12 @@ function BrowserTab() {
           question never needs asking again: no marketing, no hiding. */}
       <div
         data-testid="browser-engine-line"
-        className="flex items-start gap-2.5 rounded-lg px-3 py-2.5"
-        style={{ background: styles.subtle, border: bdr("1px", styles.border) }}
+        className="flex items-start gap-2.5 rounded-lg border border-clay-rim bg-well px-3 py-2.5"
         role="note"
         aria-label="Browser engine"
       >
         <Info size={13} className="mt-0.5 shrink-0" style={{ color: styles.textTertiary }} />
-        <div className="text-[11.5px] leading-[1.5] min-w-0" style={{ color: styles.textSecondary }}>
+        <div className="text-[11px] leading-[1.5] min-w-0" style={{ color: styles.textSecondary }}>
           <span className="font-semibold" style={{ color: styles.text }}>
             Engine:
           </span>{" "}
@@ -1715,12 +1648,13 @@ function BrowserTab() {
                   data-testid={`browser-engine-${opt.id}`}
                   aria-pressed={active}
                   onClick={() => update.mutate({ searchEngine: opt.id })}
-                  className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors hover:bg-hover cursor-pointer disabled:opacity-50"
-                  style={{
-                    ...(active
-                      ? { background: withAlpha(styles.accent, 0.12), borderColor: styles.accent, color: styles.accent }
-                      : { borderColor: styles.border, color: styles.textSecondary }),
-                  }}
+                  className={cn(
+                    "h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors duration-100 cursor-pointer disabled:opacity-50",
+                    // R126-3f-1: the chip grammar's selected state
+                    // (bg-accent-tint + text-accent-deep) vs the outlined
+                    // resting pill — the CSS-var legs, no inline styles.
+                    active ? "border-accent-deep bg-accent-tint text-accent-deep" : "border-line text-muted hover:bg-hover",
+                  )}
                 >
                   {opt.label}
                 </button>
@@ -1823,7 +1757,7 @@ function BrowserTab() {
           <div className="mb-2 flex items-center justify-between">
             <div>
               <div className="text-[13px] font-normal text-ink">Quick links</div>
-              <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+              <div className="text-[11px] tabular-nums" style={{ color: styles.textTertiary }}>
                 The shortcuts on the home page ({current.quickLinks.length}/12).
               </div>
             </div>
@@ -1832,8 +1766,7 @@ function BrowserTab() {
               disabled={busy || current.quickLinks.length >= 12}
               data-testid="browser-quicklink-add"
               onClick={() => setQuickLinks([...current.quickLinks, { label: "New link", url: "https://" }])}
-              className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
-              style={{ borderColor: styles.border, color: styles.textSecondary }}
+              className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border border-line-strong text-muted transition-colors duration-100 hover:bg-hover inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
             >
               <Plus size={11} />
               Add link
@@ -1874,8 +1807,7 @@ function BrowserTab() {
                   aria-label={`Remove quick link ${i + 1}`}
                   data-testid={`browser-quicklink-remove-${i}`}
                   onClick={() => setQuickLinks(current.quickLinks.filter((_, j) => j !== i))}
-                  className="h-7 w-7 grid place-items-center rounded-lg border shrink-0 transition-colors disabled:opacity-40 cursor-pointer"
-                  style={{ ...inputStyle, color: SEMANTIC_COLORS.danger }}
+                  className="h-7 w-7 grid place-items-center rounded-lg border border-clay-rim bg-well text-danger-deep shrink-0 transition-colors duration-100 disabled:opacity-40 cursor-pointer"
                 >
                   <Trash2 size={11} />
                 </button>
@@ -1885,7 +1817,7 @@ function BrowserTab() {
         </div>
 
         {error ? (
-          <div className="mt-2 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+          <div className="mt-2 text-[11px] text-danger-deep" role="alert">
             {error}
           </div>
         ) : null}

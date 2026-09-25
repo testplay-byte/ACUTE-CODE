@@ -421,14 +421,16 @@ describe("PopoutApp — R60-A: the rounded content card + the gutter scrollbar",
 
     // The placeholder keeps its testid and stays the webview's rectangle…
     const placeholder = screen.getByTestId("popout-content");
-    // …but its parent is now the visible CARD — rounded 14px with a 1.5px
-    // subtle border (the title-bar/URL-bar card language).
+    // …but its parent is now the visible CARD — the R126-3h re-pin: the CLAY
+    // card (rounded-2xl + the 1px clay-rim hairline + .ac-clay — the
+    // rounded-[14px]/border-[1.5px]/border-subtle spelling is retired).
     const card = placeholder.parentElement as HTMLElement;
     expect(card).not.toBeNull();
-    expect(card.className).toContain("rounded-[14px]");
-    expect(card.className).toContain("border-[1.5px]");
+    expect(card.className).toContain("rounded-2xl");
+    expect(card.className).toContain("border-clay-rim");
+    expect(card.className).toContain("ac-clay");
     expect(card.className).toContain("flex-1");
-    expect(card.style.borderColor).toBe("var(--ac-border-subtle)");
+    expect(card.className).not.toContain("border-[1.5px]");
     // The placeholder is inset 4px inside the card, so the (square) webview
     // floats inside the visible rounded frame — never over its corners.
     expect(placeholder.className).toContain("inset-[4px]");

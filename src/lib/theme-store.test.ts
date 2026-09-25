@@ -16,7 +16,8 @@ import { useConfigStore } from "./config-store";
 function reset() {
   localStorage.clear();
   useThemeStore.setState({
-    themeId: "nova",
+    // R126: clay is the default identity language now (was nova).
+    themeId: "clay",
     mode: "dark",
     density: "comfortable",
     sidebarTint: "subtle",
@@ -40,9 +41,9 @@ afterEach(() => {
 });
 
 describe("theme store", () => {
-  it("defaults to nova dark", () => {
+  it("defaults to clay dark (R126 — the Clay Companion identity)", () => {
     const { themeId, mode } = useThemeStore.getState();
-    expect(themeId).toBe("nova");
+    expect(themeId).toBe("clay");
     expect(mode).toBe("dark");
   });
 
@@ -230,7 +231,8 @@ describe("R113-b: server-backed appearance (hydration + write-through + echo gua
     useConfigStore.setState({ demoData: false, baseUrl: "http://sidecar.test", token: "tok_123" });
 
     await expect(hydrateAppearanceFromServer()).resolves.toBeUndefined();
-    expect(useThemeStore.getState().themeId).toBe("nova");
+    // R126: the standing local flavor is clay now (reset() seeds the default).
+    expect(useThemeStore.getState().themeId).toBe("clay");
     expect(useThemeStore.getState().mode).toBe("dark");
   });
 
@@ -242,7 +244,7 @@ describe("R113-b: server-backed appearance (hydration + write-through + echo gua
     await hydrateAppearanceFromServer();
 
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(useThemeStore.getState().themeId).toBe("nova");
+    expect(useThemeStore.getState().themeId).toBe("clay");
   });
 
   it("local setTheme/setMode write through: an optimistic PUT fires with the new value", () => {
@@ -296,7 +298,8 @@ describe("R113-b: server-backed appearance (hydration + write-through + echo gua
     applyServerAppearance({ themeId: 42, mode: "neon" });
     applyServerAppearance({ themeId: "bento", mode: "blueprint" });
 
-    expect(useThemeStore.getState().themeId).toBe("nova");
+    // R126: the standing local flavor is clay now (reset() seeds the default).
+    expect(useThemeStore.getState().themeId).toBe("clay");
     expect(useThemeStore.getState().mode).toBe("dark");
   });
 });
@@ -421,10 +424,81 @@ describe("R114-e: the four chat fields join the synced appearance domain", () =>
     applyServerAppearance({ toolActivity: "verbose" });
 
     // themeId was valid in the first frame but rides the same rejection.
-    expect(useThemeStore.getState().themeId).toBe("nova");
+    // R126: the standing local flavor is clay now (reset() seeds the default).
+    expect(useThemeStore.getState().themeId).toBe("clay");
     expect(useThemeStore.getState().chatTextSize).toBe("medium");
     expect(useThemeStore.getState().timestampsMode).toBe("hidden");
     expect(useThemeStore.getState().activityMode).toBe("detailed");
     expect(useThemeStore.getState().density).toBe("comfortable");
+  });
+});
+
+// ── ROUND-126 (the Clay Companion redesign): the one-time nova→clay identity
+// migration — both legs. The redesign made clay the default language; profiles
+// still holding the never-re-designed nova default move to clay ONCE (local
+// persist + the server hydration boundary), a deliberate post-migration nova
+// pick rides untouched forever.
+describe("R126: the nova→clay identity migration", () => {
+  it("the LOCAL leg: a persisted v1 nova profile rehydrates as clay (migrate)", async () => {
+    // Seed a v1 profile exactly as the pre-R126 app would have persisted it.
+    localStorage.setItem(
+      "acute-code.theme",
+      JSON.stringify({
+        state: { themeId: "nova", mode: "dark", chatTextSize: "medium" },
+        version: 1,
+      }),
+    );
+    // Re-create the store with a fresh module graph so zustand's persist
+    // runs its rehydration (the migrate leg) against the seeded profile.
+    vi.resetModules();
+    const fresh = await import("./theme-store");
+    expect(fresh.useThemeStore.getState().themeId).toBe("clay");
+    // The rest of the persisted state rides untouched.
+    expect(fresh.useThemeStore.getState().mode).toBe("dark");
+    expect(fresh.useThemeStore.getState().chatTextSize).toBe("medium");
+    // A non-nova v1 flavor is a deliberate pick and rides untouched.
+    localStorage.setItem(
+      "acute-code.theme",
+      JSON.stringify({
+        state: { themeId: "bento", mode: "light" },
+        version: 1,
+      }),
+    );
+    vi.resetModules();
+    const freshBento = await import("./theme-store");
+    expect(freshBento.useThemeStore.getState().themeId).toBe("bento");
+  });
+
+  it("the SERVER leg: a server nova maps to clay ONCE and converges the server", async () => {
+    const { calls } = liveModeFetchStub({ get: { themeId: "nova", mode: "dark" } });
+    localStorage.removeItem("acute-code.theme.r126-nova-migrated");
+
+    await hydrateAppearanceFromServer();
+
+    // The migration applied clay, not the stale server nova…
+    expect(useThemeStore.getState().themeId).toBe("clay");
+    // …and the convergence PUT fired AFTER the echo guard lifted (the one
+    // sanctioned counter-push — without it the next boot would re-apply
+    // the stale server nova verbatim).
+    const put = calls.find((c) => c.method === "PUT" && c.url.endsWith("/settings/appearance"));
+    expect(put).toBeDefined();
+    expect(put?.body).toContain('"themeId":"clay"');
+    // The flag is set: a SECOND server nova now rides verbatim (a deliberate
+    // post-migration nova pick survives re-hydration). The hydration memo
+    // resets between the two GETs so the second call actually re-fetches.
+    resetAppearanceHydrationForTest();
+    const { calls: calls2 } = liveModeFetchStub({ get: { themeId: "nova", mode: "dark" } });
+    await hydrateAppearanceFromServer();
+    expect(useThemeStore.getState().themeId).toBe("nova");
+    expect(calls2.filter((c) => c.method === "PUT")).toHaveLength(0);
+  });
+
+  it("a server nova with the flag already set rides verbatim (no re-migration)", async () => {
+    localStorage.setItem("acute-code.theme.r126-nova-migrated", "1");
+    liveModeFetchStub({ get: { themeId: "nova", mode: "dark" } });
+
+    await hydrateAppearanceFromServer();
+
+    expect(useThemeStore.getState().themeId).toBe("nova");
   });
 });

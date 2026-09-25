@@ -29,6 +29,9 @@ import {
   onMenuOverlayHover,
   onMenuOverlayPick,
   showMenuOverlay,
+  // R126-3h: the shared payload-theme builder (the deep-tier legs ride the
+  // usage payload now — see lib/menu-overlay.ts).
+  menuThemeFromStyles,
   usageSegmentHex,
   type UsageBarSegmentPayload,
   type UsageCardPayload,
@@ -43,28 +46,36 @@ import {
 
 // ── ROUND-51 (R51-c): donut color grading ────────────────────────────────────
 
-/** Ring stays the theme accent below this fraction of the window used. */
+/** Ring stays the primary tone below this fraction of the window used. */
 export const CONTEXT_DONUT_WARN = 0.6;
-/** Ring turns danger ABOVE this fraction (amber in between). */
+/** Ring turns danger ABOVE this fraction (the warn tier in between). */
 export const CONTEXT_DONUT_DANGER = 0.85;
-/**
- * The amber the codebase already uses for mid-tier warnings (ApprovalLine,
- * SubAgentPanel) — an intentional, documented raw-hex exception like
- * SEMANTIC_COLORS.
- */
-export const DONUT_WARN_COLOR = "#f59e0b";
+
+/** R126-3d-4 (the material spec): the ring's THREE tones — the primary is
+ * the DEEP accent (var(--ac-accent-deep) via the JS leg) and the
+ * warning/danger tiers are text-warning-deep / text-danger-deep (TOKENS
+ * §11's deep pairs — arcs are DATA so semantic tiers stay, but flat hues
+ * no longer paint the ring; the raw-hex DONUT_WARN_COLOR and the flat
+ * SEMANTIC_COLORS.danger arc are retired). Theme-resolved by the caller
+ * (useThemeStyles) — the grading thresholds are unchanged. */
+export interface DonutTones {
+  accent: string;
+  warn: string;
+  danger: string;
+}
 
 /**
- * ROUND-51 (R51-c): the ring color by context-window pressure — accent while
- * comfortable, amber when filling, danger past the point where one large tool
- * output could overflow the window. Pure; exported for tests.
+ * ROUND-51 (R51-c): the ring color by context-window pressure — primary
+ * while comfortable, the warn tone when filling, danger past the point
+ * where one large tool output could overflow the window. Pure; exported
+ * for tests.
  */
-export function contextDonutColor(usedTokens: number, contextWindow: number, accent: string): string {
-  if (contextWindow <= 0) return accent;
+export function contextDonutColor(usedTokens: number, contextWindow: number, tones: DonutTones): string {
+  if (contextWindow <= 0) return tones.accent;
   const frac = Math.min(1, usedTokens / contextWindow);
-  if (frac > CONTEXT_DONUT_DANGER) return SEMANTIC_COLORS.danger;
-  if (frac >= CONTEXT_DONUT_WARN) return DONUT_WARN_COLOR;
-  return accent;
+  if (frac > CONTEXT_DONUT_DANGER) return tones.danger;
+  if (frac >= CONTEXT_DONUT_WARN) return tones.warn;
+  return tones.accent;
 }
 
 /**
@@ -418,6 +429,9 @@ function DonutRing({
   track: string;
   markerFrac?: number;
 }) {
+  // R126-3d-4: the budget tick's ink = dangerDeep (the §11 deep pair —
+  // the flat SEMANTIC hue retired from the arc family).
+  const styles = useThemeStyles();
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const frac = limit > 0 ? Math.min(1, used / limit) : 0;
@@ -439,7 +453,7 @@ function DonutRing({
               y1={y1}
               x2={x2}
               y2={y2}
-              stroke={SEMANTIC_COLORS.danger}
+              stroke={styles.dangerDeep}
               strokeWidth={1.5}
               strokeLinecap="round"
             />
@@ -668,8 +682,9 @@ function Pane({ label, children }: { label: string; children: ReactNode }) {
   return (
     <section
       data-pane={label}
-      className="rounded-lg border p-2 mb-2"
-      style={{ borderColor: styles.borderSubtle, background: styles.subtle }}
+      // R126-3d-4: the pane = the RECESSED WELL (TOKENS §10 — surfaceWell
+      // + the rim hairline; the subtle/borderSubtle JS legs retired).
+      className="rounded-lg border border-clay-rim bg-well p-2 mb-2"
     >
       <div
         className="text-[10px] font-medium uppercase tracking-[0.08em] mb-2"
@@ -1067,7 +1082,14 @@ export function ContextDonut({
   const pct = data !== null && window_ > 0 ? Math.min(100, (used / window_) * 100) : null;
 
   // ROUND-51 (R51-c): the graded ring color (accent → amber → danger).
-  const ringColor = contextDonutColor(used, window_, styles.accent);
+  // R126-3d-4: the ring's tones ride the DEEP family (accentDeep primary;
+  // warningDeep/dangerDeep tiers — the material spec; the grading
+  // thresholds are unchanged).
+  const ringColor = contextDonutColor(used, window_, {
+    accent: styles.accentDeep,
+    warn: styles.warningDeep,
+    danger: styles.dangerDeep,
+  });
 
   // ── R99-D: THE payload build — the single source BOTH legs paint from (the
   // overlay window gets it through showMenuOverlay below; the DOM popover
@@ -1118,17 +1140,11 @@ export function ContextDonut({
       ...(built.contextBar !== undefined ? { contextBar: built.contextBar } : {}),
       ...(built.overview !== undefined ? { overview: built.overview } : {}),
       sections: built.sections,
-      theme: {
-        card: styles.card,
-        border: styles.border,
-        softShadow: styles.softShadow,
-        text: styles.text,
-        textSecondary: styles.textSecondary,
-        textTertiary: styles.textTertiary,
-        accent: styles.accent,
-        subtleHover: styles.subtleHover,
-        isDark: styles.isDark,
-      },
+      // R126-3h: the shared payload-theme builder (the deep-tier legs ride
+      // the payload now — the overlay page's ring paints warningDeep/
+      // dangerDeep instead of the flat SEMANTIC hexes; see
+      // lib/menu-overlay.ts).
+      theme: menuThemeFromStyles(styles),
     };
     // The DOM popover's geometry, mirrored: left-clamped, POPOVER_GAP_PX above
     // the button, capped at the space that exists above (the estimate never
@@ -1253,7 +1269,7 @@ export function ContextDonut({
           used={used}
           limit={window_}
           color={ringColor}
-          track={report.isError ? withAlpha(SEMANTIC_COLORS.danger, 0.4) : styles.subtle}
+          track={report.isError ? withAlpha(SEMANTIC_COLORS.danger, 0.4) : styles.surfaceWell}
         />
       </button>
       {/* ROUND-64 (R64-c): the popover in a document.body PORTAL — a fixed
@@ -1276,17 +1292,12 @@ export function ContextDonut({
               role="dialog"
               aria-label="Context window details"
               data-context-popover
-              className="fixed z-[120] flex flex-col rounded-2xl border overflow-hidden"
+              className="fixed z-[120] flex flex-col rounded-2xl border border-clay-rim bg-card overflow-hidden ac-clay-sheet"
               style={{
                 left: `${pos.left}px`,
                 bottom: `${pos.bottom}px`,
                 width: `${POPOVER_WIDTH_PX}px`,
                 maxHeight: `${pos.maxHeight}px`,
-                background: styles.card,
-                borderColor: styles.borderStrong,
-                boxShadow: `${styles.bentoShadow}, inset 0 1px 0 ${
-                  styles.isDark ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.55)"
-                }`,
               }}
               onMouseEnter={clearCloseTimer}
               onMouseLeave={scheduleClose}
@@ -1337,7 +1348,7 @@ export function ContextDonut({
                           used={built.overview.used}
                           limit={built.overview.limit}
                           color={ringColor}
-                          track={styles.subtle}
+                          track={styles.surfaceWell}
                           markerFrac={built.overview.markerFrac}
                         />
                         <div className="min-w-0 flex-1">
@@ -1353,7 +1364,10 @@ export function ContextDonut({
                               {built.overview.bigUsed}
                             </span>
                             <span
-                              className="shrink-0 text-[11px] tabular-nums"
+                              // R126-3d-4: the center cost label — mono
+                              // tabular (the ladder's number law; the “of
+                              // limit” tail was the lone sans number).
+                              className="shrink-0 font-mono text-[11px] tabular-nums"
                               style={{ color: styles.textTertiary }}
                             >
                               {" "}

@@ -18,11 +18,9 @@ import {
 } from "../../lib/api";
 import { formatWhen } from "../../lib/format";
 import type { RightSidebarTab } from "../../lib/right-sidebar-store";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
 import { ease } from "../../lib/motion";
-import { withAlpha } from "../dashboard/helpers";
 import { ClampedText } from "../shared/ClampedText";
 
 /**
@@ -167,9 +165,12 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
   return (
     <div className="h-full flex flex-col min-h-0" data-testid="memory-panel" data-tab-id={tab.id}>
       {/* ── Panel header: label + live count + the R98-F1 add toggle ── */}
+      {/* R126-3e: the header strip = the in-flow chrome shade
+          (bg-header-surface + the clay-rim hairline); the scope segmented
+          control = the 1px clay rim + the accentTint/accentDeep active
+          segment; the count = the NEUTRAL badge tone. */}
       <div
-        className="shrink-0 flex items-center gap-2 px-3 h-9 border-b"
-        style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle }}
+        className="shrink-0 flex items-center gap-2 px-3 h-9 border-b border-clay-rim bg-header-surface"
       >
         <Brain size={13} style={{ color: styles.accent }} className="shrink-0" />
         {/* R117-b: the SCOPE SWITCH — the panel's two tiers. The segmented
@@ -178,8 +179,7 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
             subtle bg, the active side accented) is the session header's
             status-chip family. */}
         <div
-          className="flex-1 min-w-0 flex items-center gap-0.5 rounded-lg p-0.5"
-          style={{ background: withAlpha(styles.textTertiary, 0.08) }}
+          className="flex-1 min-w-0 flex items-center gap-0.5 rounded-lg border border-clay-rim p-0.5"
           role="tablist"
           aria-label="Memory scope"
         >
@@ -195,11 +195,9 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
                 setAdding(false);
                 setDeleteError(null);
               }}
-              className="h-5 px-1.5 rounded-md text-[10px] font-medium truncate transition-colors"
-              style={{
-                background: scope === s ? styles.card : "transparent",
-                color: scope === s ? styles.text : styles.textTertiary,
-              }}
+              className={`h-5 px-1.5 rounded-md text-[10px] font-medium truncate transition-colors ${
+                scope === s ? "bg-accent-tint text-accent-deep" : "text-muted"
+              }`}
             >
               {s === "workspace" ? <Globe size={9} className="inline mr-0.5 -mt-0.5" /> : null}
               {SCOPE_LABELS[s]}
@@ -207,8 +205,9 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
           ))}
         </div>
         <span
-          className="shrink-0 text-[10px] font-mono font-medium uppercase px-1.5 py-0.5 rounded-md"
-          style={{ color: styles.textTertiary, background: withAlpha(styles.textTertiary, 0.1) }}
+          // R126-3e tightening (§6 numbers discipline): tabular-nums on the
+          // live count.
+          className="shrink-0 text-[10px] font-mono font-medium uppercase px-1.5 py-0.5 rounded-md tabular-nums bg-badge-neutral text-badge-neutral-fg"
         >
           {memories.length} saved
         </span>
@@ -231,12 +230,13 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
 
       {memoryOff ? (
         <div
-          className="shrink-0 px-3 py-2 border-b flex items-center gap-2"
-          style={{ borderColor: styles.border, background: withAlpha(SEMANTIC_COLORS.warning, 0.08) }}
+          // R126-3e (§11): the OFF notice = the warning badge-tone container
+          // (ink inherited) — the withAlpha(warning) wash died.
+          className="shrink-0 px-3 py-2 border-b border-clay-rim flex items-center gap-2 bg-badge-warning text-badge-warning-fg"
           data-testid="memory-off-notice"
         >
-          <Zap size={12} style={{ color: SEMANTIC_COLORS.warning }} className="shrink-0" />
-          <span className="text-[11px]" style={{ color: styles.textSecondary }}>
+          <Zap size={12} className="shrink-0" />
+          <span className="text-[11px]">
             Memory is <strong>turned off</strong> — agents run on session context alone and the
             memory tools are unavailable. Saved memories are kept (you can still prune them
             below). Re-enable in Settings → Functionality.
@@ -266,19 +266,19 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
         ) : memoryQuery.isError ? (
           <div className="px-3 py-3">
             <div
-              className="rounded-xl px-3 py-3 flex flex-col gap-2"
-              style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.08), border: `1px solid ${withAlpha(SEMANTIC_COLORS.danger, 0.3)}` }}
+              // R126-3e (§11): the danger badge-tone container + the
+              // outlined-danger Retry (the 3a/3b/3c grammar).
+              className="rounded-xl px-3 py-3 flex flex-col gap-2 bg-badge-danger text-badge-danger-fg"
             >
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold">
                 {scope === "project" ? "Couldn't load project memory" : "Couldn't load workspace memory"}
               </div>
-              <div className="text-[11px]" style={{ color: styles.textSecondary }}>
+              <div className="text-[11px]">
                 {memoryQuery.error instanceof Error ? memoryQuery.error.message : "The sidecar didn't answer."}
               </div>
               <button
                 onClick={() => void memoryQuery.refetch()}
-                className="self-start h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5"
-                style={{ background: styles.card, color: styles.text, border: `1px solid ${styles.border}` }}
+                className="self-start h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5 border border-danger-deep text-danger-deep transition-transform duration-100 active:scale-[0.98]"
               >
                 <RefreshCw size={10} /> Try again
               </button>
@@ -290,8 +290,11 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
           >
             <div className="max-w-[240px]">
               <div
-                className="w-11 h-11 mx-auto mb-3 grid place-items-center rounded-2xl border-2 border-dashed"
-                style={{ borderColor: styles.border, color: styles.textTertiary }}
+                // R126-3e tightening: the dashed tile rides the clay rim on
+                // the class leg (one spelling with RightSidebar's empty tile);
+                // the inline borderColor leg died.
+                className="w-11 h-11 mx-auto mb-3 grid place-items-center rounded-2xl border-2 border-dashed border-clay-rim"
+                style={{ color: styles.textTertiary }}
               >
                 <Brain size={18} />
               </div>
@@ -309,8 +312,9 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
           <div className="px-2.5 py-2.5 flex flex-col gap-2.5">
             {deleteError !== null ? (
               <div
-                className="rounded-xl px-3 py-2 text-[11px]"
-                style={{ color: SEMANTIC_COLORS.danger, background: withAlpha(SEMANTIC_COLORS.danger, 0.08) }}
+                // R126-3e (§11): the delete-error alert = the danger
+                // badge-tone container.
+                className="rounded-xl px-3 py-2 text-[11px] bg-badge-danger text-badge-danger-fg"
                 role="alert"
               >
                 {deleteError}
@@ -324,15 +328,21 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
                   {/* Kind group header: colored chip + count */}
                   <div className="flex items-center gap-1.5 px-1 pb-1.5">
                     <span
-                      className="text-[10px] font-mono font-medium uppercase px-1.5 py-0.5 rounded-md"
-                      style={{ color, background: withAlpha(color, 0.14) }}
+                      // R126-3e tightening (§11): the kind chip = the NEUTRAL
+                      // badge tone + the kind color as a DOT — the exact
+                      // role-chip spelling SubAgentPanel + the picker ship (the
+                      // withAlpha(color,0.14) identity fill + the flat-hue text
+                      // died; KIND_COLORS survive as dots-only hue-as-data).
+                      className="inline-flex items-center gap-1 text-[10px] font-mono font-medium uppercase px-1.5 py-0.5 rounded-md bg-badge-neutral text-badge-neutral-fg"
                     >
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} aria-hidden />
                       {kind}
                     </span>
-                    <span className="text-[10px]" style={{ color: styles.textTertiary }}>
+                    <span className="text-[10px] tabular-nums" style={{ color: styles.textTertiary }}>
                       {items.length}
                     </span>
-                    <span className="flex-1 h-px" style={{ background: withAlpha(styles.border, 0.6) }} />
+                    {/* R126-3e: the group hairline on the class leg (bg-line). */}
+                    <span className="flex-1 h-px bg-line" aria-hidden />
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <AnimatePresence initial={false}>
@@ -356,8 +366,9 @@ export function MemoryPanel({ projectId, tab }: { projectId: string; tab: RightS
 
       {/* ── Footer hint: why this panel matters (scope-honest since R117-b) ── */}
       <div
-        className="shrink-0 flex items-center gap-1.5 px-3 h-7 border-t text-[10px]"
-        style={{ borderColor: styles.border, color: styles.textTertiary, background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle }}
+        // R126-3e: the footer strip = the in-flow chrome shade.
+        className="shrink-0 flex items-center gap-1.5 px-3 h-7 border-t border-clay-rim bg-header-surface text-[10px]"
+        style={{ color: styles.textTertiary }}
       >
         <Zap size={10} style={{ color: styles.accent }} className="shrink-0" />
         <span className="truncate">
@@ -410,17 +421,16 @@ function AddMemoryForm({
     }
   };
 
-  const inputStyle = {
-    background: styles.subtle,
-    border: `1px solid ${styles.border}`,
-    color: styles.text,
-  } as const;
+  // R126-3e (TOKENS §10): the form's fields = THE WELL (the recessed input
+  // fill + the clay-rim hairline, one spelling on the class leg).
+  const inputClass = "bg-well border border-clay-rim";
 
   return (
     <div
       data-testid="memory-add-form"
-      className="rounded-xl px-2.5 py-2.5 flex flex-col gap-2"
-      style={{ background: styles.isDark ? "rgba(0,0,0,0.14)" : styles.card, border: `1px solid ${styles.border}` }}
+      // R126-3e: the form card = a quiet clay surface (bg-card + the 1px
+      // rim) so the well-filled fields read one rung down.
+      className="rounded-xl px-2.5 py-2.5 flex flex-col gap-2 border border-clay-rim bg-card"
     >
       <div className="flex items-center gap-2">
         <select
@@ -429,8 +439,8 @@ function AddMemoryForm({
           value={kind}
           disabled={pending}
           onChange={(e) => setKind(e.target.value as ProjectMemory["kind"])}
-          className="h-7 rounded-lg px-1.5 text-[11px] font-medium font-mono uppercase outline-none cursor-pointer"
-          style={inputStyle}
+          className={`h-7 rounded-lg px-1.5 text-[11px] font-medium font-mono uppercase outline-none cursor-pointer ${inputClass}`}
+          style={{ color: styles.text }}
         >
           {KIND_ORDER.map((k) => (
             <option key={k} value={k}>
@@ -450,18 +460,23 @@ function AddMemoryForm({
         value={content}
         disabled={pending}
         onChange={(e) => setContent(e.target.value)}
-        className="w-full rounded-lg px-2.5 py-2 text-[12px] leading-[1.55] outline-none resize-y disabled:opacity-60"
-        style={inputStyle}
+        className={`w-full rounded-lg px-2.5 py-2 text-[12px] leading-[1.55] outline-none resize-y disabled:opacity-60 ${inputClass}`}
+        style={{ color: styles.text }}
       />
       {content.length > 3_500 ? (
-        <div className="text-[10px] font-mono" style={{ color: content.length > 4_000 ? SEMANTIC_COLORS.warning : styles.textTertiary }}>
+        <div
+          // R126-3e (§11): the over-cap counter = warning status TEXT (the
+          // deep pair, class leg).
+          className={`text-[10px] font-mono ${content.length > 4_000 ? "text-warning-deep" : ""}`}
+          style={content.length > 4_000 ? undefined : { color: styles.textTertiary }}
+        >
           {content.length} / 4,000 chars{content.length > 4_000 ? " — over the cap; the save will be refused" : ""}
         </div>
       ) : null}
       {error !== null ? (
         <div
-          className="text-[11px]"
-          style={{ color: SEMANTIC_COLORS.danger, background: withAlpha(SEMANTIC_COLORS.danger, 0.08) }}
+          // R126-3e (§11): the form's alert = the danger badge-tone container.
+          className="text-[11px] rounded-lg px-2 py-1 bg-badge-danger text-badge-danger-fg"
           role="alert"
           data-testid="memory-add-error"
         >
@@ -472,8 +487,8 @@ function AddMemoryForm({
         <button
           onClick={onCancel}
           disabled={pending}
-          className="h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5 disabled:opacity-50"
-          style={{ background: styles.card, color: styles.textSecondary, border: `1px solid ${styles.border}` }}
+          // R126-3e (§4): Cancel = the outlined secondary.
+          className="h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5 border border-line-strong text-muted transition-colors hover:bg-hover disabled:opacity-50"
         >
           Cancel
         </button>
@@ -481,8 +496,11 @@ function AddMemoryForm({
           onClick={() => void submit()}
           disabled={!canSave}
           data-testid="memory-add-save"
-          className="h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-          style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent, border: `1px solid ${withAlpha(styles.accent, 0.4)}` }}
+          // R126-3e (§4): Save = the quiet-solid accentDeep fill + the
+          // accentText ink on the JS leg (text-accent-text is a PHANTOM
+          // utility) + the 0.98 press — the withAlpha accent species died.
+          className="h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5 bg-accent-deep transition-transform duration-100 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+          style={{ color: styles.accentText }}
         >
           {pending ? <LoaderCircle size={10} className="animate-spin" /> : <Plus size={10} />}
           Save memory
@@ -544,11 +562,9 @@ function MemoryRow({
     }
   };
 
-  const inputStyle = {
-    background: styles.subtle,
-    border: `1px solid ${styles.border}`,
-    color: styles.text,
-  } as const;
+  // R126-3e (TOKENS §10): the editor's fields = THE WELL (same spelling as
+  // the add form).
+  const inputClass = "bg-well border border-clay-rim";
 
   return (
     <motion.div
@@ -557,11 +573,10 @@ function MemoryRow({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.97 }}
       transition={{ duration: 0.14, ease }}
-      className="rounded-xl px-2.5 py-2 group relative"
-      style={{
-        background: styles.isDark ? "rgba(0,0,0,0.14)" : styles.card,
-        border: `1px solid ${styles.border}`,
-      }}
+      // R126-3e (TOKENS §10): the memory row = THE WELL ROW (.ac-well — the
+      // recessed rung + the rim hairline); the JS isDark/card + border legs
+      // died.
+      className="rounded-xl ac-well px-2.5 py-2 group relative"
     >
       {editing ? (
         /* R98-F1: the inline editor — the AddMemoryForm's grammar, prefilled
@@ -574,8 +589,8 @@ function MemoryRow({
               value={draftKind}
               disabled={pending}
               onChange={(e) => setDraftKind(e.target.value as ProjectMemory["kind"])}
-              className="h-7 rounded-lg px-1.5 text-[11px] font-medium font-mono uppercase outline-none cursor-pointer"
-              style={inputStyle}
+              className={`h-7 rounded-lg px-1.5 text-[11px] font-medium font-mono uppercase outline-none cursor-pointer ${inputClass}`}
+              style={{ color: styles.text }}
             >
               {KIND_ORDER.map((k) => (
                 <option key={k} value={k}>
@@ -591,18 +606,22 @@ function MemoryRow({
             value={draft}
             disabled={pending}
             onChange={(e) => setDraft(e.target.value)}
-            className="w-full rounded-lg px-2.5 py-2 text-[12px] leading-[1.55] outline-none resize-y disabled:opacity-60"
-            style={inputStyle}
+            className={`w-full rounded-lg px-2.5 py-2 text-[12px] leading-[1.55] outline-none resize-y disabled:opacity-60 ${inputClass}`}
+            style={{ color: styles.text }}
           />
           {draft.length > 4_000 ? (
-            <div className="text-[10px] font-mono" style={{ color: SEMANTIC_COLORS.warning }}>
+            <div
+              // R126-3e (§11): the over-cap counter = warning status TEXT.
+              className="text-[10px] font-mono text-warning-deep"
+            >
               {draft.length} / 4,000 chars — over the cap; the save will be refused
             </div>
           ) : null}
           {error !== null ? (
             <div
-              className="text-[11px]"
-              style={{ color: SEMANTIC_COLORS.danger, background: withAlpha(SEMANTIC_COLORS.danger, 0.08) }}
+              // R126-3e (§11): the editor's alert = the danger badge-tone
+              // container.
+              className="text-[11px] rounded-lg px-2 py-1 bg-badge-danger text-badge-danger-fg"
               role="alert"
               data-testid="memory-edit-error"
             >
@@ -613,8 +632,8 @@ function MemoryRow({
             <button
               onClick={() => setEditing(false)}
               disabled={pending}
-              className="h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5 disabled:opacity-50"
-              style={{ background: styles.card, color: styles.textSecondary, border: `1px solid ${styles.border}` }}
+              // R126-3e (§4): Cancel = the outlined secondary.
+              className="h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5 border border-line-strong text-muted transition-colors hover:bg-hover disabled:opacity-50"
             >
               Cancel
             </button>
@@ -622,8 +641,10 @@ function MemoryRow({
               onClick={() => void submit()}
               disabled={pending || !dirty}
               data-testid="memory-edit-save"
-              className="h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent, border: `1px solid ${withAlpha(styles.accent, 0.4)}` }}
+              // R126-3e (§4): Save = the quiet-solid accentDeep fill + the
+              // accentText ink on the JS leg + the 0.98 press.
+              className="h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5 bg-accent-deep transition-transform duration-100 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ color: styles.accentText }}
             >
               {pending ? <LoaderCircle size={10} className="animate-spin" /> : <Pencil size={10} />}
               Save changes
@@ -665,8 +686,10 @@ function MemoryRow({
               disabled={deleting}
               aria-label={`Delete memory: ${memory.content.slice(0, 60)}`}
               title="Delete this memory"
-              className="w-5 h-5 grid place-items-center rounded-lg shrink-0 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 disabled:opacity-50 hover:bg-hover"
-              style={{ color: styles.textTertiary }}
+              // R126-3e (§4 — the brief's mandate): the prune action = the
+              // OUTLINED danger species (1px border-danger-deep +
+              // text-danger-deep) — the quiet tertiary glyph died.
+              className="w-5 h-5 grid place-items-center rounded-lg shrink-0 border border-danger-deep text-danger-deep transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 disabled:opacity-50 hover:bg-hover active:scale-95"
             >
               {deleting ? <LoaderCircle size={11} className="animate-spin" /> : <Trash2 size={11} />}
             </button>

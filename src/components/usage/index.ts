@@ -16,3 +16,7 @@ export { DataStatsPanel } from "./DataStatsPanel";
 export { UsageHeatmap } from "./UsageHeatmap";
 export { ModelStackChart } from "./ModelStackChart";
 export { ModelDonut } from "./ModelDonut";
+// R126-3b (the Clay Companion redesign): the segmented-control range picker
+// + the ONE-clay-card stat row (SCREENS §3's Instrument grammar).
+export { RangeSelector } from "./RangeSelector";
+export { UsageStatRow, UsageMiniStat, type StatCell } from "./UsageStatRow";

@@ -16,6 +16,12 @@ import type { Project } from "../../lib/api";
  *   header carries the essential controls.
  * - The chat window is its own FLOATING PANEL (radius 24, border, soft shadow)
  *   visually separate from the sidebar.
+ *   R126-3d-1 amendment: the floating panel's MATERIAL is the clay card now
+ *   (rounded-2xl + 1px border-clay-rim + .ac-clay + bg-card + the dark-only
+ *   top edge — see the card's comment); the radius/shadow numbers above are
+ *   the pre-R126 history. R126-3d-1 also made this the ONLY chat layout
+ *   (ProjectChatScreen renders it unconditionally — the retired
+ *   3-panel/experimental gates never had reachable UI).
  * - ROUND-38 (owner: "a right side bar a menu… fills the previously-empty
  *   right side"): the layout is now [chat (flex-1)] [resize handle] [right
  *   sidebar]. The right sidebar hosts the Files / Terminal / Browser /
@@ -191,16 +197,16 @@ export function ChatFocusLayout({ project }: { project: Project }) {
           softens only when the container cannot even fit floor+chrome+sliver
           (see chatMinWidthFor) — the row can never force horizontal overflow. */}
       <div
-        // R100-D (research §C4.1): the window card snaps 24→16px (rounded-2xl —
-        // the scale utility spelling, no arbitrary value); border + softShadow
-        // stay exactly as built.
-        className="flex-1 min-h-0 flex rounded-2xl border-[1.5px] overflow-hidden"
-        style={{
-          minWidth: chatMinWidthFor(containerWidth),
-          backgroundColor: styles.card,
-          borderColor: styles.border,
-          boxShadow: styles.softShadow,
-        }}
+        // R126-3d-1 (the Clay Companion materials — TOKENS §5/§9 + COMPONENTS
+        // §3, SCREENS.md §3 Workspace): the chat window card is a CLAY CARD —
+        // rounded-2xl + the 1px warm `border-clay-rim` rim on all four sides
+        // + `.ac-clay` (the two-leg clay shadow) + `bg-card` + the
+        // dark-mode-only matte top edge (`.ac-clay-edge-dark` self-suppresses
+        // in light mode). The pre-R126 1.5px bento border + inline
+        // borderColor/softShadow legs are retired with it. minWidth stays on
+        // the inline leg — a measured runtime value, not a token.
+        className="flex-1 min-h-0 flex overflow-hidden rounded-2xl border border-clay-rim bg-card ac-clay ac-clay-edge-dark"
+        style={{ minWidth: chatMinWidthFor(containerWidth) }}
       >
         {/* ROUND-40 (owner: "chat window is capped and does not expand to
             the full available width"). max-w-[1500px] → max-w-none so the

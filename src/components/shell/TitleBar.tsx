@@ -244,12 +244,16 @@ export function TitleBar() {
     // other stuff like that" he rejected.
     <header
       data-tauri-drag-region
-      className="flex h-10 w-full shrink-0 select-none items-center justify-between rounded-2xl border-[1.5px] backdrop-blur ac-clay"
+      // R126 (the Clay Companion redesign): the bar's edge is the warm clay
+      // RIM hairline (1px — the 1.5px bento border retired with the
+      // redesign; TOKENS §5). The ac-clay layered shadow + the frosted fill
+      // stay exactly as the R108-e rework built them.
+      className="flex h-10 w-full shrink-0 select-none items-center justify-between rounded-2xl border backdrop-blur ac-clay"
       style={{
         // Translucent frosted chrome over the app's ambient background (the
         // color-mix idiom from index.css/ActionButton) — never a hard edge.
         backgroundColor: "color-mix(in srgb, var(--ac-bg) 72%, transparent)",
-        borderColor: "var(--ac-border-subtle)",
+        borderColor: "var(--ac-clay-rim)",
       }}
     >
       {/* App identity — R60-C (owner): the Acute mark + product name is the

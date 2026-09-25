@@ -5,6 +5,7 @@ import { ease } from "../lib/motion";
 import { SEMANTIC_COLORS } from "../lib/semantics";
 import { getSidecarInfo, type SidecarInfo } from "../lib/sidecar";
 import { useThemeStyles } from "../lib/use-theme-styles";
+import { cn } from "../lib/utils";
 import { fetchMiniSession, stopMiniSession, type MiniSessionState } from "./mini-client";
 import { miniShell, type MiniShellShape } from "./shell";
 
@@ -40,6 +41,16 @@ import { miniShell, type MiniShellShape } from "./shell";
  *
  * Web mode (no __TAURI__ — a plain dev visit of mini.html): the honest tiny
  * notice, the PopoutApp discipline.
+ *
+ * R126-3h (the secondary-OS-windows chrome pass): the bar's chrome is the
+ * CLAY card spelling — the clay-rim hairline + the clay SHEET shadow (the
+ * window floats, so it RISES) replace the border/rgba/0-10-28 legs, and the
+ * off-ladder rounded-[14px] dies for rounded-xl (the 460×56 window's Rust
+ * frame stays square-cornered; the page paints its own rounding). The STOP
+ * pill rides the OUTLINED-danger species (border-danger-deep + danger-deep
+ * on transparent — the danger wash dies); the kill-switch state rides the
+ * MUTED tier (the hardcoded #788494 dies); the error activity ink rides
+ * danger-deep; the stopped dot rides the muted tier.
  */
 
 /** The STOP reason recorded server-side on the kill switch. */
@@ -265,16 +276,20 @@ export function MiniApp({
       : newest !== null
         ? newest.label
         : "Waiting for the first action…");
-  const activityColor = stopError !== null ? SEMANTIC_COLORS.danger : styles.textTertiary;
+  // R126-3h: the error ink rides the danger-deep tier (the flat SEMANTIC
+  // hex dies); the quiet activity ink stays the tertiary inline leg.
+  const activityClassName = stopError !== null ? "text-danger-deep" : "";
 
   return (
     <div
-      className="flex h-screen w-screen select-none items-center overflow-hidden rounded-[14px] border"
+      // R126-3h (TOKENS §5/§9): the clay card — rounded-xl (the off-ladder
+      // rounded-[14px] dies) + the 1px clay-rim hairline + the UPWARD clay
+      // sheet shadow (the bar floats above the screen). The frosted fill
+      // (dark-mode translucent card + the backdrop blur) stays.
+      className="ac-clay-sheet flex h-screen w-screen select-none items-center overflow-hidden rounded-xl border border-clay-rim"
       style={{
         background: styles.isDark ? alpha(styles.card, 0.92) : styles.card,
         backdropFilter: "blur(16px)",
-        borderColor: styles.isDark ? "rgba(255,255,255,0.09)" : styles.border,
-        boxShadow: "0 10px 28px rgba(0,0,0,0.30)",
       }}
       data-testid="mini-root"
       role="status"
@@ -306,8 +321,8 @@ export function MiniApp({
         </span>
         <span
           data-tauri-drag-region
-          className="min-w-0 flex-1 truncate text-[11px]"
-          style={{ color: activityColor }}
+          className={cn("min-w-0 flex-1 truncate text-[11px]", activityClassName)}
+          style={activityClassName === "" ? { color: styles.textTertiary } : undefined}
           data-testid="mini-activity"
           title={activity}
         >
@@ -327,7 +342,11 @@ export function MiniApp({
       </div>
 
       {/* STOP — the danger pill (the one prominent control; everything else
-          on the bar is passive). R66: horizontal compact pill, one row tall. */}
+          on the bar is passive). R66: horizontal compact pill, one row tall.
+          R126-3h: the OUTLINED-danger species (1px border-danger-deep +
+          danger-deep ink on transparent — the danger wash fill + the JS
+          hover pair die; the CSS hover wash takes over); the kill-switch
+          state rides the MUTED tier (the hardcoded #788494 dies). */}
       <div className="flex shrink-0 items-center p-2 pl-1">
         <button
           type="button"
@@ -339,30 +358,12 @@ export function MiniApp({
               ? "The kill switch is active — the agent cannot control the desktop"
               : "Kill switch — stop the agent's computer control now"
           }
-          className="flex h-8 items-center justify-center gap-1.5 rounded-full border px-3.5 text-[10.5px] font-bold uppercase tracking-wider transition-colors disabled:cursor-default"
-          style={
+          className={cn(
+            "flex h-8 items-center justify-center gap-1.5 rounded-full border px-3.5 text-[10.5px] font-bold uppercase tracking-wider transition-colors duration-100 disabled:cursor-default",
             killSwitch
-              ? {
-                  color: styles.textTertiary,
-                  background: alpha("#788494", 0.10),
-                  borderColor: styles.border,
-                }
-              : {
-                  color: SEMANTIC_COLORS.danger,
-                  background: alpha(SEMANTIC_COLORS.danger, 0.13),
-                  borderColor: alpha(SEMANTIC_COLORS.danger, 0.45),
-                }
-          }
-          onMouseEnter={(e) => {
-            if (!killSwitch && !stopping) {
-              e.currentTarget.style.background = alpha(SEMANTIC_COLORS.danger, 0.22);
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (!killSwitch) {
-              e.currentTarget.style.background = alpha(SEMANTIC_COLORS.danger, 0.13);
-            }
-          }}
+              ? "border-line-strong text-muted"
+              : "border-danger-deep text-danger-deep hover:bg-badge-danger",
+          )}
         >
           {stopping ? (
             <LoaderCircle size={11} className="animate-spin" aria-hidden />
@@ -376,14 +377,15 @@ export function MiniApp({
   );
 }
 
-/** The status dot — a heartbeat while the agent is in control, a calm gray
- * point once stopped (framer-motion's repeat, the PulsingDot discipline). */
+/** The status dot — a heartbeat while the agent is in control, a calm
+ * MUTED-tier point once stopped (R126-3h: the hardcoded #788494 gray dies —
+ * the muted ink class owns the stopped hue; the live hue is a DOT, the §11
+ * dots-only flat-hue exception, and keeps the semantic success green). */
 function PulsingDot({ live }: { live: boolean }) {
-  const color = live ? SEMANTIC_COLORS.success : "#788494";
   return (
     <motion.span
-      className="inline-block shrink-0 rounded-full"
-      style={{ width: 6, height: 6, background: color }}
+      className={cn("inline-block shrink-0 rounded-full", live ? "" : "bg-muted")}
+      style={live ? { width: 6, height: 6, background: SEMANTIC_COLORS.success } : { width: 6, height: 6 }}
       initial={false}
       animate={live ? { scale: [1, 1.5, 1], opacity: [1, 0.45, 1] } : { scale: 1, opacity: 0.7 }}
       transition={live ? { repeat: Infinity, duration: 1.6, ease: "easeInOut" } : { duration: 0.18, ease }}

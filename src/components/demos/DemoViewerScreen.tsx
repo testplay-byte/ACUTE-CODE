@@ -5,7 +5,6 @@ import { useProjects } from "../../hooks/use-projects";
 import { useProjectDemos } from "../../hooks/use-demos";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { ease } from "../../lib/motion";
-import { withAlpha } from "../dashboard/helpers";
 
 /**
  * DemoViewerScreen (Round-28 WS-I): an in-app area to view demos the agent
@@ -21,6 +20,14 @@ import { withAlpha } from "../dashboard/helpers";
  * required"): the 22px font-black "Demos" header + description block is
  * DELETED — the per-project sections (their own in-content h2 labels) are
  * the top of the page. Top padding snaps to the app's panel tier (py-6).
+ *
+ * R126-3h: the card grid rides THE clay card (TOKENS §5/§9 — rounded-xl +
+ * the 1px clay-rim hairline + bg-card + `.ac-clay-sm`; the rounded-[14px] +
+ * border-[1.5px] + JS borderColor-hover bento spelling dies; hover = the
+ * rim→border-strong swap, MOTION §4 — the -translate-y lift dies). The
+ * viewer modal keeps its sandbox-iframe function, its chrome snapping to the
+ * same clay card (rounded-2xl + rim + `.ac-clay`) with the CSS hover wash.
+ * The tile chips ride the accent-tint pair (TOKENS §10/§1d).
  */
 interface DemoRow {
   projectId: string;
@@ -106,22 +113,25 @@ export function DemoViewerScreen() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.96, opacity: 0 }}
               transition={{ duration: 0.2, ease }}
-              className="m-4 flex-1 flex flex-col rounded-[16px] overflow-hidden border-[1.5px]"
-              style={{ background: styles.card, borderColor: styles.border }}
+              // R126-3h: the modal card = the clay card (rounded-2xl + the
+              // rim hairline + .ac-clay — the rounded-[16px]/border-[1.5px]
+              // + inline card/border legs die; the sandbox iframe is
+              // untouched).
+              className="m-4 flex-1 flex flex-col rounded-2xl overflow-hidden border border-clay-rim bg-card ac-clay"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Modal header */}
-              <div className="shrink-0 h-11 flex items-center gap-2 px-3 border-b" style={{ borderColor: styles.border, background: styles.subtle }}>
+              <div className="shrink-0 h-11 flex items-center gap-2 px-3 border-b border-line bg-subtle">
                 <span className="text-[12px] font-mono truncate" style={{ color: styles.textSecondary }}>
                   {openDemo.projectName} / {openDemo.path}
                 </span>
                 <button
                   onClick={() => { setOpenDemo(null); setOpenContent(""); }}
                   aria-label="Close demo"
-                  className="ml-auto w-7 h-7 rounded-md grid place-items-center transition-colors"
+                  // R126-3h (TOKENS §6): the close hover is the CSS class —
+                  // the JS onMouseEnter/onMouseLeave pair is retired.
+                  className="ml-auto w-7 h-7 rounded-md grid place-items-center transition-colors hover:bg-hover"
                   style={{ color: styles.textSecondary }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = styles.subtleHover)}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                 >
                   <X size={14} />
                 </button>
@@ -164,7 +174,13 @@ function ProjectDemosSection({
   return (
     <section>
       <h2 className="flex items-center gap-2 text-[14px] font-bold mb-2" style={{ color: styles.text }}>
-        <span className="w-5 h-5 rounded-[6px] grid place-items-center text-[10px] font-black" style={{ background: projectColor, color: "#fff" }}>
+        <span
+          // R126-3h: the identity tile snaps to the scale radius
+          // (rounded-md 6px ≈ 30% of the 20px tile — TOKENS §4; the
+          // arbitrary rounded-[6px] spelling dies).
+          className="w-5 h-5 rounded-md grid place-items-center text-[10px] font-black"
+          style={{ background: projectColor, color: "#fff" }}
+        >
           {projectName.charAt(0).toUpperCase()}
         </span>
         {projectName}
@@ -180,14 +196,14 @@ function ProjectDemosSection({
               projectId, projectName, projectColor,
               name: d.name, path: d.path, size: d.size, modifiedAt: d.modifiedAt,
             })}
-            className="flex flex-col gap-2 rounded-[14px] border-[1.5px] p-3 text-left transition-all hover:-translate-y-0.5"
-            style={{ background: styles.card, borderColor: styles.border }}
-            onMouseEnter={(e) => (e.currentTarget.style.borderColor = withAlpha(styles.accent, 0.5))}
-            onMouseLeave={(e) => (e.currentTarget.style.borderColor = styles.border)}
+            // R126-3h: the clay card + the rim→border-strong hover swap
+            // (MOTION §4 — hover confirms, never performs; the lift + the JS
+            // borderColor hover pair die).
+            className="flex flex-col gap-2 rounded-xl border border-clay-rim bg-card p-3 text-left transition-colors duration-100 hover:border-line-strong ac-clay-sm"
           >
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-[8px] grid place-items-center" style={{ background: withAlpha(styles.accent, 0.12) }}>
-                <FileCode2 size={14} style={{ color: styles.accent }} />
+              <div className="w-8 h-8 rounded-lg grid place-items-center bg-accent-tint">
+                <FileCode2 size={14} className="text-accent-deep" />
               </div>
               <span className="text-[13px] font-bold truncate" style={{ color: styles.text }}>{d.name}</span>
             </div>

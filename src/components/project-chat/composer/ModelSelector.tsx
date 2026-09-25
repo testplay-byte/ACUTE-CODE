@@ -9,7 +9,6 @@ import {
 } from "../../../lib/api";
 import { filterConfiguredProviders, filterModelsForPicker, useSettingsStore } from "../../../lib/settings-store";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
-import { withAlpha } from "../../dashboard/helpers";
 import {
   computeFlyoutGeometry,
   flyoutRetargetIntent,
@@ -450,21 +449,18 @@ export function ModelSelector({
       className={
         flyoutSide === "inline"
           ? "flex flex-col min-w-0"
-          : "fixed w-[280px] rounded-2xl border p-1.5 z-50 auto-scroll"
+          : "fixed w-[280px] rounded-2xl border border-clay-rim bg-card p-1.5 z-50 auto-scroll ac-clay-sm"
       }
-      style={{
-        ...(flyoutSide === "inline"
+      style={
+        flyoutSide === "inline"
           ? {}
           : {
               left: `${flyoutGeo.left ?? 0}px`,
               top: `${flyoutGeo.viewportTop}px`,
               maxHeight: `${flyoutGeo.maxHeight}px`,
               overflowY: "auto",
-            }),
-        background: styles.card,
-        borderColor: styles.border,
-        boxShadow: styles.bentoShadow,
-      }}
+            }
+      }
     >
       {/* Header chip — whose models you're scanning (Back only in inline
           mode, where there's no provider list visible behind it). */}
@@ -487,8 +483,8 @@ export function ModelSelector({
           <button
             type="button"
             onClick={() => setHoveredProvider(null)}
-            className="text-[10px] font-medium shrink-0"
-            style={{ color: styles.accent }}
+            // R126-3d-4: accent-as-TEXT rides the DEEP tier (TOKENS §1d).
+            className="text-[10px] font-medium shrink-0 text-accent-deep"
           >
             Back
           </button>
@@ -529,15 +525,12 @@ export function ModelSelector({
               onClick={() => pickModel(m.modelId, hoveredProvider)}
               title={m.modelId}
               className={`w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg font-mono text-[10px] truncate transition-colors ${
-                isSelected ? "" : "hover:bg-hover"
+                // R126-3d-4: the selected row = accentTint + accentDeep ink.
+                isSelected ? "bg-accent-tint text-accent-deep" : "hover:bg-hover text-muted"
               }`}
-              style={{
-                color: styles.textSecondary,
-                background: isSelected ? withAlpha(styles.accent, 0.09) : "transparent",
-              }}
             >
               {isSelected ? (
-                <Check size={11} className="shrink-0" style={{ color: styles.accent }} />
+                <Check size={11} className="shrink-0 text-accent-deep" />
               ) : (
                 <span className="w-[11px] shrink-0" />
               )}
@@ -622,8 +615,7 @@ export function ModelSelector({
         aria-expanded={open}
         aria-label="Choose model"
         title={buttonTitle}
-        className="flex items-center gap-1 h-7 px-2 rounded-lg text-[11px] font-medium transition-colors hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent max-w-[240px]"
-        style={{ color: styles.textSecondary }}
+        className="flex items-center gap-1 h-7 px-2 rounded-lg bg-badge-neutral text-badge-neutral-fg text-[12px] font-semibold transition-colors duration-100 hover:bg-accent-tint disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-badge-neutral max-w-[240px]"
       >
         {/* R77 (owner: "For the model selection, there was no proper icon,
             so you might need to add a proper icon"): the Cpu badge — every
@@ -643,8 +635,7 @@ export function ModelSelector({
             title tooltip still carries the full label. */}
         <Cpu
           size={12}
-          className="shrink-0"
-          style={{ color: styles.accent }}
+          className="shrink-0 text-accent"
           aria-hidden
           data-model-icon
         />
@@ -686,15 +677,12 @@ export function ModelSelector({
           // the pre-R93 placement instead of vanishing.
           className={
             popGeo === null
-              ? "absolute bottom-9 right-0 w-64 max-h-[min(24rem,calc(100vh-2rem))] overflow-y-auto auto-scroll rounded-2xl border p-1.5 z-50"
-              : "fixed w-64 max-h-[min(24rem,calc(100vh-2rem))] overflow-y-auto auto-scroll rounded-2xl border p-1.5 z-50"
+              ? "absolute bottom-9 right-0 w-64 max-h-[min(24rem,calc(100vh-2rem))] overflow-y-auto auto-scroll rounded-2xl border border-clay-rim bg-card p-1.5 z-50 ac-clay-sm"
+              : "fixed w-64 max-h-[min(24rem,calc(100vh-2rem))] overflow-y-auto auto-scroll rounded-2xl border border-clay-rim bg-card p-1.5 z-50 ac-clay-sm"
           }
-          style={{
-            ...(popGeo === null ? {} : { left: `${popGeo.left}px`, bottom: `${popGeo.bottom}px` }),
-            background: styles.card,
-            borderColor: styles.border,
-            boxShadow: styles.bentoShadow,
-          }}
+          style={
+            popGeo === null ? {} : { left: `${popGeo.left}px`, bottom: `${popGeo.bottom}px` }
+          }
         >
           {/* Free only / All — the SHARED persisted preference (same store the
               Settings → Providers list uses), accessible right in the popover. */}
@@ -708,8 +696,9 @@ export function ModelSelector({
               Providers
             </span>
             <div
-              className="flex items-center rounded-lg border-[1.5px] overflow-hidden"
-              style={{ borderColor: styles.border }}
+              // R126-3d-4: the segmented control's rim → the 1px clay
+              // hairline (the 1.5px bento border retired, TOKENS §5).
+              className="flex items-center rounded-lg border border-clay-rim overflow-hidden"
             >
               {([
                 { id: "free", label: "Free only", active: modelsFreeOnly, pick: () => setModelsFreeOnly(true) },
@@ -720,11 +709,12 @@ export function ModelSelector({
                   type="button"
                   onClick={seg.pick}
                   aria-pressed={seg.active}
-                  className="h-5 px-2 text-[10px] font-medium transition-colors"
-                  style={{
-                    background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
-                    color: seg.active ? styles.accent : styles.textTertiary,
-                  }}
+                  // R126-3d-4: the ACTIVE segment = accentTint + accentDeep
+                  // ink (the selection grammar).
+                  className={`h-5 px-2 text-[10px] font-medium transition-colors ${
+                    seg.active ? "bg-accent-tint text-accent-deep" : ""
+                  }`}
+                  style={seg.active ? undefined : { color: styles.textTertiary }}
                 >
                   {seg.label}
                 </button>
@@ -750,7 +740,9 @@ export function ModelSelector({
                     data-provider-row={p.id}
                     className="relative flex items-center rounded-lg transition-colors"
                     style={{
-                      background: hoveredProvider === p.id ? withAlpha(styles.accent, 0.08) : "transparent",
+                      // R126-3d-4: the hover-lit provider row = accentTint
+                      // (TOKENS §10's tinted container; withAlpha retired).
+                      background: hoveredProvider === p.id ? styles.accentTint : "transparent",
                     }}
                     onMouseEnter={(e) => openFlyout(p.id, e.currentTarget, e)}
                     // ROUND-52 (R52-a): don't close instantly — start the grace
@@ -774,12 +766,11 @@ export function ModelSelector({
                         setHoveredProvider((cur) => (cur === p.id ? null : p.id));
                         e.currentTarget.blur();
                       }}
-                      className="flex-1 min-w-0 flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg"
-                      style={{ color: styles.textSecondary }}
+                      className="flex-1 min-w-0 flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg text-muted"
                     >
-                      <span className="text-[12px] font-medium truncate">{p.name}</span>
+                      <span className="text-[12px] font-semibold truncate">{p.name}</span>
                       {effectiveProviderId === p.id ? (
-                        <span className="font-mono text-[10px] shrink-0" style={{ color: styles.accent }}>
+                        <span className="font-mono text-[10px] shrink-0 text-accent-deep">
                           current
                         </span>
                       ) : null}
@@ -806,8 +797,8 @@ export function ModelSelector({
             type="button"
             role="menuitem"
             onClick={goManageModels}
-            className="w-full flex items-center justify-center gap-1.5 mt-1 pt-1.5 border-t text-[11px] font-medium transition-colors hover:bg-hover"
-            style={{ borderColor: styles.borderSubtle, color: styles.accent }}
+            className="w-full flex items-center justify-center gap-1.5 mt-1 pt-1.5 border-t text-[11px] font-medium transition-colors hover:bg-hover text-accent-deep"
+            style={{ borderColor: styles.borderSubtle }}
           >
             <Settings size={11} />
             Manage Models

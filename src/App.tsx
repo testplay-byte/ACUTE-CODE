@@ -90,12 +90,16 @@ export function App() {
     >
       <TitleBar />
       <div
+        // R126 (the Clay Companion redesign): the content card is the app's
+        // CANVAS — the warm clay rim hairline (the 1.5px bento border
+        // retired; TOKENS §5/§10's ladder: the frame strip is ambient, this
+        // canvas is the bg tier, the raised clay cards live inside it).
         className={
           shell
-            ? "min-h-0 flex-1 overflow-hidden rounded-[14px] border-[1.5px]"
+            ? "min-h-0 flex-1 overflow-hidden rounded-[14px] border"
             : "min-h-0 flex-1"
         }
-        style={shell ? { borderColor: "var(--ac-border-subtle)" } : undefined}
+        style={shell ? { borderColor: "var(--ac-clay-rim)" } : undefined}
       >
         <ConnectionGate>
           {/* R59-E: ONE boundary around the route content (inside the content

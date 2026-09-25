@@ -36,28 +36,21 @@ export function ModelTuningCard() {
 
   return (
     <div
-      className="rounded-[24px] border-[1.5px] p-4 md:p-5"
-      style={{
-        background: s.card,
-        borderColor: s.borderStrong,
-        boxShadow: s.softShadow,
-      }}
+      className="rounded-[24px] border p-4 md:p-5 border-clay-rim ac-clay bg-card"
     >
       <div className="flex items-center justify-between">
         <span className="font-bold tracking-tight" style={{ color: s.text }}>Model Tuning</span>
         <span
-          className="text-[10px] font-bold px-2 py-1 rounded-full"
-          style={{ background: s.pillBg, color: s.pillText }}
+          className="text-[10px] font-bold px-2 py-1 rounded-full bg-badge-neutral text-badge-neutral-fg"
         >
           ADVANCED
         </span>
       </div>
 
       <div className="mt-5 grid gap-5">
-        {/* 1. Context Window */}
+        {/* 1. Context Window — R126-3g: the recessed well. */}
         <div
-          className="rounded-[16px] border p-3"
-          style={{ background: s.subtle, borderColor: s.border }}
+          className="ac-well rounded-[16px] p-3"
         >
           <div className="flex items-center justify-between mb-3">
             <span
@@ -66,13 +59,14 @@ export function ModelTuningCard() {
             >
               Context window
             </span>
-            {/* Themed auto/manual toggle */}
-            <div className="flex items-center rounded-full p-0.5" style={{ background: s.subtle }}>
+            {/* Themed auto/manual toggle — R126-3g: the segmented grammar
+                (well track + the accentDeep knob). */}
+            <div className="flex items-center rounded-full p-0.5 bg-well">
               <button
                 type="button"
                 className="px-2.5 py-1 rounded-full text-[10px] font-bold transition-colors cursor-pointer border-none"
                 style={{
-                  background: !contextManual ? s.accent : "transparent",
+                  background: !contextManual ? s.accentDeep : "transparent",
                   color: !contextManual ? s.accentText : s.textTertiary,
                 }}
                 onClick={() => setContextManual(false)}
@@ -83,7 +77,7 @@ export function ModelTuningCard() {
                 type="button"
                 className="px-2.5 py-1 rounded-full text-[10px] font-bold transition-colors cursor-pointer border-none"
                 style={{
-                  background: contextManual ? s.accent : "transparent",
+                  background: contextManual ? s.accentDeep : "transparent",
                   color: contextManual ? s.accentText : s.textTertiary,
                 }}
                 onClick={() => setContextManual(true)}
@@ -119,13 +113,10 @@ export function ModelTuningCard() {
                   <button
                     key={opt.value}
                     type="button"
-                    className="flex-1 h-10 rounded-[12px] border-[1.5px] text-[12px] font-bold cursor-pointer transition-all"
-                    style={{
-                      background: isActive ? s.accent : s.card,
-                      borderColor: isActive ? s.accent : s.border,
-                      color: isActive ? s.accentText : s.text,
-                      boxShadow: isActive ? "none" : s.softShadow,
-                    }}
+                    className={`flex-1 h-10 rounded-[12px] border text-[12px] font-bold cursor-pointer transition-all ${
+                      isActive ? "border-accent-deep bg-accent-tint text-accent-deep" : "border-clay-rim bg-card"
+                    }`}
+                    style={isActive ? undefined : { color: s.text }}
                     onClick={() => handleContextSelect(opt.value)}
                   >
                     {opt.label}
@@ -185,8 +176,7 @@ export function ModelTuningCard() {
                 ariaLabel="Temperature"
               />
               <span
-                className="px-2 py-1 rounded-full text-[11px] font-bold shrink-0 font-mono w-[44px] text-center"
-                style={{ background: s.pillBg, color: s.pillText }}
+                className="px-2 py-1 rounded-full text-[11px] font-bold shrink-0 font-mono w-[44px] text-center bg-badge-neutral text-badge-neutral-fg"
               >
                 {temperature.toFixed(1)}
               </span>
@@ -228,7 +218,7 @@ export function ModelTuningCard() {
           </div>
         </div>
 
-        {/* 4. Reasoning Effort - themed with accent */}
+        {/* 4. Reasoning Effort — R126-3g: the selection grammar chips. */}
         <div>
           <label
             className="block text-[11px] font-bold uppercase tracking-widest mb-2"
@@ -243,13 +233,10 @@ export function ModelTuningCard() {
                 <button
                   key={level.id}
                   type="button"
-                  className="h-[48px] rounded-[14px] border-[1.5px] grid place-items-center gap-0.5 transition-all cursor-pointer"
-                  style={{
-                    borderColor: isActive ? s.accent : s.border,
-                    background: isActive ? s.accent : s.card,
-                    color: isActive ? s.accentText : s.text,
-                    boxShadow: isActive ? "none" : s.softShadow,
-                  }}
+                  className={`h-[48px] rounded-[14px] border grid place-items-center gap-0.5 transition-all cursor-pointer ${
+                    isActive ? "border-accent-deep bg-accent-tint" : "border-clay-rim bg-card ac-clay-sm"
+                  }`}
+                  style={isActive ? { color: s.accentDeep } : { color: s.text }}
                   onClick={() => setReasoning(level.id)}
                 >
                   <span className="text-[14px]">{level.icon}</span>

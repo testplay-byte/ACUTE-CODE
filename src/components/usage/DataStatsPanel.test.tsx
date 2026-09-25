@@ -326,3 +326,97 @@ describe("DataStatsPanel (R99-E — the section order + the danger zone)", () =>
     expect(screen.queryByTestId("clear-usage-card")).toBeNull();
   });
 });
+
+/* ── ROUND-126 (R126-3b, the Clay Companion redesign): the pins for the
+ * panel's new material contracts — the SEGMENTED-CONTROL months picker
+ * (bg-well track + the gliding bg-accent-deep knob), the ONE-clay-card
+ * 4-cell stat row (SCREENS §3 — inset dividers, NO icon chips), the
+ * well-pulsing loading skeleton (TOKENS §10 law 4), and the compact clay
+ * health tiles. The section order, danger-zone grammar, and clear-flow
+ * contracts above are unchanged (the settings tab shares this panel — its
+ * props surface stays exactly what it was). */
+describe("DataStatsPanel ROUND-126 (R126-3b — the clay materials)", () => {
+  it("the months picker is the segmented control: bg-well track + ONE bg-accent-deep knob", async () => {
+    const { container } = renderPanel();
+    await screen.findByTestId("usage-heatmap");
+
+    const track = container.querySelector<HTMLElement>('[data-testid="stats-months-selector"]');
+    expect(track).toBeTruthy();
+    expect(track?.className).toContain("bg-well");
+    expect(track?.className).toContain("border-clay-rim");
+    const knob = track?.querySelector<HTMLElement>('[data-testid="range-selector-knob"]');
+    expect(knob).toBeTruthy();
+    expect(knob?.className).toContain("bg-accent-deep");
+    // The a11y contract rides the buttons (aria-pressed + tabular-nums —
+    // the pre-R126 pin, re-pinned against the new grammar).
+    const twelve = within(track as HTMLElement).getByRole("button", { name: "Last 12 months" });
+    expect(twelve.getAttribute("aria-pressed")).toBe("true");
+    expect(twelve.className).toContain("tabular-nums");
+  });
+
+  it("the stat row is ONE clay card with four h-[92px] cells and NO icon chips", async () => {
+    renderPanel();
+    const row = await screen.findByTestId("data-stats-stat-row");
+
+    expect(row.className).toContain("ac-clay");
+    const cells = row.querySelectorAll<HTMLElement>("[data-stat-cell]");
+    expect(cells.length).toBe(4);
+    for (const cell of Array.from(cells)) {
+      expect(cell.className).toContain("h-[92px]");
+    }
+    const dividerCells = Array.from(cells).filter((c) => c.className.includes("border-l"));
+    expect(dividerCells.length).toBe(3);
+    expect(row.querySelectorAll("svg").length).toBe(0);
+    // The pre-R126 title + tabular pins ride the cell now (re-pinned).
+    const tokensCell = await screen.findByTitle(/Input \+ output tokens in the window/);
+    expect(tokensCell.className).toContain("h-[92px]");
+    expect(within(tokensCell).getByText("630K").className).toContain("tabular-nums");
+  });
+
+  it("the loading skeleton pulses in the WELL (bg-well), mirroring the one-card stat row", async () => {
+    vi.mocked(fetchUsageStats).mockImplementationOnce(
+      () => new Promise<UsageStats>(() => {}),
+    );
+    const { container } = renderPanel();
+    await screen.findByRole("status", { name: "Loading data and statistics" });
+
+    const panel = screen.getByTestId("data-stats-panel");
+    const pulses = Array.from(panel.querySelectorAll<HTMLElement>(".animate-pulse"));
+    // Every pulse block rides the well (TOKENS §10 law 4 — never bg-subtle).
+    expect(pulses.length).toBeGreaterThan(0);
+    expect(pulses.every((el) => el.className.includes("bg-well"))).toBe(true);
+    expect(pulses.filter((el) => el.className.includes("h-[92px]")).length).toBe(4);
+    expect(pulses.some((el) => el.className.includes("h-[264px]"))).toBe(true);
+    expect(pulses.some((el) => el.className.includes("h-[96px]"))).toBe(true);
+    expect(container.querySelector('[data-testid="usage-heatmap"]')).toBeNull();
+  });
+
+  it("the agent-health sub-blocks are compact clay tiles (rim + .ac-clay-sm, no tint)", async () => {
+    renderPanel();
+    const turnErrors = await screen.findByTestId("stats-turn-errors");
+    const toolFailures = screen.getByTestId("stats-tool-failures");
+
+    expect(turnErrors.className).toContain("ac-clay-sm");
+    expect(toolFailures.className).toContain("ac-clay-sm");
+    // The QUIET contract (R99-E) stands — no semantic tint near the surface.
+    expect(turnErrors.style.backgroundColor).toBe("");
+    expect(toolFailures.style.backgroundColor).toBe("");
+  });
+
+  it("R126-3b successor pass: the retryable error card is the TOKENS §11 danger badge-tone container + the outlined-danger Retry", async () => {
+    vi.mocked(fetchUsageStats).mockRejectedValueOnce(new Error("sidecar exploded"));
+    renderPanel();
+
+    const card = await screen.findByRole("alert");
+    // R126 (TOKENS §11): the error card rides the tinted container + the
+    // deep-on-tint ink pair — the pre-R126 flat-hue danger text on a
+    // withAlpha wash died with §11 (re-pinned in this successor run).
+    expect(card.className).toContain("bg-badge-danger");
+    expect(card.className).toContain("text-badge-danger-fg");
+    // The Retry button is the outlined danger species (COMPONENTS §4).
+    const retry = screen.getByRole("button", { name: "Retry loading data and statistics" });
+    expect(retry.className).toContain("border-danger-deep");
+    expect(retry.className).toContain("text-danger-deep");
+    expect(retry.className).toContain("active:scale-[0.98]");
+  });
+});

@@ -3,8 +3,12 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Layers } from "lucide-react";
 import type { ThemeStyles } from "../../lib/themes";
 import type { UsageStatsDayBucket, UsageStatsModel } from "../../lib/api";
-import { bdr, utcDateLabel, withAlpha } from "../dashboard/helpers";
-import { formatCompactTokens, modelColor } from "./usage-helpers";
+import { ease } from "../../lib/motion";
+import { Kicker } from "../ui/Kicker";
+import { utcDateLabel, withAlpha } from "../dashboard/helpers";
+import { formatCompactTokens, modelColor, CHART_BAR_GROW_MS, CHART_BAR_STAGGER_MS, CLAY_CARD, CLAY_TOOLTIP } from "./usage-helpers";
+import { RangeSelector } from "./RangeSelector";
+import { cn } from "../../lib/utils";
 
 /**
  * ROUND-98 (R98-I2, owner: "time-range graphs color-coded by model name —
@@ -27,12 +31,14 @@ import { formatCompactTokens, modelColor } from "./usage-helpers";
  * height is width-independent; every number — axis labels, tooltip rows,
  * the range buttons — renders tabular-nums.
  *
- * R100-G (research §C2 P3, the ladder sweep): the header label snapped to
- * the label tier (11px/500/0.08em — the ONE kicker spelling), the range
- * picker snapped to the DataStatsPanel picker grammar (rounded-xl segments,
- * rounded-lg buttons, 600 weights), the axis/label font sizes sit at the
- * 10px floor, and the card rides the 16px radius step (rounded-2xl). The
- * model palette + the fixed-height reserves stay untouched.
+ * R126-3b (the Clay Companion redesign): the card rides the CLAY material
+ * (rim + `.ac-clay`), the hover tooltip is the clay popover
+ * (`CLAY_TOOLTIP`), and the range picker is the SEGMENTED-CONTROL grammar
+ * (the shared RangeSelector — bg-well track + the gliding bg-accent-deep
+ * knob on TAB_SPRING). The STABLE per-model palette is untouched. The
+ * stacked bars grow from the BASELINE on entry (MOTION §2's chart-entry
+ * law — 350ms, 12ms per-bar stagger, once per data load: new days mount
+ * fresh and grow in, existing keys hold their settled pose).
  */
 
 const RANGE_OPTIONS = [7, 30, 90, 365] as const;
@@ -65,7 +71,7 @@ export function ModelStackChart({
   models: UsageStatsModel[];
   styles: ThemeStyles;
 }) {
-  const { card, border, text, textSecondary, textTertiary, accent, isDark, softShadow } = styles;
+  const { text, textSecondary, textTertiary, accentDeep, isDark } = styles;
   const [range, setRange] = useState<(typeof RANGE_OPTIONS)[number]>(30);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
@@ -90,57 +96,29 @@ export function ModelStackChart({
   return (
     <div
       data-testid="model-stack-chart"
-      className="flex min-h-[264px] flex-col rounded-2xl border-[1.5px] p-4 md:min-h-[272px] md:p-5"
-      style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
+      className={cn(CLAY_CARD, "flex min-h-[264px] flex-col p-4 md:min-h-[272px] md:p-5")}
     >
       <div className="mb-4 flex shrink-0 items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <Layers size={13} style={{ color: accent, opacity: 0.7 }} />
-          <span
-            className="truncate text-[11px] font-medium uppercase leading-none tracking-[0.08em] tabular-nums"
-            style={{ color: textTertiary }}
-          >
-            Model Mix · {visible.length} {visible.length === 1 ? "day" : "days"}
-          </span>
-        </div>
-        <div
-          role="group"
-          aria-label="Model mix day range"
-          className="flex shrink-0 items-center gap-1 rounded-xl border-[1.5px] p-1"
-          style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
-        >
-          {RANGE_OPTIONS.map((option) => {
-            const active = option === range;
-            return (
-              <button
-                key={option}
-                type="button"
-                onClick={() => {
-                  setRange(option);
-                  setHoveredIdx(null);
-                }}
-                aria-pressed={active}
-                aria-label={`Last ${option} days`}
-                className="cursor-pointer rounded-lg px-2.5 py-1.5 text-[12px] font-semibold tabular-nums transition-colors duration-200"
-                style={{
-                  backgroundColor: active ? accent : "transparent",
-                  color: active ? styles.accentText : textSecondary,
-                }}
-              >
-                {option}d
-              </button>
-            );
-          })}
-        </div>
+        <Kicker icon={Layers} className="truncate tabular-nums">
+          Model Mix · {visible.length} {visible.length === 1 ? "day" : "days"}
+        </Kicker>
+        {/* R126-3b: the range picker is the shared SEGMENTED-CONTROL grammar. */}
+        <RangeSelector
+          options={RANGE_OPTIONS}
+          selected={range}
+          onChange={(value) => {
+            setRange(value as (typeof RANGE_OPTIONS)[number]);
+            setHoveredIdx(null);
+          }}
+          groupLabel="Model mix day range"
+          optionAriaLabel={(option) => `Last ${option} days`}
+        />
       </div>
 
       {visible.length === 0 ? (
         <div className="flex h-[172px] flex-col items-center justify-center gap-1 text-center">
           <p className="text-[12px] font-semibold" style={{ color: text }}>
             No usage recorded yet
-          </p>
-          <p className="max-w-[240px] text-[11px]" style={{ color: textSecondary }}>
-            The model mix fills in once agents start making model calls.
           </p>
         </div>
       ) : (
@@ -169,7 +147,7 @@ export function ModelStackChart({
                     y1={CHART_HEIGHT - CHART_HEIGHT * pct}
                     x2={Y_AXIS + chartWidth}
                     y2={CHART_HEIGHT - CHART_HEIGHT * pct}
-                    stroke={withAlpha(text, isDark ? 0.07 : 0.06)}
+                    stroke={withAlpha(text, isDark ? 0.05 : 0.04)}
                     strokeWidth={1}
                     strokeDasharray="3 5"
                   />
@@ -191,7 +169,7 @@ export function ModelStackChart({
                 y1={CHART_HEIGHT}
                 x2={Y_AXIS + chartWidth}
                 y2={CHART_HEIGHT}
-                stroke={withAlpha(text, isDark ? 0.12 : 0.1)}
+                stroke={withAlpha(text, isDark ? 0.09 : 0.07)}
                 strokeWidth={1}
               />
 
@@ -223,16 +201,23 @@ export function ModelStackChart({
                       {segments.map(
                         (seg) =>
                           seg.height > 0 && (
-                            <rect
+                            <motion.rect
                               key={seg.name}
                               x={x}
-                              y={seg.y}
                               width={barWidth}
-                              height={seg.height}
                               rx={BAR_RADIUS}
                               fill={seg.color}
                               opacity={hoveredIdx === null || isHovered ? 1 : 0.35}
                               data-stack-model={seg.name}
+                              // R126-3b (MOTION §2): grow from the baseline —
+                              // 350ms, 12ms stagger, once per data load.
+                              initial={{ y: CHART_HEIGHT, height: 0 }}
+                              animate={{ y: seg.y, height: seg.height }}
+                              transition={{
+                                duration: CHART_BAR_GROW_MS,
+                                ease,
+                                delay: i * CHART_BAR_STAGGER_MS,
+                              }}
                             />
                           ),
                       )}
@@ -279,20 +264,13 @@ export function ModelStackChart({
                     transform: "translateX(-50%)",
                   }}
                 >
-                  <div
-                    className="w-52 space-y-1.5 p-3"
-                    style={{
-                      backgroundColor: card,
-                      border: bdr("1.5px", border),
-                      borderRadius: "12px",
-                      boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-                    }}
-                  >
+                  {/* R126-3b: the tooltip surface is the clay popover. */}
+                  <div className={cn(CLAY_TOOLTIP, "w-52 space-y-1.5 p-3")}>
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-semibold" style={{ color: text }}>
                         {utcDateLabel(hovered.date)}
                       </span>
-                      <span className="text-[11px] font-semibold tabular-nums" style={{ color: accent }}>
+                      <span className="text-[11px] font-semibold tabular-nums" style={{ color: accentDeep }}>
                         {dayTotal(hovered).toLocaleString()}
                       </span>
                     </div>
@@ -319,7 +297,7 @@ export function ModelStackChart({
                     })}
                     <div
                       className="flex items-center justify-between pt-1"
-                      style={{ borderTop: bdr("1px", border) }}
+                      style={{ borderTop: `1px solid ${styles.clayRim}` }}
                     >
                       <span className="text-[10px] tabular-nums" style={{ color: textSecondary }}>
                         {Object.keys(hovered.byModel).length} model

@@ -19,6 +19,11 @@ import { cn } from "../../lib/utils";
  * (`hover:bg-hover` — TOKENS §6); a layout row never owns interaction.
  * The description's tertiary ink rides the useThemeStyles JS leg (TOKENS
  * §1 rule 4 — no hover state on static text), theme-aware in light + dark.
+ *
+ * ROUND-126 (R126-3f-1): the description is ONE LINE — `truncate`
+ * (overflow-hidden ellipsis) at the 11px tier; the row stays a 36px IDE
+ * row, so long help copy ellipsizes instead of inflating the row (the full
+ * text stays in the DOM for tests + screen-reader traversal).
  */
 export function SettingsRow({
   label,
@@ -51,7 +56,7 @@ export function SettingsRow({
       <div className="min-w-[200px] flex-1">
         <div className="text-[13px] font-normal text-ink">{label}</div>
         {description !== undefined ? (
-          <div className="text-[11px]" style={{ color: styles.textTertiary }}>
+          <div className="truncate text-[11px]" style={{ color: styles.textTertiary }}>
             {description}
           </div>
         ) : null}

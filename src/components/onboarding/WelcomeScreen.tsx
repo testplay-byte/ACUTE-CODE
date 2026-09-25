@@ -2,10 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useOnboardingStore } from "./onboarding-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 
+// R126-3g (the clay palette pass): the hardcoded per-step hues
+// (#D6FF57 / #A5B4FF / #FFB88A — other themes' accents pasted in) retired;
+// every icon tile is now the ClayIconChip grammar — bg-accent-tint fill +
+// clayRim hairline + the accentDeep glyph (the mobile welcome row recipe).
 const STEP_CARDS = [
-  { num: "01", title: "Pick flavor", desc: "Choose theme & vibe", icon: "◑", color: "#D6FF57", rot: "-1deg" },
-  { num: "02", title: "Plug brain", desc: "Connect your model", icon: "◒", color: "#A5B4FF", rot: "1deg" },
-  { num: "03", title: "Ship code", desc: "Start building instantly", icon: "rocket", color: "#FFB88A", rot: "-0.5deg" },
+  { num: "01", title: "Pick flavor", desc: "Choose theme & vibe", icon: "◑", rot: "-1deg" },
+  { num: "02", title: "Plug brain", desc: "Connect your model", icon: "◒", rot: "1deg" },
+  { num: "03", title: "Ship code", desc: "Start building instantly", icon: "rocket", rot: "-0.5deg" },
 ] as const;
 
 const CODE_LINES = `acute> init --theme nova --brain gpt-4o
@@ -47,9 +51,8 @@ export function WelcomeScreen() {
     return () => window.removeEventListener("keydown", handler);
   }, [handleGetStarted]);
 
-  const codeBg = s.isDark ? "#141418" : "#FAFAFA";
-  const codeText = s.isDark ? "rgba(255,255,255,0.9)" : "#333333";
-
+  // R126-3g: the fake terminal's hardcoded dark/light body hexes retired —
+  // the body rides the recessed mono surface tokens (TOKENS §10).
   return (
     // Owner directive (adaptable layouts): the hero composition is vertically
     // CENTERED in the available height and bounded to a readable width — wide
@@ -60,25 +63,21 @@ export function WelcomeScreen() {
       <div className="grid mx-auto w-full max-w-[1280px] 2xl:max-w-[1480px] flex-1 items-center gap-6 pb-4 md:gap-8 lg:grid-cols-[0.85fr_1.15fr] 2xl:gap-14">
         {/* LEFT COLUMN */}
         <div className="space-y-4 short:space-y-3 md:space-y-5">
-        {/* Step Cards Grid */}
+        {/* Step Cards Grid — R126-3g: clay cards (clayRim hairline +
+            .ac-clay-sm) with the ClayIconChip icon tiles; the micro-rotations
+            + hover counter-rotate (the DNA's deliberate imperfection) stay. */}
         <div className="grid gap-3">
           {STEP_CARDS.map((card) => (
             <div
               key={card.num}
-              className="group relative rounded-[22px] border-[1.5px] p-4 md:p-5 short:p-3 flex items-center gap-4 transition-all hover:translate-y-[-2px] hover:rotate-[0.3deg]"
-              style={{
-                background: s.card,
-                borderColor: s.borderStrong,
-                boxShadow: s.softShadow,
-                transform: `rotate(${card.rot})`,
-              }}
+              className="group relative rounded-[22px] border p-4 md:p-5 short:p-3 flex items-center gap-4 transition-all hover:translate-y-[-2px] hover:rotate-[0.3deg] border-clay-rim ac-clay-sm bg-card"
+              style={{ transform: `rotate(${card.rot})` }}
             >
               <div
-                className="w-12 h-12 rounded-[14px] border-[1.5px] grid place-items-center text-[18px] font-black shrink-0"
-                style={{ backgroundColor: card.color, borderColor: s.borderStrong }}
+                className="w-12 h-12 rounded-[14px] border grid place-items-center text-[18px] font-black shrink-0 bg-accent-tint text-accent-deep border-clay-rim"
               >
                 {card.icon === "rocket" ? (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={s.isDark ? "#111" : "black"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={s.accentDeep} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
                     <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
                     <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
@@ -89,8 +88,7 @@ export function WelcomeScreen() {
                 )}
               </div>
               <span
-                className="text-[11px] font-black px-1.5 py-0.5 rounded-full"
-                style={{ background: s.pillBg, color: s.pillText }}
+                className="text-[11px] font-black px-1.5 py-0.5 rounded-full bg-badge-neutral text-badge-neutral-fg"
               >
                 {card.num}
               </span>
@@ -99,8 +97,8 @@ export function WelcomeScreen() {
                 <div className="text-[13px] font-medium" style={{ color: s.textSecondary }}>{card.desc}</div>
               </div>
               <div
-                className="w-7 h-7 rounded-full border grid place-items-center text-[12px]"
-                style={{ borderColor: s.border }}
+                className="w-7 h-7 rounded-full border grid place-items-center text-[12px] border-clay-rim"
+                style={{ color: s.textTertiary }}
               >
                 ↗
               </div>
@@ -108,67 +106,58 @@ export function WelcomeScreen() {
           ))}
         </div>
 
-        {/* Code Block */}
+        {/* Code Block — R126-3g: the fake terminal keeps its macOS traffic
+            lights (the documented theatrical prop) but the body is now the
+            recessed mono surface (.ac-mono-block, TOKENS §10) and the shell
+            is a clay card. */}
         <div
-          className="rounded-[24px] border-[1.5px] overflow-hidden relative"
-          style={{ background: codeBg, borderColor: s.borderStrong, boxShadow: s.bentoShadow }}
+          className="rounded-[24px] border overflow-hidden relative border-clay-rim ac-clay bg-card"
         >
           <div className="flex items-center justify-between p-4 pb-0">
             <div className="flex items-center gap-2">
+              {/* The macOS traffic-light dots — a deliberate theatrical prop
+                  (WIZARD-DNA §5): the documented hex exception. */}
               <div className="w-3 h-3 rounded-full bg-[#FF5F56]" />
               <div className="w-3 h-3 rounded-full bg-[#FFBD2E]" />
               <div className="w-3 h-3 rounded-full bg-[#28C840]" />
             </div>
             <div className="flex items-center gap-2">
               <span
-                className="px-2.5 py-1 rounded-full border text-[11px] font-bold"
-                style={{ background: s.subtle, borderColor: s.border }}
+                className="px-2.5 py-1 rounded-full border text-[11px] font-bold bg-badge-neutral text-badge-neutral-fg"
               >
                 acute.config.ts
               </span>
               <span
-                className="px-2 py-1 rounded-full text-[10px] font-bold border"
-                style={{
-                  background: s.accent,
-                  color: s.accentText,
-                  borderColor: s.accent,
-                }}
+                className="px-2 py-1 rounded-full text-[10px] font-bold bg-badge-accent text-badge-accent-fg"
               >
                 LIVE
               </span>
               <span
-                className="px-2 py-1 rounded-full border text-[10px] font-bold"
-                style={{ background: s.subtle, borderColor: s.border }}
+                className="px-2 py-1 rounded-full border text-[10px] font-bold bg-badge-neutral text-badge-neutral-fg"
               >
                 42ms
               </span>
             </div>
           </div>
           <pre
-            className="p-4 pt-3 font-mono text-[12px] md:text-[13px] leading-[1.6] whitespace-pre-wrap min-h-[120px] short:min-h-[84px]"
-            style={{ color: codeText }}
+            className="ac-mono-block p-4 pt-3 font-mono text-[12px] md:text-[13px] leading-[1.6] whitespace-pre-wrap min-h-[120px] short:min-h-[84px]"
+            style={{ color: s.monoText }}
           >
             {typed}
           </pre>
           <div
             className="absolute -right-6 -bottom-6 w-24 h-24 rounded-full blur-[12px] pointer-events-none"
-            style={{ backgroundColor: s.accent, opacity: 0.15 }}
+            style={{ backgroundColor: "var(--ac-accent)", opacity: 0.15 }}
           />
         </div>
 
-        {/* Tip Bar */}
+        {/* Tip Bar — R126-3g: clay card + the ClayIconChip ✦ tile. */}
         <div
-          className="rounded-[18px] border-[1.5px] px-4 py-3 short:py-2 flex items-center gap-3 text-[12px] font-medium"
-          style={{
-            background: s.card,
-            borderColor: s.border,
-            boxShadow: s.softShadow,
-            color: s.text,
-          }}
+          className="rounded-[18px] border px-4 py-3 short:py-2 flex items-center gap-3 text-[12px] font-medium border-clay-rim ac-clay-sm bg-card"
+          style={{ color: s.text }}
         >
           <div
-            className="w-8 h-8 rounded-full grid place-items-center text-[12px]"
-            style={{ background: s.pillBg, color: s.pillText }}
+            className="w-8 h-8 rounded-full grid place-items-center text-[12px] bg-accent-tint text-accent-deep"
           >
             ✦
           </div>
@@ -178,15 +167,11 @@ export function WelcomeScreen() {
 
       {/* RIGHT COLUMN */}
       <div className="relative">
-        {/* Badge */}
+        {/* Badge — R126-3g: the accent badge tone (accentDeep fill +
+            accentText ink, TOKENS §11); the rotation + pulse dot stay. */}
         <span
-          className="inline-flex items-center gap-2 px-3 py-1 rounded-full border-[1.5px] rotate-[-1.5deg] text-[12px] font-bold tracking-wide"
-          style={{
-            background: s.accent,
-            color: s.accentText,
-            borderColor: s.accent,
-            boxShadow: s.bentoShadowSm,
-          }}
+          className="inline-flex items-center gap-2 px-3 py-1 rounded-full border-[1.5px] rotate-[-1.5deg] text-[12px] font-bold tracking-wide ac-clay-sm bg-badge-accent"
+          style={{ color: s.accentText }}
         >
           <span className="w-2 h-2 rounded-full animate-pulse-dot" style={{ background: s.accentText }} />
           NEW ONBOARDING • UNDER 60 SEC
@@ -232,21 +217,21 @@ export function WelcomeScreen() {
         >
           {"Let's get you set up in under 1 minute. We'll configure your first workspace, theme, and first brain."}
           <span
-            className="inline-block ml-2 px-2 py-0.5 rounded-full text-[11px] font-bold rotate-[1deg]"
-            style={{ background: s.pillBg, color: s.pillText }}
+            className="inline-block ml-2 px-2 py-0.5 rounded-full text-[11px] font-bold rotate-[1deg] bg-badge-neutral text-badge-neutral-fg"
           >
             fun &amp; fast
           </span>
         </p>
 
-        {/* Get Started Button */}
+        {/* Get Started Button — R126-3g: the ActionButton grammar on its
+            home step — accent → accentDeep gradient stops + the sheen + the
+            bentoShadow (WIZARD-DNA §7); the kbd hint sinks into the well. */}
         <div className="mt-8 short:mt-5 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <kbd
-              className="px-2 py-1 rounded-md border text-[11px] font-bold"
+              className="px-2 py-1 rounded-md border text-[11px] font-bold border-clay-rim"
               style={{
-                background: s.card,
-                borderColor: s.border,
+                background: s.surfaceWell,
                 color: s.text,
               }}
             >
@@ -258,16 +243,16 @@ export function WelcomeScreen() {
             onClick={handleGetStarted}
             className="ac-chrome-sheen group h-12 px-8 rounded-full text-[16px] font-bold tracking-[-0.01em] flex items-center gap-3 border-[1.5px] transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shrink-0"
             style={{
-              background: s.accent,
+              background: `linear-gradient(135deg, ${s.accent}, ${s.accentDeep})`,
               color: s.accentText,
-              borderColor: s.accent,
+              borderColor: s.accentDeep,
               boxShadow: s.bentoShadow,
             }}
           >
             Get Started
             <span
               className="w-8 h-8 rounded-full grid place-items-center group-hover:translate-x-1 transition-transform"
-              style={{ background: s.accentText, color: s.accent }}
+              style={{ background: s.accentText, color: s.accentDeep }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M5 12h14M12 5l7 7-7 7" />
@@ -276,7 +261,7 @@ export function WelcomeScreen() {
           </button>
         </div>
 
-        {/* Stats */}
+        {/* Stats — R126-3g: the trio rides clay cards (rim + .ac-clay-sm). */}
         <div className="mt-10 short:mt-5 grid grid-cols-3 gap-3 max-w-[520px]">
           {[
             { value: "100%", label: "local" },
@@ -285,12 +270,7 @@ export function WelcomeScreen() {
           ].map((stat) => (
             <div
               key={stat.label}
-              className="rounded-[18px] border-[1.5px] p-3 short:p-2"
-              style={{
-                background: s.card,
-                borderColor: s.border,
-                boxShadow: s.softShadow,
-              }}
+              className="rounded-[18px] border p-3 short:p-2 border-clay-rim ac-clay-sm bg-card"
             >
               <div className="text-[18px] font-black tracking-tighter" style={{ color: s.text }}>{stat.value}</div>
               <div className="text-[11px] font-bold uppercase tracking-widest" style={{ color: s.textTertiary }}>{stat.label}</div>
@@ -298,24 +278,16 @@ export function WelcomeScreen() {
           ))}
         </div>
 
-        {/* Floating Decorations */}
+        {/* Floating Decorations — R126-3g: clay tiles; the ✦ square carries
+            the accent as the tint + deep glyph (hue without loudness). */}
         <div
-          className="absolute -right-6 top-[38%] hidden lg:block w-16 h-16 rounded-[16px] border-[1.5px] grid place-items-center text-[22px] animate-float pointer-events-none"
-          style={{
-            backgroundColor: s.accent,
-            borderColor: s.borderStrong,
-            boxShadow: s.softShadow,
-          }}
+          className="absolute -right-6 top-[38%] hidden lg:block w-16 h-16 rounded-[16px] border grid place-items-center text-[22px] animate-float pointer-events-none bg-accent-tint text-accent-deep border-clay-rim ac-clay-sm"
         >
           ✦
         </div>
         <div
-          className="absolute left-[58%] -bottom-10 hidden xl:flex w-12 h-12 rounded-full border-[1.5px] items-center justify-center text-[18px] animate-float2 pointer-events-none"
-          style={{
-            background: s.card,
-            borderColor: s.borderStrong,
-            boxShadow: s.softShadow,
-          }}
+          className="absolute left-[58%] -bottom-10 hidden xl:flex w-12 h-12 rounded-full border items-center justify-center text-[18px] animate-float2 pointer-events-none border-clay-rim ac-clay-sm bg-card"
+          style={{ color: s.text }}
         >
           ◐
         </div>

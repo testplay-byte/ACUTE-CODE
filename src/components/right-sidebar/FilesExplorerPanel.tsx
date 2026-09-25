@@ -18,10 +18,8 @@ import type { TreeNode } from "../../lib/api";
 import { useRightSidebarEvents } from "../../lib/right-sidebar-events";
 import type { RightSidebarTab } from "../../lib/right-sidebar-store";
 import { ease } from "../../lib/motion";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
-import { withAlpha } from "../dashboard/helpers";
 import { getFileColor, highlightLine } from "../project-chat/highlight";
 import { isMarkdown, Markdown } from "./FileViewerPanel";
 
@@ -145,12 +143,14 @@ function TreeRow({
         data-tree-path={node.path}
         aria-expanded={isFolder ? expanded : undefined}
         aria-current={selected ? "true" : undefined}
-        className="w-full flex items-center gap-1.5 h-[30px] px-1.5 text-left transition-colors rounded-md hover:bg-hover"
+        // R126-3e: the tree row = the hover wash (kept) + the selected file =
+        // bg-accent-tint + text-accent-deep 500 (TOKENS §10/§1d's selection
+        // grammar); the withAlpha(accent) fill died.
+        className={`w-full flex items-center gap-1.5 h-[30px] px-1.5 text-left transition-colors rounded-md hover:bg-hover ${
+          selected ? "bg-accent-tint" : ""
+        }`}
         style={{
           paddingLeft: `${depth * 12 + 6}px`,
-          background: selected
-            ? withAlpha(styles.accent, styles.isDark ? 0.12 : 0.1)
-            : undefined,
         }}
         onClick={() => {
           if (isFolder) onToggleFolder(node.path);
@@ -179,11 +179,11 @@ function TreeRow({
           <FileIcon name={node.name} />
         )}
         <span
-          className="text-[12px] font-mono truncate"
-          style={{
-            color: selected ? styles.text : styles.textSecondary,
-            fontWeight: selected ? 500 : 400,
-          }}
+          // R126-3e: the selected label = text-accent-deep + 500; inactive
+          // = text-muted (the JS color/weight legs died).
+          className={`text-[12px] font-mono truncate ${
+            selected ? "text-accent-deep font-medium" : "text-muted"
+          }`}
         >
           {node.name}
         </span>
@@ -242,44 +242,42 @@ function HeaderIconButton({
   );
 }
 
-/** Loading skeleton rows for the tree pane (ExplorerPanel's pattern). */
-function TreeSkeleton({ styles }: { styles: ReturnType<typeof useThemeStyles> }) {
+/** Loading skeleton rows for the tree pane (ExplorerPanel's pattern).
+ * R126-3e (TOKENS §10 law 4): skeletons ride the well (bg-well). */
+function TreeSkeleton() {
   return (
     <div aria-label="Loading file tree">
       {[0, 1, 2, 3, 4].map((i) => (
         <div
           key={i}
-          className="h-[30px] rounded-md animate-pulse mb-1"
-          style={{ backgroundColor: styles.subtle }}
+          className="h-[30px] rounded-md animate-pulse mb-1 bg-well"
         />
       ))}
     </div>
   );
 }
 
-/** Honest failure card with a retry affordance (tree OR file loads). */
+/** Honest failure card with a retry affordance (tree OR file loads).
+ * R126-3e (§11): the danger badge-tone container + the outlined-danger
+ * Retry — the withAlpha(danger) washes died. */
 function ErrorRetry({
   message,
   onRetry,
-  styles,
 }: {
   message: string;
   onRetry: () => void;
-  styles: ReturnType<typeof useThemeStyles>;
 }) {
   return (
     <div
       role="alert"
-      className="m-2 p-2.5 rounded-xl border flex flex-col gap-2"
-      style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35), background: withAlpha(SEMANTIC_COLORS.danger, 0.06) }}
+      className="m-2 p-2.5 rounded-xl flex flex-col gap-2 bg-badge-danger text-badge-danger-fg"
     >
-      <div className="text-[11px] leading-snug" style={{ color: SEMANTIC_COLORS.danger }}>
+      <div className="text-[11px] leading-snug">
         {message}
       </div>
       <button
         onClick={onRetry}
-        className="self-start flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-line bg-card text-[11px] font-medium transition-colors hover:bg-hover"
-        style={{ color: styles.textSecondary }}
+        className="self-start flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-danger-deep text-danger-deep text-[11px] font-medium transition-colors duration-100 active:scale-[0.98]"
       >
         <RefreshCw size={11} />
         Try again
@@ -336,12 +334,10 @@ export function FilesExplorerPanel({
   return (
     <div className="h-full flex flex-col min-h-0" data-testid="files-explorer-panel">
       {/* ── Header: project name + Search (palette) + tree-pane toggle ── */}
+      {/* R126-3e: the header strip = the in-flow chrome shade
+          (bg-header-surface + the clay-rim hairline). */}
       <div
-        className="shrink-0 flex items-center gap-2 px-2.5 h-9 border-b"
-        style={{
-          borderColor: styles.border,
-          background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle,
-        }}
+        className="shrink-0 flex items-center gap-2 px-2.5 h-9 border-b border-clay-rim bg-header-surface"
       >
         <div
           className="w-5 h-5 rounded-md grid place-items-center shrink-0"
@@ -351,7 +347,12 @@ export function FilesExplorerPanel({
           {/* white icon reads on the project's own color chip, not a theme surface */}
           <FolderTree size={11} color="#fff" />
         </div>
-        <span className="flex-1 min-w-0 truncate text-[11px] font-medium" style={{ color: styles.text }}>
+        <span
+          // R126-3e tightening (the panel-header spelling): the title snaps
+          // to 12px/600 — one header tier with SubAgent/Console (was 11/500).
+          className="flex-1 min-w-0 truncate text-[12px] font-semibold"
+          style={{ color: styles.text }}
+        >
           {project?.name ?? "Files"}
         </span>
         <HeaderIconButton
@@ -374,11 +375,12 @@ export function FilesExplorerPanel({
           <div
             ref={treeScrollRef}
             aria-label="Project file tree"
-            className="w-[40%] shrink-0 min-w-0 overflow-y-auto auto-scroll border-r py-1.5 px-1"
-            style={{ borderColor: styles.border, scrollbarWidth: "thin" }}
+            // R126-3e: the pane divider = the clay-rim hairline.
+            className="w-[40%] shrink-0 min-w-0 overflow-y-auto auto-scroll border-r border-clay-rim py-1.5 px-1"
+            style={{ scrollbarWidth: "thin" }}
           >
             {treeQuery.isLoading ? (
-              <TreeSkeleton styles={styles} />
+              <TreeSkeleton />
             ) : treeQuery.isError ? (
               <ErrorRetry
                 message={
@@ -387,7 +389,6 @@ export function FilesExplorerPanel({
                     : "Failed to load the file tree."
                 }
                 onRetry={() => void treeQuery.refetch()}
-                styles={styles}
               />
             ) : treeQuery.data && treeQuery.data.tree.length === 0 ? (
               <div className="px-2 py-3 text-[11px]" style={{ color: styles.textTertiary }}>
@@ -413,11 +414,10 @@ export function FilesExplorerPanel({
         <div className="flex-1 min-w-0 flex flex-col">
           {selectedPath !== null && (
             <div
-              className="shrink-0 flex items-center gap-1.5 px-2.5 h-7 border-b font-mono text-[10px] truncate"
+              // R126-3e: the content path strip = the in-flow chrome shade.
+              className="shrink-0 flex items-center gap-1.5 px-2.5 h-7 border-b border-clay-rim bg-header-surface font-mono text-[10px] truncate"
               style={{
-                borderColor: styles.border,
                 color: styles.textSecondary,
-                background: styles.isDark ? "rgba(0,0,0,0.15)" : styles.subtle,
               }}
               title={selectedPath}
             >
@@ -446,7 +446,6 @@ export function FilesExplorerPanel({
                     : "Failed to load the file."
                 }
                 onRetry={() => void fileQuery.refetch()}
-                styles={styles}
               />
             ) : isMarkdown(selectedPath) ? (
               <div className="px-2.5 py-2.5">

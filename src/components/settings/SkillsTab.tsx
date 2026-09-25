@@ -3,8 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Eye, Plus, Sparkles, Trash2 } from "lucide-react";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
-import { withAlpha } from "../dashboard/helpers";
 import { ClampedText } from "../shared/ClampedText";
 import { SkeletonRows } from "../shared/Skeletons";
 // R100-E2: the round-100 primitives — SectionCard for the card, Kicker for
@@ -174,16 +172,10 @@ function SkillEditor({
     description.trim() !== skill.description ||
     body !== skill.body;
 
-  const inputStyle = {
-    background: styles.bg,
-    borderColor: styles.border,
-    color: styles.text,
-  };
-
   return (
     <div
-      className="flex flex-col gap-2.5 px-3 pb-3 pt-1 border-t"
-      style={{ borderColor: styles.borderSubtle }}
+      /* R126-3f-3: the editor region = the well recess (TOKENS §10). */
+      className="flex flex-col gap-2.5 px-3 pb-3 pt-1 border-t border-line bg-well"
       data-testid={`skill-editor-${skill.id}`}
     >
       <div>
@@ -200,8 +192,8 @@ function SkillEditor({
           onChange={(e) => setName(e.target.value)}
           placeholder="e.g. api-testing"
           aria-label={`Edit name for skill ${skill.name}`}
-          className="h-8 w-full rounded-lg border-[1.5px] px-2.5 font-mono text-[12px] outline-none"
-          style={inputStyle}
+          /* R126-3f-3: THE WELL + rim (TOKENS §10) — the editor's inputs. */
+          className="h-8 w-full rounded-lg border border-clay-rim bg-card px-2.5 font-mono text-[12px] text-ink outline-none"
         />
       </div>
       <div>
@@ -218,8 +210,7 @@ function SkillEditor({
           onChange={(e) => setDescription(e.target.value)}
           placeholder="one line — when should the agent load this skill?"
           aria-label={`Edit description for skill ${skill.name}`}
-          className="h-8 w-full rounded-lg border-[1.5px] px-2.5 text-[12px] outline-none"
-          style={inputStyle}
+          className="h-8 w-full rounded-lg border border-clay-rim bg-card px-2.5 text-[12px] text-ink outline-none"
         />
       </div>
       <div>
@@ -237,8 +228,7 @@ function SkillEditor({
           placeholder="The full instructions the agent gets when it calls read_skill with this name…"
           aria-label={`Edit body for skill ${skill.name}`}
           rows={6}
-          className="w-full rounded-lg border-[1.5px] px-2.5 py-2 font-mono text-[11px] leading-relaxed outline-none resize-y"
-          style={inputStyle}
+          className="w-full rounded-lg border border-clay-rim bg-card px-2.5 py-2 font-mono text-[11px] leading-relaxed text-ink outline-none resize-y"
         />
       </div>
       {skill.source === "builtin" && (
@@ -256,7 +246,7 @@ function SkillEditor({
         </p>
       )}
       {error && (
-        <p className="text-[11px] font-medium" style={{ color: SEMANTIC_COLORS.danger }} role="alert" data-testid="skill-editor-error">
+        <p className="text-[11px] font-medium text-danger-deep" role="alert" data-testid="skill-editor-error">
           {error}
         </p>
       )}
@@ -265,16 +255,15 @@ function SkillEditor({
           onClick={() => save.mutate()}
           disabled={!name.trim() || !dirty || save.isPending}
           aria-label={`Save skill ${skill.name}`}
-          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 disabled:opacity-50"
-          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          /* R126-3f-3: the accent-tint action spelling. */
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-50"
         >
           {save.isPending ? "Saving…" : "Save"}
         </button>
         <button
           onClick={onDone}
           aria-label={`Cancel editing skill ${skill.name}`}
-          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0"
-          style={{ background: styles.subtle, color: styles.textSecondary }}
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 border border-clay-rim bg-card text-muted transition-colors duration-100 hover:bg-hover"
         >
           Cancel
         </button>
@@ -310,16 +299,10 @@ function NewSkillForm({ onDone }: { onDone: () => void }) {
     onError: (err: Error) => setError(err.message),
   });
 
-  const inputStyle = {
-    background: styles.bg,
-    borderColor: styles.border,
-    color: styles.text,
-  };
-
   return (
     <div
-      className="flex flex-col gap-2.5 px-3 py-3 border-t"
-      style={{ borderColor: styles.borderSubtle, background: withAlpha(styles.accent, 0.03) }}
+      /* R126-3f-3: the new-skill form = the well recess (TOKENS §10). */
+      className="flex flex-col gap-2.5 px-3 py-3 border-t border-line bg-well"
       data-testid="new-skill-form"
     >
       <div>
@@ -336,8 +319,8 @@ function NewSkillForm({ onDone }: { onDone: () => void }) {
           onChange={(e) => setName(e.target.value)}
           placeholder="e.g. api-testing"
           aria-label="New skill name"
-          className="h-8 w-full rounded-lg border-[1.5px] px-2.5 font-mono text-[12px] outline-none"
-          style={inputStyle}
+          /* R126-3f-3: THE WELL + rim (TOKENS §10) — the form's inputs. */
+          className="h-8 w-full rounded-lg border border-clay-rim bg-card px-2.5 font-mono text-[12px] text-ink outline-none"
         />
       </div>
       <div>
@@ -354,8 +337,7 @@ function NewSkillForm({ onDone }: { onDone: () => void }) {
           onChange={(e) => setDescription(e.target.value)}
           placeholder="when should the agent load this skill?"
           aria-label="New skill description"
-          className="h-8 w-full rounded-lg border-[1.5px] px-2.5 text-[12px] outline-none"
-          style={inputStyle}
+          className="h-8 w-full rounded-lg border border-clay-rim bg-card px-2.5 text-[12px] text-ink outline-none"
         />
       </div>
       <div>
@@ -373,12 +355,11 @@ function NewSkillForm({ onDone }: { onDone: () => void }) {
           placeholder="The full instructions the agent gets when it calls read_skill with this name…"
           aria-label="New skill body"
           rows={5}
-          className="w-full rounded-lg border-[1.5px] px-2.5 py-2 font-mono text-[11px] leading-relaxed outline-none resize-y"
-          style={inputStyle}
+          className="w-full rounded-lg border border-clay-rim bg-card px-2.5 py-2 font-mono text-[11px] leading-relaxed text-ink outline-none resize-y"
         />
       </div>
       {error && (
-        <p className="text-[11px] font-medium" style={{ color: SEMANTIC_COLORS.danger }} role="alert" data-testid="new-skill-error">
+        <p className="text-[11px] font-medium text-danger-deep" role="alert" data-testid="new-skill-error">
           {error}
         </p>
       )}
@@ -387,16 +368,14 @@ function NewSkillForm({ onDone }: { onDone: () => void }) {
           onClick={() => create.mutate()}
           disabled={!name.trim() || create.isPending}
           aria-label="Create skill"
-          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 disabled:opacity-50"
-          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-50"
         >
           {create.isPending ? "Creating…" : "Create"}
         </button>
         <button
           onClick={onDone}
           aria-label="Cancel new skill"
-          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0"
-          style={{ background: styles.subtle, color: styles.textSecondary }}
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 border border-clay-rim bg-card text-muted transition-colors duration-100 hover:bg-hover"
         >
           Cancel
         </button>
@@ -484,8 +463,9 @@ function SkillsCard() {
 
   const noteMsg = (text: string, isError: boolean) => (
     <span
-      className="text-[11px] font-medium"
-      style={{ color: isError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+      className={`text-[11px] font-medium ${
+        isError ? "text-danger-deep" : "text-success-deep"
+      }`}
     >
       {text}
     </span>
@@ -509,7 +489,7 @@ function SkillsCard() {
        name. */
     <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Skills">
       <div className="flex items-center gap-2 flex-wrap">
-        <Sparkles size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <Sparkles size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Skills
         </span>
@@ -520,11 +500,9 @@ function SkillsCard() {
           aria-expanded={showPreview}
           aria-label={showPreview ? "Hide the composed skills section preview" : "Show the composed skills section preview"}
           title="Preview the SKILLS prompt section as the model receives it"
-          className="h-8 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 flex items-center gap-1"
-          style={{
-            background: showPreview ? withAlpha(styles.accent, 0.12) : styles.subtle,
-            color: showPreview ? styles.accent : styles.textSecondary,
-          }}
+          className={`h-8 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 flex items-center gap-1 transition-colors duration-100 ${
+            showPreview ? "bg-accent-tint text-accent-deep" : "border border-clay-rim bg-well text-muted"
+          } hover:bg-hover`}
         >
           <Eye size={11} /> Preview
         </button>
@@ -532,8 +510,7 @@ function SkillsCard() {
           onClick={() => setShowNew((v) => !v)}
           aria-label="New skill"
           title="Add a skill"
-          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 flex items-center gap-1"
-          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 flex items-center gap-1 bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
         >
           <Plus size={11} strokeWidth={2.5} /> New skill
         </button>
@@ -550,13 +527,11 @@ function SkillsCard() {
         <div
           role="alert"
           data-testid="skills-load-error"
-          className="rounded-2xl border-[1.5px] px-4 py-3.5"
-          style={{
-            borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
-            background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-          }}
+          /* R126-3f-3: the §11 danger badge-tone container + the
+           * outlined-danger Retry. */
+          className="rounded-2xl bg-badge-danger px-4 py-3.5"
         >
-          <div className="text-[13px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+          <div className="text-[13px] font-semibold text-badge-danger-fg">
             Could not load the skills
           </div>
           <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
@@ -570,11 +545,7 @@ function SkillsCard() {
             type="button"
             onClick={() => void skillsQuery.refetch()}
             aria-label="Retry loading the skills"
-            className="mt-3 h-8 cursor-pointer rounded-lg border px-3.5 text-[12px] font-semibold transition-opacity hover:opacity-85"
-            style={{
-              borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
-              color: SEMANTIC_COLORS.danger,
-            }}
+            className="mt-3 h-8 cursor-pointer rounded-lg border border-danger-deep px-3.5 text-[12px] font-semibold text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
           >
             Retry
           </button>
@@ -588,8 +559,8 @@ function SkillsCard() {
           {/* R98-E3: the pinned-budget readout — amber past 80% of the
               always-on budget (the compose truncates honestly past 24,000). */}
           <p
-            className="font-mono text-[11px] tabular-nums"
-            style={{ color: budgetAmber ? SEMANTIC_COLORS.warning : styles.textTertiary }}
+            className={`font-mono text-[11px] tabular-nums ${budgetAmber ? "text-warning-deep" : ""}`}
+            style={budgetAmber ? undefined : { color: styles.textTertiary }}
             title="The always-on tier composes every pinned enabled skill's full body, capped at 24,000 chars in total"
             data-testid="pinned-budget"
           >
@@ -599,8 +570,8 @@ function SkillsCard() {
           </p>
 
           <div
-            className="rounded-lg border-[1.5px] overflow-hidden"
-            style={{ borderColor: styles.border }}
+            /* R126-3f-3: the rim hairline container (TOKENS §5). */
+            className="rounded-lg border border-clay-rim overflow-hidden"
           >
             {skills.length === 0 && (
               <div className="px-3 py-2.5 text-[11px]" style={{ color: styles.textTertiary }}>
@@ -615,8 +586,7 @@ function SkillsCard() {
                 <div
                   key={s.id}
                   data-skill-id={s.id}
-                  className="border-b last:border-b-0"
-                  style={{ borderColor: styles.borderSubtle }}
+                  className="border-b border-line last:border-b-0"
                 >
                   <div className="flex items-center gap-2 px-3 py-2 flex-wrap">
                     <button
@@ -643,7 +613,11 @@ function SkillsCard() {
                       {s.name}
                     </span>
                     <span
-                      className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
+                      className={`text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0 ${
+                        s.source === "builtin" || fileSkill
+                          ? "bg-badge-neutral text-badge-neutral-fg"
+                          : "bg-badge-accent text-badge-accent-fg"
+                      }`}
                       title={
                         fileSkill
                           ? `${s.source} skill${s.projectName !== undefined ? ` (${s.projectName})` : ""} — read-only; edit the SKILL.md on disk`
@@ -651,14 +625,6 @@ function SkillsCard() {
                             ? "seeded by the engine — editable, not deletable"
                             : "created in this app"
                       }
-                      style={{
-                        background:
-                          s.source === "builtin" || fileSkill
-                            ? withAlpha(styles.text, 0.08)
-                            : withAlpha(styles.accent, 0.14),
-                        color:
-                          s.source === "builtin" || fileSkill ? styles.textTertiary : styles.accent,
-                      }}
                     >
                       {SOURCE_LABELS[s.source]}
                     </span>
@@ -667,10 +633,9 @@ function SkillsCard() {
                         word). */}
                     {s.alwaysLoad === true && (
                       <span
-                        className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
+                        className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0 bg-badge-accent text-badge-accent-fg"
                         title={ALWAYS_LOAD_HINT}
                         data-testid={`always-on-marker-${s.id}`}
-                        style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent }}
                       >
                         always-on
                       </span>
@@ -682,9 +647,10 @@ function SkillsCard() {
                         aria-label={`Delete skill ${s.name}`}
                         title="Delete skill"
                         /* R100-E2: the JS hover-red pair retired — the standard
-                           hover:bg-hover wash (TOKENS.md §6). */
+                           hover:bg-hover wash (TOKENS.md §6). R126-3f-3: the
+                           armed state rides the §11 danger-deep ink. */
                         className="w-6 h-6 grid place-items-center rounded-lg shrink-0 transition-colors hover:bg-hover cursor-pointer"
-                        style={{ color: confirming ? SEMANTIC_COLORS.danger : styles.textTertiary }}
+                        style={{ color: confirming ? styles.dangerDeep : styles.textTertiary }}
                       >
                         <Trash2 size={11} />
                       </button>
@@ -765,29 +731,22 @@ function SkillsCard() {
                       className="flex items-center gap-2 px-3 pb-2 pl-9 flex-wrap"
                       data-testid={`confirm-delete-${s.id}`}
                     >
-                      <span
-                        className="text-[11px] font-medium"
-                        style={{ color: SEMANTIC_COLORS.danger }}
-                      >
+                      <span className="text-[11px] font-medium text-danger-deep">
                         Delete “{s.name}”?
                       </span>
                       <button
                         onClick={() => remove.mutate(s.id)}
                         disabled={remove.isPending}
                         aria-label={`Confirm delete skill ${s.name}`}
-                        className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 disabled:opacity-50"
-                        style={{
-                          background: withAlpha(SEMANTIC_COLORS.danger, 0.12),
-                          color: SEMANTIC_COLORS.danger,
-                        }}
+                        /* R126-3f-3: the outlined danger action. */
+                        className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 border border-danger-deep text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-50"
                       >
                         {remove.isPending ? "Deleting…" : "Delete"}
                       </button>
                       <button
                         onClick={() => setConfirmDeleteId(null)}
                         aria-label={`Cancel delete skill ${s.name}`}
-                        className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0"
-                        style={{ background: styles.subtle, color: styles.textSecondary }}
+                        className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 border border-clay-rim bg-card text-muted transition-colors duration-100 hover:bg-hover"
                       >
                         Cancel
                       </button>
@@ -795,8 +754,7 @@ function SkillsCard() {
                   )}
                   {rowErrors[s.id] && (
                     <p
-                      className="px-3 pb-2 pl-9 text-[11px] font-medium"
-                      style={{ color: SEMANTIC_COLORS.danger }}
+                      className="px-3 pb-2 pl-9 text-[11px] font-medium text-danger-deep"
                       role="alert"
                       data-testid={`row-error-${s.id}`}
                     >
@@ -820,8 +778,9 @@ function SkillsCard() {
               listing. Collapsible; refreshes with every refetch. */}
           {showPreview && (
             <div
-              className="rounded-lg border-[1.5px] p-2.5"
-              style={{ borderColor: styles.border }}
+              /* R126-3f-3: the preview = the rim container; the mono body
+               * rides .ac-mono-block + text-mono-ink (TOKENS §10). */
+              className="rounded-lg border border-clay-rim p-2.5"
               data-testid="skills-section-preview"
             >
               <div
@@ -831,8 +790,7 @@ function SkillsCard() {
                 The composed SKILLS section
               </div>
               <pre
-                className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed"
-                style={{ background: styles.subtle, color: styles.textSecondary }}
+                className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed ac-mono-block text-mono-ink"
               >
                 {composeSkillsSectionPreview(skills)}
               </pre>

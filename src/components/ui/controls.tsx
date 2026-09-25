@@ -1,10 +1,30 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { useThemeStyles } from "../../lib/use-theme-styles";
 import { cn } from "../../lib/utils";
 
 /**
- * Small control kit in the demo's visual language (1.5px borders, 8px radii,
- * 11–12px semitransparent labels). Deliberately not a shadcn snapshot — just
- * the primitives the current screens need.
+ * Small control kit for the settings surfaces. Deliberately not a shadcn
+ * snapshot — just the primitives the current screens need.
+ *
+ * ROUND-126 (R126-3f-1): the Button's PRIMARY variant is the quiet-solid
+ * clay species (COMPONENTS §4 / TOKENS §1d) — `bg-accent-deep` fill with
+ * the `accentText` ink pair on the JS leg (`styles.accentText` — the
+ * documented route: `text-accent-text` is a phantom utility, the @theme leg
+ * never gained `--color-accent-text`). The gradient-ish hover (brightness
+ * + scale fidget) died with the bento grammar: hover is nothing, press is
+ * the house `active:scale-[0.98]`. `inputClass` rides THE WELL + rim
+ * (TOKENS §10): `bg-well` fill + the 1px `border-clay-rim` hairline, the
+ * accent focus edge kept.
+ *
+ * ROUND-126 (R126-3h, the flagged-debt ledger — 3f-1's caveat): the
+ * OUTLINE/DANGER variants + Badge join the grammar. OUTLINE = the outlined
+ * secondary species (1px `border-line-strong` + `text-muted`, TOKENS §5/§1a
+ * — the 1.5px `border-line` card-border spelling dies). DANGER = the
+ * OUTLINED-danger species (1px `border-danger-deep` + `text-danger-deep` on
+ * transparent, the composer Stop spelling — the red-500 wash fill dies).
+ * Badge's default tone = the §11 NEUTRAL pair; the accent tone = the §11
+ * ACCENT pair (`bg-badge-accent` + `text-badge-accent-fg` — the
+ * accent-soft/accent flat-hue pair dies).
  */
 
 type ButtonVariant = "primary" | "outline" | "ghost" | "danger";
@@ -12,21 +32,30 @@ type ButtonVariant = "primary" | "outline" | "ghost" | "danger";
 export function Button({
   variant = "outline",
   className,
+  style,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }) {
+  const styles = useThemeStyles();
   return (
     <button
       className={cn(
         "inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold",
-        "transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100",
+        "transition-colors duration-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50",
         {
-          primary: "bg-accent text-white shadow-sm hover:brightness-110",
-          outline: "border-[1.5px] border-line bg-card text-ink hover:bg-hover",
+          // R126: quiet-solid clay — the deep-tier fill + the accentText
+          // ink pair (JS leg below). No glow, no scale hover.
+          primary: "bg-accent-deep",
+          // R126-3h: the outlined SECONDARY species — 1px border-strong +
+          // text-secondary ink (the 1.5px border-line card spelling dies).
+          outline: "border border-line-strong bg-card text-muted hover:bg-hover hover:text-ink",
           ghost: "text-muted hover:bg-hover hover:text-ink",
-          danger: "border-[1.5px] border-transparent bg-red-500/10 text-red-500 hover:bg-red-500/20",
+          // R126-3h: the OUTLINED-danger species — 1px border-danger-deep +
+          // danger-deep ink on transparent (the red-500 wash fill dies).
+          danger: "border border-danger-deep text-danger-deep hover:bg-badge-danger",
         }[variant],
         className,
       )}
+      style={variant === "primary" ? { color: styles.accentText, ...style } : style}
       {...props}
     />
   );
@@ -56,7 +85,9 @@ export function Field({
 }
 
 export const inputClass = cn(
-  "w-full rounded-lg border-[1.5px] border-line bg-input px-2.5 py-2 text-[13px] text-ink",
+  // R126: THE WELL + rim (TOKENS §10) — inputs are recesses, one step down
+  // from the card; the accent focus edge survives the conversion.
+  "w-full rounded-lg border border-clay-rim bg-well px-2.5 py-2 text-[13px] text-ink",
   "outline-none transition-colors placeholder:text-muted/70 focus:border-accent",
 );
 
@@ -73,7 +104,11 @@ export function Badge({
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
-        tone === "accent" ? "bg-accent-soft text-accent" : "bg-hover text-muted",
+        // R126-3h (TOKENS §11): both tones ride the badge-tone pairs — the
+        // neutral container + secondary ink (was bg-hover/text-muted) and
+        // the accent container + its own fg ink (was the flat accent-soft/
+        // accent pair).
+        tone === "accent" ? "bg-badge-accent text-badge-accent-fg" : "bg-badge-neutral text-badge-neutral-fg",
         className,
       )}
     >

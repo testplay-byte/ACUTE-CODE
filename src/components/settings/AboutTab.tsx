@@ -140,12 +140,10 @@ import {
   useUpdateCheckerStore,
 } from "../../lib/update-checker";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { ToggleSwitch } from "../ui/toggle-switch";
 // R100-E2: the round-100 primitives (USAGE.md §3).
 import { Kicker } from "../ui/Kicker";
 import { SectionCard } from "../ui/SectionCard";
-import { bdr, withAlpha } from "../dashboard/helpers";
 
 const RELEASES_URL = "https://github.com/testplay-byte/ACUTE-CODE/releases";
 
@@ -299,10 +297,7 @@ function StagedDownloadRow({
   const styles = useThemeStyles();
   return (
     <div className="flex flex-col gap-2" data-testid="update-staged">
-      <span
-        className="text-[11px] font-medium flex items-center gap-1.5"
-        style={{ color: SEMANTIC_COLORS.success }}
-      >
+      <span className="text-[11px] font-medium flex items-center gap-1.5 text-success-deep">
         <CheckCircle2 size={13} /> Downloaded and verified — v{version} is ready to install
       </span>
       <div className="flex items-center gap-2 flex-wrap">
@@ -310,8 +305,11 @@ function StagedDownloadRow({
           type="button"
           onClick={onInstall}
           title="Installs the verified update and restarts the app — your data is kept; nothing happens until you click this"
-          className="h-9 px-4 rounded-full text-[11px] font-semibold transition-all active:scale-95 inline-flex items-center gap-1.5 self-start"
-          style={{ background: styles.accent, color: styles.accentText }}
+          /* R126-3f-3: the quiet-solid primary (bg-accent-deep + the
+           * accentText ink pair on the JS leg — TOKENS §1d) with the
+           * ac-clay-pressed press collapse. */
+          className="ac-clay-pressed h-9 px-4 rounded-lg text-[11px] font-semibold transition-transform active:scale-[0.98] inline-flex items-center gap-1.5 self-start bg-accent-deep"
+          style={{ color: styles.accentText }}
           data-testid="update-install-button"
         >
           <PackageOpen size={13} /> Restart and update now
@@ -322,8 +320,9 @@ function StagedDownloadRow({
           type="button"
           onClick={onDiscard}
           title="Deletes the downloaded update file and returns to idle — nothing is installed"
-          className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 self-start"
-          style={{ borderColor: bdr("1.5px", styles.border), color: styles.textSecondary }}
+          /* R126-3f-3: the outlined secondary (border-line-strong), hover
+           * as a CSS class. */
+          className="h-9 px-4 rounded-lg text-[11px] font-semibold border border-line-strong text-muted transition-colors duration-100 hover:bg-subtle hover:text-ink active:scale-[0.98] self-start"
           data-testid="update-discard-button"
         >
           Discard download
@@ -835,8 +834,10 @@ function VersionCard() {
             type="button"
             onClick={() => void checkForUpdates()}
             disabled={update.kind === "checking"}
-            className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 disabled:opacity-60 inline-flex items-center gap-1.5"
-            style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
+            /* R126-3f-3: the accent-tint action spelling (bg-accent-tint +
+             * text-accent-deep — the 3f-2 addable-tier button; the
+             * withAlpha(accent) outline + rounded-full pill are retired). */
+            className="h-9 px-4 rounded-lg text-[11px] font-semibold bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-60 inline-flex items-center gap-1.5"
             data-testid="update-check-button"
           >
             {/* R123 (the processing-animation round): the checking state
@@ -863,8 +864,7 @@ function VersionCard() {
             type="button"
             onClick={() => void openReleasesPage()}
             title="The releases page in your device's browser"
-            className="h-9 px-3.5 rounded-full text-[11px] font-semibold border-[1.5px] flex items-center gap-1.5 transition-colors hover:opacity-80"
-            style={{ borderColor: bdr("1.5px", styles.border), color: styles.textSecondary }}
+            className="h-9 px-3.5 rounded-lg text-[11px] font-semibold border border-line-strong text-muted flex items-center gap-1.5 transition-colors duration-100 hover:bg-subtle hover:text-ink active:scale-[0.98]"
             aria-label="Open the releases page in your device's browser"
             data-testid="about-releases-button"
           >
@@ -875,8 +875,7 @@ function VersionCard() {
       <div className="mt-3 min-h-5">
         {update.kind === "current" ? (
           <span
-            className="text-[11px] font-medium flex items-center gap-1.5"
-            style={{ color: SEMANTIC_COLORS.success }}
+            className="text-[11px] font-medium flex items-center gap-1.5 text-success-deep"
             data-testid="update-state"
           >
             <CheckCircle2 size={13} /> Up to date — v{APP_VERSION} is the latest published release
@@ -884,7 +883,7 @@ function VersionCard() {
         ) : update.kind === "available" ? (
           <div className="flex flex-col gap-2.5" data-testid="update-state">
             <div className="flex items-baseline gap-2 flex-wrap">
-              <span className="text-[11px] font-medium flex items-center gap-1.5" style={{ color: styles.accent }}>
+              <span className="text-[11px] font-medium flex items-center gap-1.5 text-accent-deep">
                 <Download size={13} /> Update available — v{update.latest}
               </span>
               <span className="font-mono text-[11px] tabular-nums" style={{ color: styles.textTertiary }}>
@@ -896,15 +895,15 @@ function VersionCard() {
                 chevron; the route already capped + honestly marked it. */}
             {update.body !== "" && (
               <div
-                className="rounded-xl border-[1.5px] overflow-hidden"
-                style={{ borderColor: bdr("1.5px", styles.border), background: styles.subtle }}
+                /* R126-3f-3: the disclosure panel = THE WELL (TOKENS §10). */
+                className="rounded-xl border border-clay-rim bg-well overflow-hidden"
               >
                 <button
                   type="button"
                   onClick={() => setNotesExpanded((v) => !v)}
                   aria-expanded={notesExpanded}
                   data-testid="update-notes-toggle"
-                  className="w-full h-9 px-3 flex items-center justify-between gap-2 text-[11px] font-semibold transition-colors hover:opacity-80"
+                  className="w-full h-9 px-3 flex items-center justify-between gap-2 text-[11px] font-semibold transition-colors duration-100 hover:bg-hover"
                   style={{ color: styles.textSecondary }}
                 >
                   What's new
@@ -950,8 +949,8 @@ function VersionCard() {
                       ? "This release has no updater asset for this platform — use the Releases page"
                       : "Downloads the update and verifies its checksum — installing waits for your confirmation"
                   }
-                  className="h-9 px-4 rounded-full text-[11px] font-semibold transition-all active:scale-95 disabled:opacity-50 inline-flex items-center gap-1.5 self-start"
-                  style={{ background: styles.accent, color: styles.accentText }}
+                  className="ac-clay-pressed h-9 px-4 rounded-lg text-[11px] font-semibold transition-transform active:scale-[0.98] disabled:opacity-50 inline-flex items-center gap-1.5 self-start bg-accent-deep"
+                  style={{ color: styles.accentText }}
                   data-testid="update-download-button"
                 >
                   <Download size={13} /> Download update
@@ -963,14 +962,12 @@ function VersionCard() {
                       indeterminate percentage). */}
                   {install.total > 0 && (
                     <div
-                      className="flex-1 h-1.5 rounded-full overflow-hidden"
-                      style={{ background: withAlpha(styles.text, styles.isDark ? 0.08 : 0.06) }}
+                      className="flex-1 h-1.5 rounded-full overflow-hidden bg-well"
                     >
                       <div
-                        className="h-full rounded-full transition-[width] duration-300"
+                        className="h-full rounded-full transition-[width] duration-300 bg-accent-deep"
                         style={{
                           width: `${Math.min(100, (install.received / install.total) * 100)}%`,
-                          background: styles.accent,
                         }}
                       />
                     </div>
@@ -990,14 +987,14 @@ function VersionCard() {
                    The bar is honestly indeterminate (the sha256 has no
                    progress metric); motion-reduce renders it static. */
                 <div className="flex items-center gap-2.5 max-w-[420px]" data-testid="update-verifying">
-                  <Loader2 size={13} className="animate-spin shrink-0" style={{ color: styles.accent }} />
+                  <Loader2 size={13} className="animate-spin shrink-0 text-accent-deep" />
                   <div
-                    className="flex-1 h-1.5 rounded-full overflow-hidden motion-reduce:animate-none animate-pulse"
-                    style={{ background: withAlpha(styles.text, styles.isDark ? 0.08 : 0.06) }}
+                    className="flex-1 h-1.5 rounded-full overflow-hidden motion-reduce:animate-none animate-pulse bg-well"
                   >
                     <div
-                      className="h-full w-full rounded-full"
-                      style={{ background: withAlpha(styles.accent, 0.45) }}
+                      /* R126-3f-3: the accent marker tier — the honest
+                       * indeterminate pulse (chart-mass hue, TOKENS §1d). */
+                      className="h-full w-full rounded-full bg-accent"
                     />
                   </div>
                   <span className="text-[11px] font-medium shrink-0" style={{ color: styles.textSecondary }}>
@@ -1023,7 +1020,7 @@ function VersionCard() {
             )}
           </div>
         ) : update.kind === "error" ? (
-          <span className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} data-testid="update-state">
+          <span className="text-[11px] text-danger-deep" data-testid="update-state">
             Could not check for updates ({update.message}) — the Releases page always has the latest.
           </span>
         ) : null}
@@ -1032,8 +1029,7 @@ function VersionCard() {
             the row below (which renders — a token IS saved). */}
         {tokenWarning !== null && (
           <span
-            className="mt-1 text-[11px] flex items-center gap-1.5"
-            style={{ color: SEMANTIC_COLORS.warning }}
+            className="mt-1 text-[11px] flex items-center gap-1.5 text-warning-deep"
             data-testid="update-token-warning"
           >
             <KeyRound size={12} /> The saved GitHub token was rejected — replace it below, or remove it to keep checking anonymously.
@@ -1058,15 +1054,14 @@ function VersionCard() {
                 style={{ color: styles.textSecondary }}
                 data-testid="update-installing"
               >
-                <Loader2 size={13} className="animate-spin" style={{ color: styles.accent }} />
+                <Loader2 size={13} className="animate-spin text-accent-deep" />
                 {install.silent
                   ? "Installing — the app restarts itself when ready"
                   : "Launching the setup wizard — it closes this app and takes over"}
               </span>
             ) : install.kind === "launched" ? (
               <span
-                className="text-[11px] font-semibold"
-                style={{ color: SEMANTIC_COLORS.success }}
+                className="text-[11px] font-semibold text-success-deep"
                 data-testid="update-launched"
               >
                 {install.silent
@@ -1076,8 +1071,7 @@ function VersionCard() {
             ) : (
               <div className="flex flex-col gap-2">
                 <span
-                  className="text-[11px]"
-                  style={{ color: SEMANTIC_COLORS.danger }}
+                  className="text-[11px] text-danger-deep"
                   role="alert"
                   data-testid="update-flow-error"
                 >
@@ -1095,8 +1089,7 @@ function VersionCard() {
                     type="button"
                     onClick={() => void installUpdate(false)}
                     title="Runs the downloaded installer with the interactive setup wizard — the pre-R99 flow, for machines where the silent install refuses"
-                    className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 self-start"
-                    style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
+                    className="h-9 px-4 rounded-lg text-[11px] font-semibold bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] self-start"
                     data-testid="update-wizard-fallback"
                   >
                     Run the setup wizard manually
@@ -1125,8 +1118,7 @@ function VersionCard() {
           (default ON). The quiet-row grammar: plain label + the shared
           contrast-aware switch, one hairline separator above. */}
       <div
-        className="mt-4 pt-3 border-t-[1.5px] flex items-center justify-between gap-4"
-        style={{ borderColor: bdr("1.5px", styles.border) }}
+        className="mt-4 pt-3 border-t border-line flex items-center justify-between gap-4"
       >
         <span className="text-[11px]" style={{ color: styles.textSecondary }}>
           Check for updates automatically
@@ -1154,8 +1146,7 @@ function VersionCard() {
           rejected / the anonymous check rate-limited. */}
       {tokenRowVisible ? (
       <div
-        className="mt-2 pt-2 border-t-[1.5px] flex flex-col gap-2"
-        style={{ borderColor: bdr("1.5px", styles.border) }}
+        className="mt-2 pt-2 border-t border-line flex flex-col gap-2"
       >
         <button
           type="button"
@@ -1187,16 +1178,14 @@ function VersionCard() {
               </span>
             ) : tokenStatus.valid === true ? (
               <span
-                className="text-[11px] flex items-center gap-1.5"
-                style={{ color: SEMANTIC_COLORS.success }}
+                className="text-[11px] flex items-center gap-1.5 text-success-deep"
                 data-testid="update-token-health"
               >
                 <CheckCircle2 size={12} /> A GitHub token is saved and GitHub accepts it.
               </span>
             ) : tokenStatus.valid === false ? (
               <span
-                className="text-[11px] flex items-center gap-1.5"
-                style={{ color: SEMANTIC_COLORS.warning }}
+                className="text-[11px] flex items-center gap-1.5 text-warning-deep"
                 data-testid="update-token-health"
               >
                 <KeyRound size={12} /> A GitHub token is saved but GitHub rejected it — replace it below, or remove it to run anonymously.
@@ -1225,12 +1214,9 @@ function VersionCard() {
                 placeholder="github_pat_… or ghp_…"
                 autoComplete="off"
                 spellCheck={false}
-                className="h-9 w-[280px] rounded-full border-[1.5px] px-4 text-[11px] font-mono outline-none"
-                style={{
-                  borderColor: bdr("1.5px", styles.border),
-                  background: withAlpha(styles.text, styles.isDark ? 0.3 : 0.03),
-                  color: styles.text,
-                }}
+                /* R126-3f-3: THE WELL + rim (TOKENS §10) — the withAlpha
+                 * text-wash input fill is retired. */
+                className="h-9 w-[280px] rounded-lg border border-clay-rim bg-well px-4 text-[11px] font-mono text-ink outline-none"
                 aria-label="The optional GitHub token for update checks"
                 data-testid="update-token-input"
               />
@@ -1239,8 +1225,7 @@ function VersionCard() {
                 onClick={() => void saveToken()}
                 disabled={tokenSaving || tokenRemoving || tokenInput.trim() === ""}
                 title="Validates the token against the repository, saves it to ~/.acute/github.pat, and re-runs the update check"
-                className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 disabled:opacity-40"
-                style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
+                className="h-9 px-4 rounded-lg text-[11px] font-semibold bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-40"
                 data-testid="update-token-save"
               >
                 {tokenSaving ? "Saving…" : "Save token"}
@@ -1257,8 +1242,7 @@ function VersionCard() {
                   onClick={() => void removeToken()}
                   disabled={tokenSaving || tokenRemoving}
                   title="Removes the saved GitHub token (~/.acute/github.pat) — update checks and downloads return to anonymous, which needs no token for this public repository"
-                  className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 disabled:opacity-40 inline-flex items-center gap-1.5"
-                  style={{ borderColor: bdr("1.5px", styles.border), color: styles.textSecondary }}
+                  className="h-9 px-4 rounded-lg text-[11px] font-semibold border border-line-strong text-muted transition-colors duration-100 hover:bg-subtle hover:text-ink active:scale-[0.98] disabled:opacity-40 inline-flex items-center gap-1.5"
                   data-testid="update-token-remove"
                 >
                   <Trash2 size={13} /> {tokenRemoving ? "Removing…" : "Remove token"}
@@ -1275,8 +1259,7 @@ function VersionCard() {
           readable below the retired footer. */}
       {tokenError !== null ? (
         <span
-          className="mt-2 text-[11px]"
-          style={{ color: SEMANTIC_COLORS.danger }}
+          className="mt-2 text-[11px] text-danger-deep"
           role="alert"
           data-testid="update-token-error"
         >
@@ -1285,8 +1268,7 @@ function VersionCard() {
       ) : null}
       {tokenSavedNote !== null ? (
         <span
-          className="mt-2 text-[11px]"
-          style={{ color: SEMANTIC_COLORS.success }}
+          className="mt-2 text-[11px] text-success-deep"
           data-testid="update-token-saved"
         >
           {tokenSavedNote}
@@ -1315,7 +1297,7 @@ function AboutCard() {
     /* R100-E2: the SectionCard primitive. */
     <SectionCard ariaLabel="About" shadow>
       <div className="flex items-center gap-2 mb-3">
-        <Info size={13} style={{ color: styles.accent }} />
+        <Info size={13} className="text-accent-deep" />
         <Kicker>About</Kicker>
       </div>
       <dl className="flex flex-col gap-2">
@@ -1372,25 +1354,21 @@ function ResetCard() {
   };
 
   return (
-    /* R100-E2: the DANGER-zone card keeps its custom danger border + wash
-       (the danger-zone grammar stays; research §C2 P1) — only the radius
-       snapped rounded-2xl and the type to the ladder. */
+    /* R126-3f-3: the danger zone speaks the DOCUMENTED §6 law (COMPONENTS
+     * §6): a LAST, quiet red-OUTLINED box — the 1.5px danger outline at 40%
+     * (border-danger-deep/40), NO filled background (the pre-R126 wash
+     * fill is retired), NO shadow; the danger-tinted label-caps micro-header
+     * + description-left / red-action-button-right row. */
     <section
-      className="rounded-2xl border-[1.5px] p-5"
-      style={{
-        borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.5),
-        background: withAlpha(SEMANTIC_COLORS.danger, styles.isDark ? 0.06 : 0.03),
-      }}
+      className="rounded-2xl border-[1.5px] border-danger-deep/40 p-5"
       aria-label="Reset application"
     >
       <div className="flex items-center gap-2 mb-2">
-        <ShieldAlert size={13} style={{ color: SEMANTIC_COLORS.danger }} />
+        <ShieldAlert size={13} className="text-danger-deep" />
         {/* R100-E2: the kicker spelling (11px/500/[0.08em]) with the danger
-            ink — the Kicker tier, the one sanctioned weight. */}
-        <span
-          className="text-[11px] font-medium uppercase tracking-[0.08em]"
-          style={{ color: SEMANTIC_COLORS.danger }}
-        >
+            ink — the Kicker tier, the one sanctioned weight. R126-3f-3: the
+            deep pair on the class leg (§11). */}
+        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-danger-deep">
           Danger zone
         </span>
       </div>
@@ -1409,12 +1387,11 @@ function ResetCard() {
           onChange={(e) => setConfirmText(e.target.value)}
           disabled={resetting}
           placeholder='Type "RESET" to confirm'
-          className="h-9 w-[200px] rounded-full border-[1.5px] px-4 text-[11px] outline-none"
-          style={{
-            borderColor: armed ? withAlpha(SEMANTIC_COLORS.danger, 0.7) : bdr("1.5px", styles.border),
-            background: withAlpha(styles.text, styles.isDark ? 0.3 : 0.03),
-            color: styles.text,
-          }}
+          /* R126-3f-3: THE WELL + rim; the armed state swaps the rim for
+           * the danger outline (the §6 red-action affordance). */
+          className={`h-9 w-[200px] rounded-lg border px-4 text-[11px] bg-well text-ink outline-none ${
+            armed ? "border-danger-deep" : "border-clay-rim"
+          }`}
           aria-label="Type RESET to confirm the application reset"
           data-testid="reset-confirm-input"
         />
@@ -1422,15 +1399,19 @@ function ResetCard() {
           type="button"
           onClick={() => void runReset()}
           disabled={!armed || resetting}
-          className="h-9 px-4 rounded-full text-[11px] font-semibold transition-all active:scale-95 disabled:opacity-40"
-          style={{ background: SEMANTIC_COLORS.danger, color: "#fff" }}
+          /* R126-3f-3: the destructive-confirm solid (COMPONENTS §4's ONE
+           * sanctioned solid danger fill): bg-danger-deep + the mobile
+           * confirm ink pair (white light / the warm clay ink dark — the
+           * §11 pair values on the JS leg). */
+          className="h-9 px-4 rounded-lg text-[11px] font-semibold bg-danger-deep transition-transform active:scale-[0.98] disabled:opacity-40"
+          style={{ color: styles.isDark ? "#211B16" : "#FFFFFF" }}
           data-testid="reset-confirm-button"
         >
           {resetting ? "Resetting…" : "Reset everything"}
         </button>
       </div>
       {error !== null ? (
-        <p className="mt-2 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+        <p className="mt-2 text-[11px] text-danger-deep" role="alert">
           Reset failed: {error}
         </p>
       ) : null}

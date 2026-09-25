@@ -3,7 +3,9 @@ import { CalendarDays } from "lucide-react";
 import type { ThemeStyles } from "../../lib/themes";
 import type { UsageStatsDayBucket } from "../../lib/api";
 import { withAlpha } from "../dashboard/helpers";
-import { formatCompactTokens } from "./usage-helpers";
+import { Kicker } from "../ui/Kicker";
+import { formatCompactTokens, CLAY_CARD } from "./usage-helpers";
+import { cn } from "../../lib/utils";
 
 /**
  * ROUND-98 (R98-I2, owner: "the 12-month token-activity heatmap"): the
@@ -30,6 +32,12 @@ import { formatCompactTokens } from "./usage-helpers";
  * 10px floor, and the card rides the 16px radius step (rounded-2xl). The
  * accent intensity ladder (the owner-approved GitHub-style palette) is
  * untouched.
+ *
+ * R126-3b (the Clay Companion redesign): a MATERIAL pass only — the card
+ * rides the clay recipe (rim + `.ac-clay`, via the shared CLAY_CARD
+ * spelling) and the header rides the Kicker primitive; the accent-alpha
+ * intensity ladder is the owner-approved §6 grammar and stays EXACTLY as
+ * documented (the heatmap is accent-only by R98-I2 design).
  */
 
 const CELL = 10;
@@ -63,7 +71,7 @@ export function UsageHeatmap({
   days: UsageStatsDayBucket[];
   styles: ThemeStyles;
 }) {
-  const { card, border, text, textSecondary, textTertiary, accent, softShadow, isDark } = styles;
+  const { text, textSecondary, textTertiary, accent, isDark } = styles;
 
   const layout = useMemo(() => {
     if (days.length === 0) return null;
@@ -114,8 +122,7 @@ export function UsageHeatmap({
   return (
     <div
       data-testid="usage-heatmap"
-      className="flex min-h-[184px] flex-col rounded-2xl border-[1.5px] p-4 md:min-h-[192px] md:p-5"
-      style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
+      className={cn(CLAY_CARD, "flex min-h-[184px] flex-col p-4 md:min-h-[192px] md:p-5")}
       aria-label={
         layout === null
           ? "Token activity heatmap"
@@ -123,15 +130,9 @@ export function UsageHeatmap({
       }
     >
       <div className="mb-4 flex shrink-0 items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <CalendarDays size={13} style={{ color: accent, opacity: 0.7 }} />
-          <span
-            className="truncate text-[11px] font-medium uppercase leading-none tracking-[0.08em] tabular-nums"
-            style={{ color: textTertiary }}
-          >
-            Token Activity · {days.length} {days.length === 1 ? "day" : "days"}
-          </span>
-        </div>
+        <Kicker icon={CalendarDays} className="truncate tabular-nums">
+          Token Activity · {days.length} {days.length === 1 ? "day" : "days"}
+        </Kicker>
         <span className="shrink-0 text-[11px] font-medium leading-none tabular-nums" style={{ color: textSecondary }}>
           {layout === null ? "…" : `${layout.totalTokens.toLocaleString()} total`}
         </span>
@@ -141,9 +142,6 @@ export function UsageHeatmap({
         <div className="flex flex-1 flex-col items-center justify-center gap-1 text-center">
           <p className="text-[12px] font-semibold" style={{ color: text }}>
             No usage recorded yet
-          </p>
-          <p className="max-w-[240px] text-[11px]" style={{ color: textSecondary }}>
-            The heatmap fills in day by day once agents start making model calls.
           </p>
         </div>
       ) : (

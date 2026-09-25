@@ -36,9 +36,11 @@ import type { SubAgentLiveEntry, SubAgentLiveStep, SubAgentWatchInfo } from "../
 // ROUND-52 (R52-c): LiveOutputTail gives in-flight run_command rows the
 // same live terminal tail as the main chat's WorkingSection.
 import { LiveOutputTail, ThoughtRow } from "../project-chat/WorkingSection";
-// R98-C2: RUNNING_BLUE joins SEMANTIC_COLORS from the documented exception
-// home — one spelling across the chat + panel surfaces.
-import { RUNNING_BLUE, SEMANTIC_COLORS } from "../../lib/semantics";
+// R126-3e (THE de-blue): RUNNING_BLUE stays for DOTS ONLY (TOKENS §11's
+// dots-only law — the watch/live/todo/pulse dots); every status TEXT/chip
+// now rides the §11 deep/bright pairs or the badge-tone containers. The
+// flat SEMANTIC_COLORS import is retired from this file entirely.
+import { RUNNING_BLUE } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
 import { ease } from "../../lib/motion";
@@ -438,20 +440,21 @@ function WatchLine({ watch }: { watch: SubAgentWatchInfo }) {
   const styles = useThemeStyles();
   const activity =
     watch.lastActivity.length > 60 ? `${watch.lastActivity.slice(0, 60)}…` : watch.lastActivity;
-  const tone = watch.stalled ? AMBER : styles.textTertiary;
+  // R126-3e (§11): the stalled strip = the warning BADGE-TONE CONTAINER
+  // (bg-badge-warning + text-badge-warning-fg, ink inherited) — the
+  // withAlpha(AMBER) wash died; the running dot keeps the flat hue (the
+  // dots-only law).
   return (
     <div
-      className="shrink-0 flex items-center gap-1.5 px-2.5 h-6 border-b overflow-hidden"
-      style={{
-        borderColor: styles.borderSubtle,
-        ...(watch.stalled ? { background: withAlpha(AMBER, 0.07) } : {}),
-      }}
+      className={`shrink-0 flex items-center gap-1.5 px-2.5 h-6 border-b border-clay-rim overflow-hidden ${
+        watch.stalled ? "bg-badge-warning text-badge-warning-fg" : ""
+      }`}
       data-testid="subagent-watch-line"
       data-stalled={watch.stalled ? "true" : undefined}
       title={watch.lastActivity}
     >
       {watch.stalled ? (
-        <AlertTriangle size={10} className="shrink-0" style={{ color: AMBER }} aria-hidden />
+        <AlertTriangle size={10} className="shrink-0" aria-hidden />
       ) : (
         <span
           className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0"
@@ -459,14 +462,17 @@ function WatchLine({ watch }: { watch: SubAgentWatchInfo }) {
           aria-hidden
         />
       )}
-      <span className="min-w-0 flex-1 truncate font-mono text-[10px]" style={{ color: tone }}>
+      <span
+        className="min-w-0 flex-1 truncate font-mono text-[10px]"
+        style={watch.stalled ? undefined : { color: styles.textTertiary }}
+      >
         {watch.stalled
           ? `no activity for ${Math.round(watch.lastEventAgeMs / 1000)}s — supervisor watching`
           : activity}
       </span>
       <span
         className="shrink-0 font-mono text-[10px] tabular-nums"
-        style={{ color: tone }}
+        style={watch.stalled ? undefined : { color: styles.textTertiary }}
         data-testid="subagent-watch-stats"
       >
         · {Math.round(watch.elapsedMs / 1000)}s · {watch.toolCount} {watch.toolCount === 1 ? "tool" : "tools"} · ✓ {watch.todosDone}/
@@ -687,14 +693,17 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
   return (
     <div className="h-full flex flex-col min-h-0" data-testid="subagent-panel">
       {/* ── Panel header: code chip + role chip + title + clock + status ── */}
+      {/* R126-3e: the header strip = the in-flow chrome shade
+          (bg-header-surface + the clay-rim hairline); the chips speak the
+          §10/§11 class legs — code = the accent-tint marker chip, task id +
+          role = the NEUTRAL badge tone with the role color as a DOT (the
+          withAlpha fills died). */}
       <div
-        className="shrink-0 flex items-center gap-1.5 px-2.5 h-9 border-b"
-        style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle }}
+        className="shrink-0 flex items-center gap-1.5 px-2.5 h-9 border-b border-clay-rim bg-header-surface"
       >
         {code !== null ? (
           <span
-            className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md tracking-[0.08em]"
-            style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+            className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md tracking-[0.08em] bg-accent-tint text-accent-deep"
             title={`Sub-agent code ${code}`}
             data-testid="subagent-code-chip"
           >
@@ -703,18 +712,15 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
         ) : null}
         {taskId !== null ? (
           <span
-            className="shrink-0 font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded-md max-w-[120px] truncate"
-            style={{ background: withAlpha(styles.textTertiary, 0.12), color: styles.textSecondary }}
+            className="shrink-0 font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded-md max-w-[120px] truncate bg-badge-neutral text-badge-neutral-fg"
             title={`Background task id ${taskId} — delegate_task {"resume":"${taskId}"} collects it`}
             data-testid="subagent-taskid-chip"
           >
             {taskId}
           </span>
         ) : null}
-        <span
-          className="text-[10px] font-mono font-medium uppercase shrink-0 px-1.5 py-0.5 rounded-md"
-          style={{ color: roleColor, background: withAlpha(roleColor, 0.14) }}
-        >
+        <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium uppercase shrink-0 px-1.5 py-0.5 rounded-md bg-badge-neutral text-badge-neutral-fg">
+          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: roleColor }} aria-hidden />
           {role}
         </span>
         <div className="flex-1 min-w-0 truncate text-[12px] font-semibold" style={{ color: styles.text }} title={headerTitle}>
@@ -741,7 +747,7 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
             aria-label={`Stop sub-agent ${code ?? subAgentId}`}
             title={stopping ? "Stopping…" : "Stop this sub-agent (the parent turn continues)"}
             className="shrink-0 w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover disabled:opacity-50"
-            style={{ color: stopping ? SEMANTIC_COLORS.danger : styles.textTertiary }}
+            style={{ color: stopping ? styles.dangerDeep : styles.textTertiary }}
             data-testid="subagent-stop-button"
           >
             <Square size={10} fill="currentColor" strokeWidth={0} aria-hidden />
@@ -758,16 +764,15 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
       {isWorking && liveEntry?.watch !== undefined ? <WatchLine watch={liveEntry.watch} /> : null}
       {liveEntry?.detail !== undefined ? (
         <div
-          className="shrink-0 flex items-center gap-1.5 px-2.5 h-6 border-b overflow-hidden"
-          style={{
-            borderColor: styles.borderSubtle,
-            background: withAlpha(SEMANTIC_COLORS.danger, 0.05),
-          }}
+          // R126-3e (§11): the terminal detail strip = the danger badge-tone
+          // container (bg-badge-danger + text-badge-danger-fg, ink inherited) —
+          // the withAlpha(danger) wash + the flat danger icon died.
+          className="shrink-0 flex items-center gap-1.5 px-2.5 h-6 border-b border-clay-rim overflow-hidden bg-badge-danger text-badge-danger-fg"
           data-testid="subagent-status-detail"
           title={liveEntry.detail}
         >
-          <CircleAlert size={10} className="shrink-0" style={{ color: SEMANTIC_COLORS.danger }} />
-          <span className="min-w-0 flex-1 truncate font-mono text-[10px]" style={{ color: styles.textSecondary }}>
+          <CircleAlert size={10} className="shrink-0" />
+          <span className="min-w-0 flex-1 truncate font-mono text-[10px]">
             {liveEntry.detail}
           </span>
         </div>
@@ -783,20 +788,22 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
               <span className="text-[11px]">Loading sub-agent…</span>
             </div>
           ) : loadError ? (
+            // R126-3e (§11): the load-error card = the danger badge-tone
+            // container + the OUTLINED-danger Retry species (1px
+            // border-danger-deep + text-danger-deep) — the exact grammar the
+            // 3a/3b/3c waves shipped; the withAlpha washes died.
             <div
-              className="rounded-xl px-3 py-3 flex flex-col gap-2"
-              style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.08), border: `1px solid ${withAlpha(SEMANTIC_COLORS.danger, 0.3)}` }}
+              className="rounded-xl px-3 py-3 flex flex-col gap-2 bg-badge-danger text-badge-danger-fg"
             >
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold">
                 <AlertTriangle size={12} /> Couldn&apos;t load this sub-agent
               </div>
-              <div className="text-[11px]" style={{ color: styles.textSecondary }}>
+              <div className="text-[11px]">
                 {detailQuery.error instanceof Error ? detailQuery.error.message : "The sidecar didn't answer."}
               </div>
               <button
                 onClick={() => void detailQuery.refetch()}
-                className="self-start h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5"
-                style={{ background: styles.card, color: styles.text, border: `1px solid ${styles.border}` }}
+                className="self-start h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5 border border-danger-deep text-danger-deep transition-transform duration-100 active:scale-[0.98]"
               >
                 <RefreshCw size={10} /> Try again
               </button>
@@ -813,24 +820,20 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -6 }}
                     transition={{ duration: 0.25, ease }}
-                    className="rounded-xl px-3 py-2.5 flex flex-col gap-2"
-                    style={{
-                      background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-                      border: `1px solid ${withAlpha(SEMANTIC_COLORS.danger, 0.35)}`,
-                    }}
+                    className="rounded-xl px-3 py-2.5 flex flex-col gap-2 bg-badge-danger text-badge-danger-fg"
                     role="alert"
                     data-testid="subagent-failed-banner"
                   >
-                    <div className="flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+                    <div className="flex items-center gap-1.5 text-[11px] font-semibold">
                       <AlertTriangle size={12} /> Sub-agent failed
                     </div>
                     {failureReason !== null ? (
-                      <div className="font-mono text-[10px] leading-[1.5] break-words" style={{ color: styles.textSecondary }}>
+                      <div className="font-mono text-[10px] leading-[1.5] break-words">
                         {failureReason}
                       </div>
                     ) : null}
                     {retryError !== null ? (
-                      <div className="text-[10px]" style={{ color: SEMANTIC_COLORS.danger }}>
+                      <div className="text-[10px]">
                         {retryError}
                       </div>
                     ) : null}
@@ -838,16 +841,15 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
                       onClick={() => void doRetry()}
                       disabled={retrying || parentSessionId === null}
                       aria-label="Retry sub-agent"
-                      className="self-start h-7 px-3 rounded-full text-[11px] font-semibold inline-flex items-center gap-1.5 transition-transform active:scale-95 disabled:opacity-60"
-                      style={{
-                        background: SEMANTIC_COLORS.danger,
-                        color: "#fff",
-                      }}
+                      // R126-3e (§4): the Retry = the OUTLINED danger species
+                      // (1px border-danger-deep + text-danger-deep + the
+                      // 0.98 press) — the solid danger fill + white ink died.
+                      className="self-start h-7 px-3 rounded-full text-[11px] font-semibold inline-flex items-center gap-1.5 border border-danger-deep text-danger-deep transition-transform duration-100 active:scale-[0.98] disabled:opacity-60"
                     >
                       <RefreshCw size={11} className={retrying ? "animate-spin" : ""} />
                       {retrying ? "Retrying…" : "Retry"}
                     </button>
-                    <div className="text-[10px]" style={{ color: styles.textTertiary }}>
+                    <div className="text-[10px]">
                       Retry resumes from the last completed step in the event log.
                     </div>
                   </motion.div>
@@ -924,19 +926,23 @@ export function SubAgentPanel({ tab }: { tab: RightSidebarTab }) {
   );
 }
 
-/** The delegation prompt — the main chat's user-bubble language (R38's calm
- * accent-tinted bubble), scaled for the sidebar. R100-G: the R100-D
- * user-message translation — uniform 12px radius (the br-[4px] tail is
- * deleted) + 400 weight prose. */
+/** The delegation prompt — the main chat's user-bubble language, scaled for
+ * the sidebar. R100-G: the R100-D user-message translation — uniform 12px
+ * radius + 400 weight prose. R126-3e: the fill = the chat's OWN mobile
+ * recipe on the color-mix CLASS leg (mix(card, accent, 0.16)) + the 0.34
+ * edge on the JS withAlpha leg — the exact AgentChatPanel UserMessage
+ * spelling, one bubble material across both surfaces. */
 function TaskBubble({ content }: { content: string }) {
   const styles = useThemeStyles();
-  const bubbleBg = withAlpha(styles.accent, styles.isDark ? 0.18 : 0.1);
-  const bubbleBorder = withAlpha(styles.accent, styles.isDark ? 0.32 : 0.22);
+  // The shell wave's arbitrary-utility spelling — survives every renderer,
+  // unlike an inline color-mix style (the 3d-2 lesson).
+  const bubbleFillClass = "bg-[color-mix(in_srgb,var(--ac-card)_84%,var(--ac-accent))]";
+  const bubbleBorder = withAlpha(styles.accent, 0.34);
   return (
     <div className="flex justify-end min-w-0">
       <div
-        className="max-w-[88%] rounded-xl px-3 py-2 border text-[12px] leading-[1.55]"
-        style={{ background: bubbleBg, borderColor: bubbleBorder, color: styles.text }}
+        className={`max-w-[88%] rounded-xl px-3 py-2 border text-[12px] leading-[1.55] ${bubbleFillClass}`}
+        style={{ borderColor: bubbleBorder, color: styles.text }}
         data-testid="subagent-task-bubble"
       >
         <ClampedText
@@ -966,11 +972,12 @@ function AssistantBubble({ content, isReport }: { content: string; isReport: boo
         <Bot size={11} />
       </span>
       <div
-        className="min-w-0 flex-1 rounded-xl px-2.5 py-1.5 border"
-        style={{
-          background: styles.isDark ? "rgba(0,0,0,0.14)" : styles.subtle,
-          borderColor: styles.borderSubtle,
-        }}
+        // R126-3e (TOKENS §10): the assistant bubble = THE WELL (the recessed
+        // rung — .ac-well paints the surfaceWell fill + the clay-rim
+        // hairline); the JS isDark/subtle + borderSubtle legs died. The
+        // border spelling is shared by the plain + report bubbles (the
+        // ROUND-51 no-accent-rail law stands).
+        className="min-w-0 flex-1 rounded-xl ac-well px-2.5 py-1.5"
         data-testid="subagent-assistant-bubble"
       >
         {isReport ? (
@@ -1028,15 +1035,16 @@ function TranscriptToolRow({ tool }: { tool: ToolCard }) {
           {tool.argsSummary}
         </span>
         <span
-          className="shrink-0 w-4 text-center text-[11px]"
-          style={{
-            color:
-              tool.ok === false
-                ? SEMANTIC_COLORS.danger
-                : tool.ok === null
-                  ? RUNNING_BLUE
-                  : SEMANTIC_COLORS.success,
-          }}
+          className={`shrink-0 w-4 text-center text-[11px] ${
+            // R126-3e (§11 — the de-blue): the row's status GLYPH is status
+            // TEXT — the flat RUNNING_BLUE leg died; the ✓/✗/… ink rides the
+            // deep/bright pairs (successDeep/dangerDeep/runningDeep).
+            tool.ok === false
+              ? "text-danger-deep"
+              : tool.ok === null
+                ? "text-running-deep"
+                : "text-success-deep"
+          }`}
         >
           {tool.ok === null ? "…" : tool.ok ? "✓" : "✗"}
         </span>
@@ -1059,12 +1067,13 @@ function TranscriptToolRow({ tool }: { tool: ToolCard }) {
             <LiveOutputTail output={liveOutput} />
           ) : (
             <div
-              className="rounded-lg px-2.5 py-1.5 border font-mono text-[10px] leading-[1.5] break-words"
-              style={{
-                background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
-                borderColor: styles.borderSubtle,
-                color: tool.ok === false ? SEMANTIC_COLORS.danger : styles.textSecondary,
-              }}
+              // R126-3e (TOKENS §10): the settled output box = THE RECESSSED
+              // MONO BLOCK (bg-mono-block + border-mono-line + the mono ink —
+              // THE home for terminal text); a failed output carries the
+              // §11 danger-deep ink instead.
+              className={`rounded-lg border px-2.5 py-1.5 font-mono text-[10px] leading-[1.5] break-words border-mono-line bg-mono-block ${
+                tool.ok === false ? "text-danger-deep" : "text-mono-ink"
+              }`}
               data-testid="subagent-tool-output"
             >
               {tool.ok === null
@@ -1102,11 +1111,9 @@ function TodoLine({ todos }: { todos: TodoCardData }) {
       initial={{ opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease }}
-      className="rounded-lg border px-2 py-1.5 min-w-0"
-      style={{
-        background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
-        borderColor: styles.borderSubtle,
-      }}
+      // R126-3e (TOKENS §10): the todo card = THE WELL (.ac-well — the
+      // recessed rung); the JS isDark/subtle + borderSubtle legs died.
+      className="rounded-lg ac-well px-2 py-1.5 min-w-0"
       data-testid="subagent-todo-line"
     >
       {/* One-line header: icon + progress bar + n/m. */}
@@ -1136,7 +1143,9 @@ function TodoLine({ todos }: { todos: TodoCardData }) {
           >
             <span className="shrink-0 w-3.5 flex items-center justify-center" aria-hidden>
               {item.status === "completed" ? (
-                <span className="text-[10px] leading-none" style={{ color: SEMANTIC_COLORS.success }}>
+                // R126-3e (§11): the ✓ glyph = status TEXT — the deep pair
+                // (successDeep), not the flat semantic hue.
+                <span className="text-[10px] leading-none text-success-deep">
                   ✓
                 </span>
               ) : item.status === "in_progress" ? (
@@ -1170,15 +1179,20 @@ function TodoLine({ todos }: { todos: TodoCardData }) {
 /** approval.requested/resolved — a compact INFORMATIONAL card (R48-e1: the
  * child's asks ride the parent's SSE and are DECIDED in the parent chat's
  * ApprovalCard with the "Sub-agent {code} · {role}" attribution; this panel
- * only shows what was asked and how it landed). */
+ * only shows what was asked and how it landed). R126-3e (§11): the card =
+ * the BADGE-TONE CONTAINERS — pending = warning, approved = success, denied
+ * = danger, expired = warning (the mobile expiry ladder: warning first,
+ * danger only for hard failure); the withAlpha(tone) washes + flat-hue text
+ * died. */
 function ApprovalLine({ approval }: { approval: ApprovalCardData }) {
   const styles = useThemeStyles();
   const pending = approval.status === "pending";
-  const tone = pending
-    ? "#f59e0b"
-    : approval.status === "approved"
-      ? SEMANTIC_COLORS.success
-      : SEMANTIC_COLORS.danger;
+  const toneClasses =
+    pending || approval.status === "expired"
+      ? "bg-badge-warning text-badge-warning-fg"
+      : approval.status === "approved"
+        ? "bg-badge-success text-badge-success-fg"
+        : "bg-badge-danger text-badge-danger-fg";
   const title = pending
     ? "Permission asked"
     : approval.status === "approved"
@@ -1191,17 +1205,16 @@ function ApprovalLine({ approval }: { approval: ApprovalCardData }) {
       initial={{ opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease }}
-      className="rounded-lg border px-2 py-1.5 min-w-0"
-      style={{ borderColor: withAlpha(tone, 0.35), background: withAlpha(tone, 0.06) }}
+      className={`rounded-lg px-2 py-1.5 min-w-0 ${toneClasses}`}
       data-testid="subagent-approval-card"
     >
       <div className="flex items-center gap-1.5 min-w-0">
         {pending ? (
-          <ShieldAlert size={11} className="shrink-0" style={{ color: tone }} />
+          <ShieldAlert size={11} className="shrink-0" />
         ) : (
-          <Check size={11} className="shrink-0" style={{ color: tone }} />
+          <Check size={11} className="shrink-0" />
         )}
-        <span className="text-[11px] font-medium shrink-0" style={{ color: tone }}>
+        <span className="text-[11px] font-medium shrink-0">
           {title}
         </span>
         <span
@@ -1224,7 +1237,6 @@ function ApprovalLine({ approval }: { approval: ApprovalCardData }) {
 /** turn.error — an error banner in the main chat's TurnErrorCard language
  * (compact: reason + code, no retry — the Retry lives on the failed banner). */
 function ErrorLine({ error }: { error: ErrorCardData }) {
-  const styles = useThemeStyles();
   const reason = error.providerError ?? error.message;
   return (
     <motion.div
@@ -1232,22 +1244,21 @@ function ErrorLine({ error }: { error: ErrorCardData }) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, ease }}
       role="alert"
-      className="rounded-xl border px-2.5 py-2 flex items-start gap-2 min-w-0"
-      style={{
-        borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4),
-        background: withAlpha(SEMANTIC_COLORS.danger, 0.07),
-      }}
+      // R126-3e (§11): the turn-error banner = the danger badge-tone
+      // container (ink inherited) — the withAlpha(danger) washes + the flat
+      // semantic text died.
+      className="rounded-xl px-2.5 py-2 flex items-start gap-2 min-w-0 bg-badge-danger text-badge-danger-fg"
       data-testid="subagent-error-banner"
     >
-      <AlertTriangle size={12} className="mt-0.5 shrink-0" style={{ color: SEMANTIC_COLORS.danger }} />
+      <AlertTriangle size={12} className="mt-0.5 shrink-0" />
       <div className="min-w-0">
-        <div className="text-[11px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+        <div className="text-[11px] font-semibold">
           Turn failed
         </div>
-        <div className="mt-0.5 font-mono text-[10px] leading-[1.5] break-words" style={{ color: styles.textSecondary }}>
+        <div className="mt-0.5 font-mono text-[10px] leading-[1.5] break-words">
           {reason}
         </div>
-        <div className="mt-0.5 text-[10px] font-mono" style={{ color: styles.textTertiary }}>
+        <div className="mt-0.5 text-[10px] font-mono opacity-80">
           {error.code}
         </div>
       </div>
@@ -1281,8 +1292,11 @@ function LiveStreamSegment({ entry, streaming }: { entry: SubAgentLiveEntry; str
     <div className="flex flex-col gap-1.5 min-w-0" data-testid="subagent-live-stream">
       {streaming ? (
         <div
-          className="flex items-center gap-2 px-1.5 h-5 text-[10px] font-mono uppercase tracking-[0.08em]"
-          style={{ color: RUNNING_BLUE }}
+          // R126-3e (§11 — the de-blue): the label = status TEXT → the
+          // running deep pair (text-running-deep); the flat RUNNING_BLUE
+          // text leg died (the DOT beside it keeps the flat hue — the
+          // dots-only law).
+          className="flex items-center gap-2 px-1.5 h-5 text-[10px] font-mono uppercase tracking-[0.08em] text-running-deep"
         >
           <PulsingDot color={RUNNING_BLUE} size={5} />
           streaming live
@@ -1456,11 +1470,10 @@ function SubAgentStatsBar({
 
   return (
     <div
-      className="shrink-0 flex items-center justify-center gap-3 px-2.5 h-10 border-t overflow-hidden"
-      style={{
-        borderColor: styles.borderSubtle,
-        background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle,
-      }}
+      // R126-3e: the pinned stats bar = the in-flow chrome shade
+      // (bg-header-surface + the clay-rim hairline); the JS isDark/subtle
+      // leg died.
+      className="shrink-0 flex items-center justify-center gap-3 px-2.5 h-10 border-t border-clay-rim bg-header-surface overflow-hidden"
       data-testid="subagent-stats-footer"
     >
       <StatCell
@@ -1523,7 +1536,12 @@ function PulsingDot({ color, size = 6 }: { color: string; size?: number }) {
 
 /** The coherent panel-header status chip (queued / running / retrying /
  * done / failed / cancelled). Pulsing dot while in flight; check/x glyphs
- * for terminal states. */
+ * for terminal states. R126-3e (§11 — THE de-blue): the chip = the BADGE
+ * TONE CONTAINERS — running = bg-badge-running + text-badge-running-fg (the
+ * running-blue FILL died; the dot keeps the flat hue per the dots-only
+ * law), retrying = the accent tone (the R125 theme-accent work, now as the
+ * sanctioned badge pair), stopping = warning, done = success, failed /
+ * cancelled = danger, queued = neutral. */
 function StatusChip({
   status,
   styles,
@@ -1531,26 +1549,35 @@ function StatusChip({
   status: PanelStatus;
   styles: ReturnType<typeof useThemeStyles>;
 }) {
-  const tone: string =
+  const toneClasses =
+    status === "running"
+      ? "bg-badge-running text-badge-running-fg"
+      : status === "retrying"
+        ? "bg-badge-accent text-badge-accent-fg"
+        : status === "stopping"
+          ? "bg-badge-warning text-badge-warning-fg"
+          : status === "done"
+            ? "bg-badge-success text-badge-success-fg"
+            : status === "failed" || status === "cancelled"
+              ? "bg-badge-danger text-badge-danger-fg"
+              : "bg-badge-neutral text-badge-neutral-fg";
+  // The in-flight DOT keeps the flat semantic hues (TOKENS §11's dots-only
+  // law): running blue, the theme accent, the amber stop settle.
+  const dotColor =
     status === "running"
       ? RUNNING_BLUE
       : status === "retrying"
         ? styles.accent
         : status === "stopping"
           ? AMBER
-          : status === "done"
-            ? SEMANTIC_COLORS.success
-            : status === "failed" || status === "cancelled"
-              ? SEMANTIC_COLORS.danger
-              : styles.textTertiary;
+          : styles.textTertiary;
   return (
     <div
-      className="shrink-0 flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium uppercase tracking-[0.08em]"
-      style={{ background: withAlpha(tone, 0.14), color: tone }}
+      className={`shrink-0 flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium uppercase tracking-[0.08em] ${toneClasses}`}
       data-testid="subagent-status-chip"
     >
       {status === "running" || status === "retrying" || status === "stopping" ? (
-        <PulsingDot color={tone} size={5} />
+        <PulsingDot color={dotColor} size={5} />
       ) : status === "done" ? (
         <Check size={10} />
       ) : status === "failed" || status === "cancelled" ? (

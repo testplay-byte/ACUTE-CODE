@@ -114,6 +114,17 @@ describe("DashboardScreen (fixture backend)", () => {
     // chat, where the composer starts the next session.
     const primary = await screen.findByRole("button", { name: /continue in /i });
     expect(primary.textContent).toContain("ACUTE-CODE"); // newest fixture project
+    // R126-3a (COMPONENTS §4): the primary is the QUIET-SOLID clay species —
+    // accentDeep fill + accentText ink, no glow/gradients — and it is the
+    // screen's ONE filled action (the secondaries ride the outlined species).
+    // R126 re-pin: the ink assertion moved from the class list to the inline
+    // color — `text-accent-text` was a PHANTOM utility (the @theme leg never
+    // gained --color-accent-text, so the class painted no ink and the label
+    // silently inherited the ambient text color on the ember fill); the JS
+    // leg `styles.accentText` is TOKENS §1d's documented spelling for the
+    // pair, so the pin now proves the inline ink actually painted.
+    expect(primary.className).toContain("bg-accent-deep");
+    expect(primary.style.color).not.toBe("");
     fireEvent.click(primary);
     expect(await screen.findByText("project chat stub")).toBeTruthy();
   });
@@ -131,12 +142,61 @@ describe("DashboardScreen (fixture backend)", () => {
 
     await waitFor(() => expect(document.querySelector("[data-stats-skeleton]")).toBeTruthy());
     expect(screen.getByLabelText("Loading workspace stats")).toBeTruthy();
-    // 4 StatCard-shaped blocks in the same grid.
-    expect(document.querySelectorAll("[data-stats-skeleton] .animate-pulse").length).toBe(4);
+    // R126-3a (SCREENS §3 — the one-card stat row): the skeleton mirrors the
+    // READY shape — ONE h-[92px] card-shaped block, not four separate cards
+    // (the anti-jitter mirror law; pre-R126 it was 4 StatCard blocks).
+    expect(document.querySelectorAll("[data-stats-skeleton] .animate-pulse").length).toBe(1);
     // The stat labels are NOT painted — pre-R97 this row read false zeros
     // ("0" Projects / "0" Sessions) while the fetch was still in flight.
     expect(screen.queryByText("Tokens")).toBeNull();
     expect(screen.queryByText("Turns")).toBeNull();
+  });
+
+  it("R126: the stat row is ONE clay card with four inset-divided cells — no icon chips, no accent fill", async () => {
+    renderDashboard();
+
+    const row = await screen.findByTestId("dashboard-stat-row");
+    // The clay material (COMPONENTS §3 / TOKENS §5+§9): card surface + the
+    // warm rim hairline + the .ac-clay two-leg shadow — and NEVER the solid
+    // accent fill the VLM flagged as an anomaly (the highlight is ink-only).
+    expect(row.className).toContain("ac-clay");
+    expect(row.className).toContain("border-clay-rim");
+    expect(row.className).not.toContain("bg-accent");
+    // Four cells, counted by child iteration (the mobile stat-grid law) —
+    // and NO icon chips anywhere in the row (the mobile law: stat grids
+    // carry no icon chips; the icon tiles retired with the redesign).
+    const cells = Array.from(row.children);
+    expect(cells).toHaveLength(4);
+    expect(row.querySelectorAll("svg").length).toBe(0);
+    // The 1px inset dividers: the first three cells carry the trailing
+    // border (cell 2's only at md — the 4-across tier), the last never.
+    expect(cells.filter((c) => c.className.includes("border-r")).length).toBe(3);
+    expect(cells[3].className.includes("border-r")).toBe(false);
+    // The Tokens cell is the highlight: kicker + value in accentDeep ink
+    // (TOKENS §1d — accent-as-text, INK-ONLY), the value on the 22px/600
+    // tabular tier. The pin: the highlight value's ink differs from a plain
+    // cell's (accentDeep vs text) while the card itself never fills.
+    const tokensCell = cells.find((c) => c.textContent?.includes("Tokens")) as HTMLElement;
+    const projectsCell = cells.find((c) => c.textContent?.includes("Projects")) as HTMLElement;
+    const value = tokensCell.querySelector('[class*="tabular-nums"]') as HTMLElement;
+    const plainValue = projectsCell.querySelector('[class*="tabular-nums"]') as HTMLElement;
+    expect(value.className).toContain("text-[22px]");
+    expect(value.style.color).not.toBe("");
+    expect(value.style.color).not.toBe(plainValue.style.color);
+  });
+
+  it("R126: session status rides the badge tone containers (TOKENS §11)", async () => {
+    renderDashboard();
+
+    // The fixture seeds a RUNNING session ("Phase 2 report draft") and a
+    // COMPLETED one — the statuses paint as tinted badge containers, never
+    // flat-hue text.
+    const running = await screen.findByText("running");
+    expect(running.className).toContain("bg-badge-running");
+    expect(running.className).toContain("text-badge-running-fg");
+    const completed = screen.getByText("completed");
+    expect(completed.className).toContain("bg-badge-success");
+    expect(completed.className).toContain("text-badge-success-fg");
   });
 
   it("a failed projects fetch joins the loadError banner — Retry re-drives it", async () => {
@@ -147,10 +207,17 @@ describe("DashboardScreen (fixture backend)", () => {
     renderDashboard();
 
     // The banner (role=alert) now also covers the PROJECTS source, and is
-    // retryable in place.
-    expect(await screen.findByRole("alert")).toBeTruthy();
+    // retryable in place. R126-3a (TOKENS §11): the banner is the danger
+    // badge-tone container (tinted fill + deep-on-tint ink — never the
+    // flat-hue-on-alpha-wash idiom), and the Retry button is the outlined
+    // danger species (COMPONENTS §4).
+    const banner = await screen.findByRole("alert");
+    expect(banner.className).toContain("bg-badge-danger");
+    expect(banner.className).toContain("text-badge-danger-fg");
     expect(screen.getByText(/Could not load live workspace data/i)).toBeTruthy();
     const retry = screen.getByRole("button", { name: "Retry loading workspace data" });
+    expect(retry.className).toContain("border-danger-deep");
+    expect(retry.className).toContain("text-danger-deep");
 
     // Retry re-drives the FAILED source: flip the backend to a resolving one
     // and click — the banner clears and the real stat cards render.

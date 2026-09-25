@@ -2,16 +2,27 @@ import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Zap } from "lucide-react";
 import type { ThemeStyles } from "../../lib/themes";
-import { scaleIn } from "../../lib/motion";
+import { ease } from "../../lib/motion";
 import type { UsageDayBucket } from "../../lib/api";
-import { bdr, shortUtcDay, utcDateLabel, withAlpha } from "../dashboard/helpers";
+import { Kicker } from "../ui/Kicker";
+import { shortUtcDay, utcDateLabel, withAlpha } from "../dashboard/helpers";
+import { CHART_BAR_GROW_MS, CHART_BAR_STAGGER_MS, CLAY_CARD, CLAY_TOOLTIP } from "./usage-helpers";
+import { cn } from "../../lib/utils";
 
 /**
  * ROUND-52 (R52-b): activity chart for the /usage screen — TokenBarChart's
- * exact rendering (ported, not imported, because the dashboard component
+ * rendering contract (ported, not imported, because the dashboard component
  * hardcodes its "· 14 days" header while this screen's range selector drives
  * the label). Bars are total tokens per UTC day; the hover tooltip breaks the
  * day into input/output/requests/cost.
+ *
+ * ROUND-126 (R126-3b, the Clay Companion redesign): the card rides the CLAY
+ * material (rim + `.ac-clay`), the bars paint the two-tier accent's DEEP leg
+ * (`--ac-accent-deep`) as the primary series (SCREENS §3), the hover tooltip
+ * is the clay popover (`CLAY_TOOLTIP`), the loading bars pulse in the WELL
+ * (`bg-well` — TOKENS §10 law 4), and the bar ENTRANCE is MOTION §2's chart
+ * grammar: grow from the baseline, 350ms, 12ms per-bar stagger, once per
+ * data load.
  */
 
 const BAR_WIDTH = 20;
@@ -38,22 +49,19 @@ function TooltipRow({
   color?: string;
   styles: ThemeStyles;
 }) {
-  const { text, textSecondary, isDark } = styles;
+  const { text, textSecondary } = styles;
   return (
     <div>
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-medium" style={{ color: text }}>
           {label}
         </span>
-        <span className="ml-2 text-[10px] font-semibold" style={{ color: color ?? textSecondary }}>
+        <span className="ml-2 text-[10px] font-semibold tabular-nums" style={{ color: color ?? textSecondary }}>
           {value}
         </span>
       </div>
       {share !== undefined ? (
-        <div
-          className="mt-0.5 h-[3px] overflow-hidden rounded-full"
-          style={{ backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }}
-        >
+        <div className="mt-0.5 h-[3px] overflow-hidden rounded-full bg-well">
           <div
             className="h-full rounded-full"
             style={{ width: `${Math.round(share * 100)}%`, backgroundColor: color }}
@@ -80,7 +88,7 @@ export function UsageActivityChart({
   delay?: number;
   styles: ThemeStyles;
 }) {
-  const { card, border, text, textSecondary, textTertiary, accent, isDark, softShadow } = styles;
+  const { text, textSecondary, accentDeep, isDark } = styles;
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
   const maxTokens = useMemo(() => Math.max(0, ...days.map(dayTotal)), [days]);
@@ -89,24 +97,18 @@ export function UsageActivityChart({
   const chartWidth = days.length * (BAR_WIDTH + BAR_GAP) - BAR_GAP;
 
   return (
-    <motion.div
-      variants={scaleIn}
-      className="rounded-2xl border-[1.5px] p-4 md:p-5"
-      style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
-    >
+    <div className={cn(CLAY_CARD, "p-4 md:p-5")}>
       <div className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Zap size={13} style={{ color: accent, opacity: 0.7 }} />
-          <span className="text-[11px] font-medium uppercase tracking-[0.08em] tabular-nums" style={{ color: textTertiary }}>
-            Token Activity · {dayCount} {dayCount === 1 ? "day" : "days"}
-          </span>
-        </div>
-        <span className="text-[11px] font-medium tabular-nums" style={{ color: textSecondary }}>
+        <Kicker icon={Zap} className="tabular-nums">
+          Token Activity · {dayCount} {dayCount === 1 ? "day" : "days"}
+        </Kicker>
+        <span className="text-[11px] font-medium leading-none tabular-nums" style={{ color: textSecondary }}>
           {isPending ? "…" : `${totalTokens.toLocaleString()} total`}
         </span>
       </div>
 
       {isPending ? (
+        // R126-3b (TOKENS §10 law 4): the loading bars pulse in the WELL.
         <div
           aria-label="Loading usage chart"
           className="flex h-[168px] items-end justify-center gap-2"
@@ -114,8 +116,8 @@ export function UsageActivityChart({
           {[0.45, 0.75, 0.55, 0.9, 0.65].map((h, i) => (
             <div
               key={i}
-              className="w-5 animate-pulse rounded-t-md"
-              style={{ height: `${h * 100}%`, backgroundColor: withAlpha(accent, 0.25) }}
+              className="w-5 animate-pulse rounded-t-md bg-well"
+              style={{ height: `${h * 100}%` }}
             />
           ))}
         </div>
@@ -123,11 +125,6 @@ export function UsageActivityChart({
         <div className="flex h-[168px] flex-col items-center justify-center gap-1 text-center">
           <p className="text-[12px] font-semibold" style={{ color: text }}>
             {isError ? "Usage data unavailable" : "No usage recorded yet"}
-          </p>
-          <p className="max-w-[240px] text-[11px]" style={{ color: textSecondary }}>
-            {isError
-              ? "The sidecar's /usage/detailed call failed — check the sidecar and reload."
-              : "Token burn per day shows up here once agents start making model calls."}
           </p>
         </div>
       ) : (
@@ -166,7 +163,7 @@ export function UsageActivityChart({
                   y1={CHART_HEIGHT - CHART_HEIGHT * pct}
                   x2={chartWidth}
                   y2={CHART_HEIGHT - CHART_HEIGHT * pct}
-                  stroke={isDark ? "rgba(255,255,255,0.035)" : "rgba(0,0,0,0.035)"}
+                  stroke={withAlpha(text, isDark ? 0.05 : 0.04)}
                   strokeWidth={1}
                   strokeDasharray="3 5"
                 />
@@ -176,7 +173,7 @@ export function UsageActivityChart({
                 y1={CHART_HEIGHT}
                 x2={chartWidth}
                 y2={CHART_HEIGHT}
-                stroke={isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}
+                stroke={withAlpha(text, isDark ? 0.09 : 0.07)}
                 strokeWidth={1}
               />
 
@@ -188,8 +185,11 @@ export function UsageActivityChart({
                   const y = CHART_HEIGHT - barH;
                   const isLast = i === days.length - 1;
                   const isHovered = hoveredIdx === i;
+                  // R126-3b: the primary series is the deep accent tier
+                  // (SCREENS §3); hover + the live tail hold it at full
+                  // strength, the rest rides the tinted leg.
                   const fill =
-                    isHovered || isLast ? accent : withAlpha(accent, isDark ? 0.36 : 0.27);
+                    isHovered || isLast ? accentDeep : withAlpha(accentDeep, isDark ? 0.36 : 0.27);
                   return (
                     <g key={day.date}>
                       <rect
@@ -207,12 +207,14 @@ export function UsageActivityChart({
                         rx={BAR_RADIUS}
                         ry={BAR_RADIUS}
                         fill={fill}
+                        // R126-3b (MOTION §2): grow from the baseline —
+                        // 350ms, 12ms stagger, once per data load.
                         initial={{ y: CHART_HEIGHT, height: 0 }}
                         animate={{ y, height: barH }}
                         transition={{
-                          duration: 0.6,
-                          ease: [0.25, 0.1, 0.25, 1],
-                          delay: delay + 0.1 + i * 0.05,
+                          duration: CHART_BAR_GROW_MS,
+                          ease,
+                          delay: delay + i * CHART_BAR_STAGGER_MS,
                         }}
                       />
                     </g>
@@ -230,7 +232,7 @@ export function UsageActivityChart({
                     x={cx}
                     y={CHART_HEIGHT + 18}
                     textAnchor="middle"
-                    fill={isHovered || isLast ? accent : textSecondary}
+                    fill={isHovered || isLast ? accentDeep : textSecondary}
                     fontSize={10}
                     fontWeight={isHovered || isLast ? 600 : 500}
                     className="tabular-nums"
@@ -255,20 +257,14 @@ export function UsageActivityChart({
                     transform: "translateX(-50%)",
                   }}
                 >
-                  <div
-                    className="w-44 space-y-2 p-3"
-                    style={{
-                      backgroundColor: card,
-                      border: bdr("1.5px", border),
-                      borderRadius: "12px",
-                      boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
-                    }}
-                  >
+                  {/* R126-3b: the tooltip surface is the clay popover —
+                      card fill + rim + the small-surface clay shadow. */}
+                  <div className={cn(CLAY_TOOLTIP, "w-44 space-y-2 p-3")}>
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-semibold" style={{ color: text }}>
                         {utcDateLabel(days[hoveredIdx].date)}
                       </span>
-                      <span className="text-[11px] font-semibold tabular-nums" style={{ color: accent }}>
+                      <span className="text-[11px] font-semibold tabular-nums" style={{ color: accentDeep }}>
                         {dayTotal(days[hoveredIdx]).toLocaleString()}
                       </span>
                     </div>
@@ -280,7 +276,7 @@ export function UsageActivityChart({
                           ? days[hoveredIdx].inputTokens / dayTotal(days[hoveredIdx])
                           : 0
                       }
-                      color={accent}
+                      color={accentDeep}
                       styles={styles}
                     />
                     <TooltipRow
@@ -291,12 +287,12 @@ export function UsageActivityChart({
                           ? days[hoveredIdx].outputTokens / dayTotal(days[hoveredIdx])
                           : 0
                       }
-                      color={isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.45)"}
+                      color={withAlpha(text, 0.45)}
                       styles={styles}
                     />
                     <div
                       className="flex items-center justify-between pt-1"
-                      style={{ borderTop: bdr("1px", border) }}
+                      style={{ borderTop: `1px solid ${styles.clayRim}` }}
                     >
                       <span className="text-[10px] tabular-nums" style={{ color: textSecondary }}>
                         {days[hoveredIdx].requests} requests
@@ -312,6 +308,6 @@ export function UsageActivityChart({
           </div>
         </div>
       )}
-    </motion.div>
+    </div>
   );
 }

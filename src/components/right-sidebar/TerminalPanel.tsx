@@ -141,8 +141,9 @@ function BackgroundJobsSection({ projectId }: { projectId: string }) {
 
   return (
     <div
-      className="shrink-0 border-b px-2 py-1.5 flex flex-col gap-1 max-h-56 overflow-y-auto auto-scroll"
-      style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.14)" : styles.subtle }}
+      // R126-3e (TOKENS §10): the jobs strip = THE WELL (the recessed rung +
+      // the clay-rim hairline); the JS isDark/subtle leg died.
+      className="shrink-0 border-b border-clay-rim bg-well px-2 py-1.5 flex flex-col gap-1 max-h-56 overflow-y-auto auto-scroll"
       data-testid="background-jobs"
       aria-label="Background jobs"
     >
@@ -154,8 +155,9 @@ function BackgroundJobsSection({ projectId }: { projectId: string }) {
           Background jobs
         </span>
         <span
-          className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full tabular-nums"
-          style={{ background: styles.subtleHover, color: styles.textSecondary }}
+          // R126-3e: the count = the NEUTRAL badge tone (the subtleHover
+          // fill died).
+          className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full tabular-nums bg-badge-neutral text-badge-neutral-fg"
         >
           {jobs.length}
         </span>
@@ -213,15 +215,18 @@ function BackgroundJobsSection({ projectId }: { projectId: string }) {
                   aria-label={`Stop background job ${job.id}`}
                   title="Stop this background job"
                   className="shrink-0 w-6 h-6 grid place-items-center rounded-lg transition-colors hover:bg-hover disabled:opacity-50"
-                  style={{ color: SEMANTIC_COLORS.danger }}
+                  style={{ color: styles.dangerDeep }}
                   data-testid="background-job-stop"
                 >
                   <Square size={9} fill="currentColor" strokeWidth={0} aria-hidden />
                 </button>
               ) : job.exitCode !== null ? (
                 <span
-                  className="shrink-0 font-mono text-[10px] font-medium tabular-nums"
-                  style={{ color: job.exitCode === 0 ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger }}
+                  // R126-3e (§11): the exit code = status TEXT — the deep
+                  // pairs, not the flat semantic hues.
+                  className={`shrink-0 font-mono text-[10px] font-medium tabular-nums ${
+                    job.exitCode === 0 ? "text-success-deep" : "text-danger-deep"
+                  }`}
                 >
                   exit {job.exitCode}
                 </span>
@@ -229,12 +234,9 @@ function BackgroundJobsSection({ projectId }: { projectId: string }) {
             </div>
             {expanded && tail.length > 0 ? (
               <div
-                className="mt-0.5 mb-0.5 ml-3.5 rounded-lg border px-2 py-1 max-h-40 overflow-y-auto auto-scroll font-mono text-[10px] leading-[1.5] whitespace-pre-wrap break-words"
-                style={{
-                  borderColor: styles.borderSubtle,
-                  background: styles.isDark ? "rgba(0,0,0,0.25)" : styles.bg,
-                  color: styles.textSecondary,
-                }}
+                // R126-3e (TOKENS §10): the job's output tail = THE RECESSED
+                // MONO BLOCK (.ac-mono-block — the home for terminal text).
+                className="mt-0.5 mb-0.5 ml-3.5 rounded-lg ac-mono-block px-2 py-1 max-h-40 overflow-y-auto auto-scroll font-mono text-[10px] leading-[1.5] whitespace-pre-wrap break-words"
                 data-testid="background-job-tail"
               >
                 {tail.map((line, i) => (
@@ -598,27 +600,25 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
   return (
     <div className="h-full flex flex-col min-h-0">
       {/* ROUND-45 (R45-b): mode toggle — Run (one-shot, unchanged) vs Shell
-          (persistent interactive session). */}
+          (persistent interactive session). R126-3e: the segmented control =
+          the 1px clay rim + the accentTint/accentDeep active segment (the
+          3d-4 composer spelling); the accent-fill JS legs died. */}
       <div
-        className="shrink-0 flex items-center gap-1.5 px-2 py-1 border-b"
-        style={{ borderColor: styles.border }}
+        className="shrink-0 flex items-center gap-1.5 px-2 py-1 border-b border-clay-rim"
       >
         <div
           role="tablist"
           aria-label="Terminal mode"
-          className="flex items-center rounded-lg border overflow-hidden"
-          style={{ borderColor: styles.border }}
+          className="flex items-center rounded-lg border border-clay-rim overflow-hidden"
         >
           <button
             type="button"
             role="tab"
             aria-selected={mode === "run"}
             onClick={() => setMode("run")}
-            className="px-2 py-0.5 text-[11px] font-medium transition-colors"
-            style={{
-              background: mode === "run" ? styles.accent : "transparent",
-              color: mode === "run" ? styles.accentText : styles.textTertiary,
-            }}
+            className={`px-2 py-0.5 text-[11px] font-medium transition-colors ${
+              mode === "run" ? "bg-accent-tint text-accent-deep" : "text-muted"
+            }`}
           >
             Run
           </button>
@@ -630,19 +630,17 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
               setMode("shell");
               activateShell();
             }}
-            className="px-2 py-0.5 text-[11px] font-medium transition-colors"
-            style={{
-              background: mode === "shell" ? styles.accent : "transparent",
-              color: mode === "shell" ? styles.accentText : styles.textTertiary,
-            }}
+            className={`px-2 py-0.5 text-[11px] font-medium transition-colors ${
+              mode === "shell" ? "bg-accent-tint text-accent-deep" : "text-muted"
+            }`}
           >
             Shell
           </button>
         </div>
         {mode === "shell" ? (
           <span
-            className="ml-auto font-mono text-[10px] px-1.5 py-0.5 rounded border"
-            style={{ color: styles.textTertiary, borderColor: styles.border }}
+            // R126-3e: the engine badge = the NEUTRAL badge tone.
+            className="ml-auto font-mono text-[10px] px-1.5 py-0.5 rounded-md bg-badge-neutral text-badge-neutral-fg"
             data-terminal-engine={shellSession?.engine ?? "none"}
           >
             {shellSession ? `engine: ${shellSession.engine}` : "no session"}
@@ -651,14 +649,18 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
       </div>
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto auto-scroll px-3 py-2 font-mono text-[12px] leading-[1.55]"
-        style={{ background: styles.isDark ? "rgba(0,0,0,0.25)" : styles.bg }}
+        // R126-3e (TOKENS §10): the scrollback = THE RECESSED MONO BLOCK
+        // (.ac-mono-block — fill + border + its own ink; THE home for
+        // terminal text); the JS isDark/bg leg died. The per-line inks ride
+        // the §11/§1d class pairs on the CHILD divs (children override the
+        // block's own ink by inheritance).
+        className="flex-1 min-h-0 overflow-y-auto auto-scroll px-3 py-2 font-mono text-[12px] leading-[1.55] ac-mono-block"
         onClick={() => inputRef.current?.focus()}
       >
         {mode === "run" ? (
           lines.length === 0 ? (
             <div style={{ color: styles.textTertiary }}>
-              <span style={{ color: styles.accent }}>$</span> type a command (runs in the project root). Ctrl+L clears.
+              <span className="text-accent-deep">$</span> type a command (runs in the project root). Ctrl+L clears.
             </div>
           ) : (
             lines.map((line, i) => (
@@ -670,26 +672,30 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
                 // text aligns under the command instead of under the prompt.
                 className="whitespace-pre-wrap break-words"
                 style={{
-                  color:
-                    line.kind === "in"
-                      ? styles.accent
-                      : line.kind === "err"
-                        ? SEMANTIC_COLORS.danger
-                        : line.kind === "exit"
-                          ? line.ok
-                            ? SEMANTIC_COLORS.success
-                            : SEMANTIC_COLORS.danger
-                          : styles.text,
                   ...(line.kind === "in" ? { paddingLeft: "0.9em", textIndent: "-0.9em" } : {}),
                 }}
               >
-                {line.kind === "in" ? `$ ${line.text}` : line.text}
+                <span
+                  className={
+                    line.kind === "in"
+                      ? "text-accent-deep"
+                      : line.kind === "err"
+                        ? "text-danger-deep"
+                        : line.kind === "exit"
+                          ? line.ok
+                            ? "text-success-deep"
+                            : "text-danger-deep"
+                          : "text-mono-ink"
+                  }
+                >
+                  {line.kind === "in" ? `$ ${line.text}` : line.text}
+                </span>
               </div>
             ))
           )
         ) : shellLines.length === 0 && shellStatus !== "connecting" ? (
           <div style={{ color: styles.textTertiary }}>
-            <span style={{ color: styles.accent }}>$</span> persistent shell — state survives across commands (cd, env, venv).{" "}
+            <span className="text-accent-deep">$</span> persistent shell — state survives across commands (cd, env, venv).{" "}
             {liveMode ? "Enter starts… Ctrl+L clears." : "Start the sidecar to use it."}
           </div>
         ) : (
@@ -699,20 +705,24 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
               data-terminal-line={line.kind === "cmd" ? "in" : line.kind}
               className="whitespace-pre-wrap break-words"
               style={{
-                color:
-                  line.kind === "cmd"
-                    ? styles.textTertiary
-                    : line.kind === "err"
-                      ? SEMANTIC_COLORS.danger
-                      : line.kind === "exit"
-                        ? line.ok
-                          ? SEMANTIC_COLORS.success
-                          : SEMANTIC_COLORS.danger
-                        : styles.text,
                 ...(line.kind === "cmd" ? { paddingLeft: "0.9em", textIndent: "-0.9em" } : {}),
               }}
             >
-              {line.kind === "cmd" ? `$ ${line.text}` : line.text}
+              <span
+                className={
+                  line.kind === "cmd"
+                    ? "text-muted"
+                    : line.kind === "err"
+                      ? "text-danger-deep"
+                      : line.kind === "exit"
+                        ? line.ok
+                          ? "text-success-deep"
+                          : "text-danger-deep"
+                        : "text-mono-ink"
+                }
+              >
+                {line.kind === "cmd" ? `$ ${line.text}` : line.text}
+              </span>
             </div>
           ))
         )}
@@ -733,8 +743,11 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
           `start /B …` servers etc.) — live status, ages, Stop buttons and
           expandable output tails. Renders nothing on clean projects. */}
       {liveMode ? <BackgroundJobsSection projectId={projectId} /> : null}
-      <div className="shrink-0 flex items-center gap-2 px-2 py-1.5 border-t" style={{ borderColor: styles.border }}>
-        <span className="font-mono text-[12px] shrink-0" style={{ color: styles.accent }}>$</span>
+      {/* R126-3e (TOKENS §10): the input row = THE WELL (the recessed input
+          fill + the clay-rim hairline); the Stop/Kill buttons = the OUTLINED
+          danger species and New = the outlined secondary (COMPONENTS §4). */}
+      <div className="shrink-0 flex items-center gap-2 px-2 py-1.5 border-t border-clay-rim bg-well">
+        <span className="font-mono text-[12px] shrink-0 text-accent-deep">$</span>
         <input
           ref={inputRef}
           value={input}
@@ -755,8 +768,7 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
             onClick={stop}
             aria-label="Stop command"
             title="Stop the running command"
-            className="shrink-0 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] font-medium border transition-colors"
-            style={{ color: SEMANTIC_COLORS.danger, borderColor: styles.border }}
+            className="shrink-0 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] font-medium border border-danger-deep text-danger-deep transition-colors duration-100 active:scale-[0.98]"
           >
             <Square size={10} fill="currentColor" strokeWidth={0} aria-hidden />
             Stop
@@ -770,8 +782,7 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
               aria-label="Kill shell"
               title="Kill the shell session and clear the output"
               disabled={shellSession === null && shellLines.length === 0}
-              className="shrink-0 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] font-medium border transition-colors disabled:opacity-40"
-              style={{ color: SEMANTIC_COLORS.danger, borderColor: styles.border }}
+              className="shrink-0 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] font-medium border border-danger-deep text-danger-deep transition-colors duration-100 active:scale-[0.98] disabled:opacity-40"
             >
               <Trash2 size={10} aria-hidden />
               Kill
@@ -781,8 +792,7 @@ export function TerminalPanel({ projectId, tab }: { projectId: string; tab: Righ
               onClick={() => void newShell()}
               aria-label="New shell"
               title="Kill this shell and start a fresh one"
-              className="shrink-0 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] font-medium border transition-colors"
-              style={{ color: styles.textSecondary, borderColor: styles.border }}
+              className="shrink-0 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] font-medium border border-line-strong text-muted transition-colors hover:bg-hover"
             >
               <RefreshCw size={10} aria-hidden />
               New

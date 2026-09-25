@@ -1,99 +1,166 @@
 import { motion } from "framer-motion";
 import type { ElementType } from "react";
 import type { ThemeStyles } from "../../lib/themes";
+import { cn } from "../../lib/utils";
 import { scaleIn } from "../../lib/motion";
 
 /**
- * Stat card (round-21 wizard DNA, de-costumed R100-G per research §C2 P3 +
- * §C3 — the wizard-DNA boundary: working screens earn trust through
- * restraint): 16px-radius card (rounded-2xl, the 5-step scale) with
- * softShadow, solid accent icon tile (w-10 h-10, full opacity — no
- * translucent soup), 22px/600 tabular value (the ladder's `value` token —
- * font-black + tracking-tighter were the wizard display tell) and the
- * label-tier label (11px/500/0.08em uppercase, TOKENS §2). Hover = the
- * CSS-class border-strong swap (TOKENS §1a/§6 — the borderLineStrong
- * utility; the old useState lift + bentoShadowSm deepen are gone: resting
- * UI never fidgets). `highlight` fills the whole card with accent (the one
- * bold moment).
+ * ROUND-126 (R126-3a — the Instrument archetype, SCREENS §3 "the stat row"):
+ * the dashboard's four numbers ride ONE clay card with inset-divided cells —
+ * `StatRow` below (the mobile stat-grid law at PC densities). The single-cell
+ * `StatCard` export stays for the usage screens (UsageScreen/DataStatsPanel —
+ * their own wave converts them to the row) and is re-skinned onto the SAME
+ * clay idiom so both spellings agree in the meantime:
  *
- * R108-e (the clay rework): the card's depth is now the CLAY material —
- * `ac-clay`, the layered soft-shadow recipe (a tight directional contact
- * shadow under a larger very soft ambient one, warm-tinted; TOKENS §9).
- * The R107-g treatment (ac-clay-light gradient top-light + ac-chrome-edge
- * hairline) was REMOVED per the owner's verdict — painted light at the
- * top reads as a tacked-on glow, not as clay; shadow + form is the honest
- * material. The class paints box-shadow only, so it composes with the
- * inline backgroundColor exactly like the old inline softShadow did.
- *
- * R99-E (the usage anti-jitter kit, research §3.2): the card is pinned at
- * h-[92px] — the height every StatCard-shaped skeleton across the app
- * already reserves (dashboard, usage screen, the DataStatsPanel) — and the
- * value renders tabular-nums so live-updating numbers hold their width.
+ * · Material: `bg-card` + the warm 1px clay rim hairline (TOKENS §5 — the
+ *   1.5px bento border is retired) + `.ac-clay` (TOKENS §9's two-leg
+ *   shadow). Hover = the rim→border-strong swap, nothing more (MOTION §4:
+ *   the clay card is already elevated; hover confirms, never performs).
+ * · Cell anatomy: Kicker-tier label (11px/500 uppercase tracked tertiary) →
+ *   the value at 22px/600 `tabular-nums` (TOKENS §2's `value` tier) → ONE
+ *   11px tertiary supporting line (the copy-length law: one line or absent).
+ *   NO icon chips — the mobile stat-grid law; the icon tiles retired with
+ *   the redesign (the `icon` prop survives on StatCard only so the usage
+ *   screens' call sites compile until their wave lands).
+ * · Highlight (the Tokens cell): kicker + value render in `accentDeep` —
+ *   the accent-as-ink tier (TOKENS §1d). NEVER a solid accent fill: the
+ *   VLM's R126 review flagged that fill as an anomaly against the clay
+ *   material, and the quiet clay card carries the emphasis by ink alone.
+ * · R99-E stands: every cell is pinned at `h-[92px]` — the exact height
+ *   every StatCard-shaped skeleton reserves app-wide — and values render
+ *   `tabular-nums` (the anti-jitter kit, COMPONENTS §6 — binding). The pin
+ *   lives on the CELLS (not the card) so the card auto-heights: the 4-across
+ *   tier (md+, the desktop app's only reachable tier — the Tauri window's
+ *   minWidth 1000 keeps the viewport over the md breakpoint) is exactly one
+ *   92px row, while the 2×2 fallback below md (web demo only) grows to two
+ *   honest 92px rows instead of clipping the cell content — the same
+ *   spelling the usage wave's UsageStatRow pinned (one grammar app-wide).
+ */
+
+/** One cell of the stat row (the mobile StatGridCell grammar, adapted). */
+export interface StatRowCell {
+  key: string;
+  /** The Kicker-tier label ("Projects", "Tokens", …). */
+  label: string;
+  /** The headline figure — 22px/600 tabular (the PC `value` tier). */
+  value: string;
+  /** The optional ONE-line supporting line (11px tertiary — the honesty scope). */
+  caption?: string;
+  /** Optional tooltip/a11y note riding the cell (raw detail the caption trims). */
+  title?: string;
+  /** The emphasized cell — kicker + value in accentDeep ink (never a fill). */
+  highlight?: boolean;
+}
+
+/** One cell's body — the shared spelling `StatRow` cells and the single-cell
+ *  `StatCard` both render (one spelling, per COMPONENTS §1's table rule). */
+function StatCellBody({ cell, styles }: { cell: StatRowCell; styles: ThemeStyles }) {
+  const { text, textTertiary, accentDeep } = styles;
+  return (
+    <>
+      <div
+        className="truncate text-[11px] font-medium uppercase tracking-[0.08em]"
+        style={{ color: cell.highlight ? accentDeep : textTertiary }}
+      >
+        {cell.label}
+      </div>
+      <div
+        className="mt-1 text-[22px] font-semibold leading-none tabular-nums"
+        style={{ color: cell.highlight ? accentDeep : text }}
+      >
+        {cell.value}
+      </div>
+      {cell.caption !== undefined ? (
+        <div className="mt-1 truncate text-[11px]" style={{ color: textTertiary }}>
+          {cell.caption}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * THE STAT ROW (R126-3a): ONE `rounded-2xl` clay card (1px `border-clay-rim`
+ * + `.ac-clay` + `bg-card`) carrying the four cells, split by 1px INSET
+ * `border-strong` vertical dividers — full cell height, inset by the card's
+ * horizontal padding (the mobile stat-grid law; 2×2 below `md` gains the
+ * horizontal divider the same way). Every cell is pinned `h-[92px]`
+ * (R99-E's skeleton contract — see the file header for why the pin sits on
+ * the cells). The Tokens cell's `highlight` is ink-only (see the file
+ * header).
+ */
+export function StatRow({
+  cells,
+  styles,
+  testId,
+}: {
+  cells: ReadonlyArray<StatRowCell>;
+  styles: ThemeStyles;
+  testId?: string;
+}) {
+  if (cells.length === 0) return null;
+  // The last cell of each row never carries the trailing divider; in the
+  // 2×2 (below md) layout the first row keeps a bottom divider instead.
+  const lastRowStart2 = Math.max(0, Math.ceil(cells.length / 2) * 2 - 2);
+  return (
+    <div
+      data-testid={testId}
+      className="ac-clay grid grid-cols-2 overflow-hidden rounded-2xl border border-clay-rim bg-card px-5 md:grid-cols-4"
+    >
+      {cells.map((cell, i) => {
+        const twoLast = (i + 1) % 2 === 0 || i === cells.length - 1;
+        const fourLast = (i + 1) % 4 === 0 || i === cells.length - 1;
+        return (
+          <div
+            key={cell.key}
+            title={cell.title}
+            className={cn(
+              "flex h-[92px] min-w-0 flex-col justify-center border-line-strong px-4 md:px-5",
+              !twoLast && !fourLast && "border-r",
+              twoLast && !fourLast && "md:border-r",
+              !twoLast && fourLast && "max-md:border-r",
+              i < lastRowStart2 && "border-b md:border-b-0",
+            )}
+          >
+            <StatCellBody cell={cell} styles={styles} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The single-cell clay stat card (the pre-R126 shape, kept for the usage
+ * screens until their wave adopts `StatRow`). Same material + cell anatomy
+ * as the row's cells; the `icon` prop is accepted but RETIRED (no icon
+ * chips — SCREENS §3) and the `highlight` is the accentDeep ink idiom, never
+ * the solid accent fill the VLM flagged.
  */
 export function StatCard({
   value,
   label,
-  icon: Icon,
   title,
   styles,
   highlight = false,
 }: {
   value: string;
   label: string;
-  icon: ElementType;
+  /** R126: retired (no icon chips in stat cells) — kept optional so the
+   *  usage screens' call sites compile until their own wave converts them. */
+  icon?: ElementType;
   title?: string;
   styles: ThemeStyles;
-  /** The "bold moment" card — accent-filled with accentText (wizard recipe). */
+  /** The emphasized card — kicker + value in accentDeep ink (R126 idiom). */
   highlight?: boolean;
 }) {
-  const { card, text, textTertiary, accent, accentText } = styles;
-
   return (
     <motion.div
       variants={scaleIn}
-      className="flex h-[92px] cursor-default flex-col justify-center overflow-hidden rounded-2xl border-[1.5px] border-line p-4 transition-colors duration-150 hover:border-line-strong ac-clay"
-      style={{
-        backgroundColor: highlight ? accent : card,
-        borderColor: highlight ? accent : undefined,
-      }}
+      className="flex h-[92px] cursor-default flex-col justify-center overflow-hidden rounded-2xl border border-clay-rim bg-card p-4 transition-colors duration-100 hover:border-line-strong ac-clay"
       title={title}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div
-            className="truncate text-[22px] font-semibold tabular-nums leading-none"
-            style={{ color: highlight ? accentText : text }}
-          >
-            {value}
-          </div>
-          <div
-            className="mt-1.5 text-[11px] font-medium uppercase tracking-[0.08em]"
-            style={{ color: highlight ? withAlphaF(accentText, 0.8) : textTertiary }}
-          >
-            {label}
-          </div>
-        </div>
-        <div
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
-          style={{
-            backgroundColor: highlight ? withAlphaF(accentText, 0.2) : accent,
-            color: highlight ? accentText : accentText,
-          }}
-        >
-          <Icon size={16} strokeWidth={2} style={{ opacity: 1 }} />
-        </div>
-      </div>
+      <StatCellBody cell={{ key: label, label, value, highlight }} styles={styles} />
     </motion.div>
   );
-}
-
-/** Local alpha helper for the highlight card (accentText needs its own fade). */
-function withAlphaF(color: string, alpha: number): string {
-  if (color.startsWith("#") && color.length === 7) {
-    const r = parseInt(color.slice(1, 3), 16);
-    const g = parseInt(color.slice(3, 5), 16);
-    const b = parseInt(color.slice(5, 7), 16);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  }
-  return color;
 }

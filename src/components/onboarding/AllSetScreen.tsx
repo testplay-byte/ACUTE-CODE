@@ -39,6 +39,10 @@ export function AllSetScreen() {
     resize();
     window.addEventListener("resize", resize);
 
+    // R126-3g: the confetti palette KEEPS its mixed hues (accent, accent2,
+    // + the three fixed celebration hexes) — the brief's documented
+    // theatrical exception (WIZARD-DNA: the completion moment's confetti is
+    // celebration, not chrome); everything else on this screen went clay.
     const colors = [s.accent, s.theme.accent2, "#7A5CFA", "#5A8CFF", "#FF6B2C"];
     const particles: {
       x: number;
@@ -115,13 +119,12 @@ export function AllSetScreen() {
       {/* Content — centered in the leftover height so the step never scrolls
           at common window sizes; `short:` trims the celebration chrome */}
       <div className="max-w-[860px] xl:max-w-[980px] w-full mx-auto text-center relative z-10">
-        {/* Success icon */}
+        {/* Success icon — R126-3g: the clay hero tile (accentTint + rim +
+            .ac-clay + the accentDeep glyph — the mobile welcome hero
+            grammar); the check-draw animation stays. */}
         <div
-          className="mx-auto w-[96px] h-[96px] short:w-16 short:h-16 rounded-[28px] grid place-items-center"
+          className="ac-clay mx-auto w-[96px] h-[96px] short:w-16 short:h-16 rounded-[24px] border grid place-items-center bg-accent-tint border-clay-rim"
           style={{
-            background: s.accent,
-            border: `2.5px solid ${s.borderStrong}`,
-            boxShadow: s.bentoShadow,
             animation: "bounce-in 0.7s cubic-bezier(.2,1.4,.4,1)",
           }}
         >
@@ -129,7 +132,7 @@ export function AllSetScreen() {
             <path
               d="M8 22 L18 30 L34 14"
               fill="none"
-              stroke={s.accentText}
+              stroke={s.accentDeep}
               strokeWidth="4.5"
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -153,39 +156,28 @@ export function AllSetScreen() {
         >
           ACUTE-CODE is configured and ready to rip. Your theme is{" "}
           <span
-            className="inline-block px-2 py-1 rounded-full text-[12px] font-bold mx-0.5"
-            style={{ background: s.pillBg, color: s.pillText }}
+            className="inline-block px-2 py-1 rounded-full text-[12px] font-bold mx-0.5 bg-badge-neutral text-badge-neutral-fg"
           >
             {s.theme.name}
           </span>{" "}
           and your brain is{" "}
           <span
-            className="inline-block px-2 py-1 rounded-full text-[12px] font-mono font-bold mx-0.5"
-            style={{
-              background: s.subtle,
-              border: `1px solid ${s.border}`,
-              color: s.text,
-            }}
+            className="inline-block px-2 py-1 rounded-full border text-[12px] font-mono font-bold mx-0.5 border-clay-rim bg-well"
+            style={{ color: s.text }}
           >
             {modelLabel}
           </span>
           .
         </p>
 
-        {/* Summary cards */}
+        {/* Summary cards — R126-3g: clay cards with the ClayIconChip tiles. */}
         <div className="mt-8 short:mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-left">
           {/* Theme card */}
           <div
-            className="rounded-[20px] p-4 flex gap-3 items-center"
-            style={{
-              background: s.card,
-              border: `1.5px solid ${s.border}`,
-              boxShadow: s.softShadow,
-            }}
+            className="rounded-[20px] p-4 flex gap-3 items-center border border-clay-rim ac-clay-sm bg-card"
           >
             <div
-              className="w-10 h-10 rounded-[12px] grid place-items-center font-bold text-[14px] shrink-0"
-              style={{ background: s.accent, color: s.accentText }}
+              className="w-10 h-10 rounded-[12px] grid place-items-center font-bold text-[14px] shrink-0 bg-accent-tint text-accent-deep"
             >
               Aa
             </div>
@@ -201,16 +193,11 @@ export function AllSetScreen() {
 
           {/* Model card */}
           <div
-            className="rounded-[20px] p-4 flex gap-3 items-center"
-            style={{
-              background: s.card,
-              border: `1.5px solid ${s.border}`,
-              boxShadow: s.softShadow,
-            }}
+            className="rounded-[20px] p-4 flex gap-3 items-center border border-clay-rim ac-clay-sm bg-card"
           >
             <div
-              className="w-10 h-10 rounded-[12px] grid place-items-center font-black text-[13px] shrink-0"
-              style={{ background: s.pillBg, color: s.pillText }}
+              className="w-10 h-10 rounded-[12px] grid place-items-center font-black text-[13px] shrink-0 border border-clay-rim bg-well"
+              style={{ color: s.text }}
             >
               {providerLetter}
             </div>
@@ -226,23 +213,17 @@ export function AllSetScreen() {
 
           {/* Secure card */}
           <div
-            className="rounded-[20px] p-4 flex gap-3 items-center"
-            style={{
-              background: s.card,
-              border: `1.5px solid ${s.border}`,
-              boxShadow: s.softShadow,
-            }}
+            className="rounded-[20px] p-4 flex gap-3 items-center border border-clay-rim ac-clay-sm bg-card"
           >
             <div
-              className="w-10 h-10 rounded-[12px] grid place-items-center shrink-0"
-              style={{ background: s.accent, color: s.accentText }}
+              className="w-10 h-10 rounded-[12px] grid place-items-center shrink-0 bg-accent-tint text-accent-deep"
             >
               <svg
                 width={20}
                 height={20}
                 viewBox="0 0 24 24"
                 fill="none"
-                stroke={s.accentText}
+                stroke="currentColor"
                 strokeWidth={2}
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -264,13 +245,16 @@ export function AllSetScreen() {
 
         {/* CTA buttons */}
         <div className="mt-8 short:mt-5 flex flex-col md:flex-row items-center justify-center gap-3">
-          {/* Primary button */}
+          {/* Primary button — R126-3g: the ActionButton grammar — the
+              accent → accentDeep gradient stops + the ONE sheen spelling
+              (.ac-chrome-sheen, the rationed 9s glint; the old 2.2s
+              animate-shine sweep retired) + bentoShadow (WIZARD-DNA §7). */}
           <button
             onClick={() => navigate("/")}
-            className="group relative h-[58px] px-8 rounded-full font-bold text-[16px] flex items-center gap-3 border-[1.5px] overflow-hidden hover:scale-[1.02] active:scale-[0.98] transition-transform cursor-pointer animate-shine"
+            className="ac-chrome-sheen group relative h-[58px] px-8 rounded-full font-bold text-[16px] flex items-center gap-3 border-[1.5px] hover:scale-[1.02] active:scale-[0.98] transition-transform cursor-pointer"
             style={{
-              background: s.accent,
-              borderColor: s.accent,
+              background: `linear-gradient(135deg, ${s.accent}, ${s.accentDeep})`,
+              borderColor: s.accentDeep,
               color: s.accentText,
               boxShadow: s.bentoShadow,
             }}
@@ -278,35 +262,29 @@ export function AllSetScreen() {
             Open ACUTE-CODE
             <span
               className="w-8 h-8 rounded-full grid place-items-center group-hover:translate-x-0.5 transition-transform font-bold z-10"
-              style={{ background: s.accentText, color: s.accent }}
+              style={{ background: s.accentText, color: s.accentDeep }}
             >
               →
             </span>
           </button>
         </div>
 
-        {/* Tip bar */}
+        {/* Tip bar — R126-3g: clay card; the TIP chip = the neutral badge;
+            the Settings keycap sinks into the well. */}
         <div
-          className="mt-8 short:mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12px] font-medium"
-          style={{
-            background: s.card,
-            border: `1.5px solid ${s.border}`,
-            boxShadow: s.softShadow,
-            color: s.text,
-          }}
+          className="mt-8 short:mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-full text-[12px] font-medium border border-clay-rim ac-clay-sm bg-card"
+          style={{ color: s.text }}
         >
           <span
-            className="px-2 py-1 rounded-full text-[10px] font-bold"
-            style={{ background: s.pillBg, color: s.pillText }}
+            className="px-2 py-1 rounded-full text-[10px] font-bold bg-badge-neutral text-badge-neutral-fg"
           >
             TIP
           </span>
           {" "}You can change theme & brain anytime in{" "}
           <span
-            className="px-1.5 py-0.5 rounded font-mono text-[11px]"
+            className="px-1.5 py-0.5 rounded border font-mono text-[11px] border-clay-rim"
             style={{
-              background: s.subtle,
-              border: `1px solid ${s.border}`,
+              background: s.surfaceWell,
               color: s.text,
             }}
           >
@@ -314,13 +292,12 @@ export function AllSetScreen() {
           </span>
         </div>
 
-        {/* Restart link */}
+        {/* Restart link — R126-3g: the JS opacity hover handlers retired
+            for the CSS class leg (TOKENS §6). */}
         <div className="mt-12 short:mt-6 flex justify-center">
           <button
-            className="text-[12px] font-bold hover:underline underline-offset-4 cursor-pointer bg-transparent border-none p-0 transition-opacity"
+            className="text-[12px] font-bold hover:opacity-80 underline-offset-4 cursor-pointer bg-transparent border-none p-0 transition-opacity"
             style={{ color: s.textTertiary }}
-            onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.8"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
             onClick={() => setStep(0)}
           >
             Restart onboarding • replay experience

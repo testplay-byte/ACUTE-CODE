@@ -22,7 +22,6 @@ import {
 import { useRightSidebarEvents } from "../../lib/right-sidebar-events";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { isTauri } from "../../lib/sidecar";
-import { withAlpha } from "../dashboard/helpers";
 import { ease } from "../../lib/motion";
 import { FileViewerPanel } from "./FileViewerPanel";
 // ROUND-48 (R48-c): the project file-explorer tab (tree left / content right).
@@ -58,6 +57,10 @@ import {
 // (the "browser paused while the menu is open" retirement).
 import {
   hideMenuOverlay,
+  // R126-3h: the shared payload-theme builder (carries the deep-tier/
+  // badge-tone/clay legs the overlay page paints the status/selection/
+  // chrome legs with — the inline pre-R126 theme literals are retired).
+  menuThemeFromStyles,
   onMenuOverlayClose,
   onMenuOverlayPick,
   prewarmMenuOverlay,
@@ -419,17 +422,9 @@ export function RightSidebar({
         title: "New tab",
         width: 220,
         items,
-        theme: {
-          card: styles.card,
-          border: styles.border,
-          softShadow: styles.softShadow,
-          text: styles.text,
-          textSecondary: styles.textSecondary,
-          textTertiary: styles.textTertiary,
-          accent: styles.accent,
-          subtleHover: styles.subtleHover,
-          isDark: styles.isDark,
-        },
+        // R126-3h: the shared theme builder (the deep-tier legs ride the
+        // payload now — see lib/menu-overlay.ts).
+        theme: menuThemeFromStyles(styles),
       };
     }
     if (subAgentPickerFor !== null) {
@@ -451,17 +446,8 @@ export function RightSidebar({
         title: "Sub-agents",
         width: 260,
         items,
-        theme: {
-          card: styles.card,
-          border: styles.border,
-          softShadow: styles.softShadow,
-          text: styles.text,
-          textSecondary: styles.textSecondary,
-          textTertiary: styles.textTertiary,
-          accent: styles.accent,
-          subtleHover: styles.subtleHover,
-          isDark: styles.isDark,
-        },
+        // R126-3h: the shared theme builder (same leg as the quick menu).
+        theme: menuThemeFromStyles(styles),
       };
     }
     return null;
@@ -561,7 +547,9 @@ export function RightSidebar({
 
   if (!open) {
     // Collapsed rail — a reopen button (R100-G: hover = the CSS wash —
-    // bg-card/hover:bg-hover classes, no JS pair).
+    // bg-card/hover:bg-hover classes, no JS pair). R126-3e: the rail rides
+    // the clay card material (the 1px warm rim; the 1.5px bento border and
+    // the border-line spelling are retired).
     return (
       <motion.button
         onClick={() => toggleOpen(projectId)}
@@ -570,7 +558,7 @@ export function RightSidebar({
         initial={{ opacity: 0, width: 0 }}
         animate={{ opacity: 1, width: 36 }}
         transition={{ duration: 0.2, ease }}
-        className="shrink-0 self-stretch rounded-2xl grid place-items-center border-[1.5px] border-line bg-card transition-colors hover:bg-hover"
+        className="shrink-0 self-stretch rounded-2xl grid place-items-center border border-clay-rim bg-card transition-colors hover:bg-hover"
         style={{ color: styles.textTertiary }}
       >
         <PanelRightClose size={14} className="rotate-180" />
@@ -593,8 +581,12 @@ export function RightSidebar({
       // web build (pure DOM, no floating layer). The owner asked for the
       // panel to feel "native… part of the right sidebar itself".
       transition={{ duration: isTauri() ? 0 : 0.2, ease }}
-      className="shrink-0 flex flex-col overflow-hidden rounded-2xl"
-      style={{ background: styles.card, border: `1.5px solid ${styles.border}` }}
+      // R126-3e (MATERIALS): the sidebar container = THE CLAY CARD — the
+      // byte-identical spelling the landed waves ship (rounded-2xl + the
+      // 1px warm border-clay-rim rim on all four sides + .ac-clay two-leg
+      // shadow + bg-card + the dark-mode-only matte top edge); the pre-R126
+      // 1.5px bento border + the inline background/border legs are retired.
+      className="shrink-0 flex flex-col overflow-hidden rounded-2xl border border-clay-rim bg-card ac-clay ac-clay-edge-dark"
     >
       {/* ── Browser-style tab strip header — R100-G: the ONE 36px toolbar
           grammar (research §C2 P4 + TOKENS §3's row-height table): the strip
@@ -619,22 +611,21 @@ export function RightSidebar({
       <div className="flex shrink-0 items-stretch">
         {/* Column 1: scrollable tab strip — tabs + "+" only. */}
         <div
-          className="flex-1 min-w-0 flex items-stretch gap-0.5 h-9 border-b overflow-x-auto"
-          style={{
-            borderColor: styles.border,
-            background: styles.isDark ? "rgba(0,0,0,0.12)" : styles.subtle,
-            scrollbarWidth: "thin",
-          }}
+          // R126-3e: the strip = the in-flow chrome shade (bg-header-surface,
+          // TOKENS §10's header-column rung) + the clay-rim hairline; the
+          // pre-R126 JS isDark/subtle leg is retired.
+          className="flex-1 min-w-0 flex items-stretch gap-0.5 h-9 border-b border-clay-rim bg-header-surface overflow-x-auto"
+          style={{ scrollbarWidth: "thin" }}
         >
           {state.tabs.map((tab) => {
             const active = tab.id === state.activeTabId;
             const Icon = TAB_ICON[tab.type];
-            const iconColor =
-              tab.type === "subagent" && tab.subRole
-                ? ROLE_COLORS[tab.subRole] ?? styles.accent
-                : active
-                  ? styles.accent
-                  : styles.textTertiary;
+            // R126-3e (de-blue): the ROLE_COLORS icon leg is GONE — a role
+            // hue paints neither icon nor fill anymore (the role color
+            // survives as the picker/panel chips' DOT, TOKENS §11's
+            // dots-only law). The tab icon speaks the strip's own grammar:
+            // accent marker when active, tertiary when not.
+            const iconColor = active ? styles.accent : styles.textTertiary;
             return (
               <div
                 key={tab.id}
@@ -648,18 +639,20 @@ export function RightSidebar({
                     setActiveTab(projectId, tab.id);
                   }
                 }}
-                className="group relative flex items-center gap-1.5 pl-2.5 pr-1 h-full min-w-[120px] max-w-[180px] cursor-pointer transition-colors shrink-0"
-                style={{
-                  background: active ? styles.card : "transparent",
-                  color: active ? styles.text : styles.textSecondary,
-                  borderBottom: active ? `2px solid ${styles.accent}` : `2px solid transparent`,
-                }}
+                // R126-3e: the browser tab on the clay strip — active =
+                // bg-card + the 2px bg-accent-deep underline + the 500
+                // text-accent-deep label (TOKENS §1d's accent-as-text tier);
+                // inactive = text-muted + the CSS hover wash. All class-leg.
+                className={`group relative flex items-center gap-1.5 pl-2.5 pr-1 h-full min-w-[120px] max-w-[180px] cursor-pointer transition-colors shrink-0 border-b-2 ${
+                  active ? "bg-card border-accent-deep" : "border-transparent hover:bg-hover"
+                }`}
                 title={tab.title}
               >
                 <Icon size={13} style={{ color: iconColor }} className="shrink-0" />
                 <span
-                  className="flex-1 min-w-0 truncate text-[12px]"
-                  style={{ color: active ? styles.accent : undefined, fontWeight: active ? 500 : 400 }}
+                  className={`flex-1 min-w-0 truncate text-[12px] ${
+                    active ? "text-accent-deep font-medium" : "text-muted"
+                  }`}
                 >
                   {tab.title}
                 </span>
@@ -698,11 +691,14 @@ export function RightSidebar({
               }}
               aria-label="New tab"
               title="New tab"
-              className="w-7 h-7 my-auto grid place-items-center rounded-lg transition-colors hover:bg-hover"
-              style={{
-                color: quickMenuOpen ? styles.accent : styles.textTertiary,
-                background: quickMenuOpen ? withAlpha(styles.accent, 0.12) : undefined,
-              }}
+              // R126-3e: the open state = the accent-tint marker chip
+              // (bg-accent-tint + text-accent-deep); the withAlpha wash died.
+              // text-tertiary has no @theme mapping (a phantom utility) — the
+              // resting tertiary ink stays on the JS leg like every wave.
+              className={`w-7 h-7 my-auto grid place-items-center rounded-lg transition-colors ${
+                quickMenuOpen ? "bg-accent-tint text-accent-deep" : "hover:bg-hover"
+              }`}
+              style={quickMenuOpen ? undefined : { color: styles.textTertiary }}
             >
               <Plus size={14} />
             </button>
@@ -717,11 +713,11 @@ export function RightSidebar({
           onClick={() => toggleOpen(projectId)}
           aria-label="Collapse right sidebar"
           title="Collapse"
-          className="shrink-0 w-9 h-9 grid place-items-center border-l bg-subtle transition-colors hover:bg-hover"
-          style={{
-            color: styles.textTertiary,
-            borderColor: styles.border,
-          }}
+          // R126-3e: the dedicated collapse column keeps its 36px/border-l
+          // contract; the surface snaps to the well rung + the clay-rim
+          // hairline (the bg-subtle JS leg retired).
+          className="shrink-0 w-9 h-9 grid place-items-center border-l border-clay-rim bg-well transition-colors hover:bg-hover"
+          style={{ color: styles.textTertiary }}
         >
           <PanelRightClose size={13} />
         </button>
@@ -923,13 +919,13 @@ function QuickMenu({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -4, scale: 0.97 }}
       transition={{ duration: 0.14, ease }}
-      className="fixed z-50 w-[220px] rounded-xl border p-1.5"
+      // R126-3e: the quick menu = a clay card that RISES (border-clay-rim +
+      // bg-card + .ac-clay-sheet — TOKENS §9's upward two-leg shadow, the
+      // anchored-menu recipe); the inline card/border/softShadow legs died.
+      className="fixed z-50 w-[220px] rounded-xl border border-clay-rim bg-card ac-clay-sheet p-1.5"
       style={{
         top: anchor.top,
         left: anchor.left,
-        background: styles.card,
-        borderColor: styles.border,
-        boxShadow: styles.softShadow,
       }}
     >
       <div
@@ -999,13 +995,12 @@ function SubAgentPicker({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -4, scale: 0.97 }}
       transition={{ duration: 0.14, ease }}
-      className="fixed z-50 w-[260px] max-h-[300px] overflow-y-auto rounded-xl border p-1.5"
+      // R126-3e: the sub-agent picker = the same rising clay card as the
+      // quick menu (border-clay-rim + bg-card + .ac-clay-sheet).
+      className="fixed z-50 w-[260px] max-h-[300px] overflow-y-auto rounded-xl border border-clay-rim bg-card ac-clay-sheet p-1.5"
       style={{
         top: anchor.top,
         left: anchor.left,
-        background: styles.card,
-        borderColor: styles.border,
-        boxShadow: styles.softShadow,
       }}
     >
       <div
@@ -1032,24 +1027,41 @@ function SubAgentPicker({
                   sub-agent is which"): the leading monospace code badge —
                   R48-e1's deterministic 4-char [A-Z0-9] short id, the same
                   mark the Delegated rows / panel header / approval
-                  attribution use. */}
+                  attribution use. R126-3e: the accent chip rides the CLASS leg
+                  — bg-accent-tint (TOKENS §10's 12% accent container) +
+                  text-accent-deep (§1d's accent-as-text tier), the exact
+                  WorkingSection code-chip spelling. */}
               <span
-                className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md tracking-[0.08em]"
-                style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+                className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md tracking-[0.08em] bg-accent-tint text-accent-deep"
                 data-testid="subagent-picker-code"
               >
                 {sub.code}
               </span>
+              {/* R126-3e (de-blue): the role chip = the NEUTRAL badge tone +
+                  the role color as a DOT (TOKENS §11's dots-only law for
+                  hue-as-data) — the withAlpha(roleColor) fill is retired. */}
               <span
-                className="text-[10px] font-mono font-medium uppercase shrink-0 px-1.5 py-0.5 rounded-md"
-                style={{ color, background: withAlpha(color, 0.14) }}
+                className="inline-flex items-center gap-1 text-[10px] font-mono font-medium uppercase shrink-0 px-1.5 py-0.5 rounded-md bg-badge-neutral text-badge-neutral-fg"
               >
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} aria-hidden />
                 {role}
               </span>
               <span className="flex-1 min-w-0 truncate text-[11px] font-medium" style={{ color: styles.text }} title={sub.title ?? "Untitled"}>
                 {sub.title ?? "Untitled"}
               </span>
-              <span className="text-[10px] shrink-0" style={{ color: styles.textTertiary }}>
+              {/* R126-3e (§11): status TEXT rides the deep/bright pairs —
+                the flat tertiary spelling is retired. */}
+              <span
+                className={`text-[10px] shrink-0 ${
+                  sub.status === "running" || sub.status === "queued"
+                    ? "text-running-deep"
+                    : sub.status === "failed"
+                      ? "text-danger-deep"
+                      : sub.status === "completed"
+                        ? "text-success-deep"
+                        : "text-muted"
+                }`}
+              >
                 {sub.status}
               </span>
             </button>
@@ -1087,7 +1099,9 @@ function EmptyState({
       <div>
         <button
           onClick={onNewTab}
-          className="w-12 h-12 mx-auto mb-3 grid place-items-center rounded-2xl border-2 border-dashed border-line transition-colors hover:border-accent"
+          // R126-3e: the empty-state tile keeps its dashed affordance; the
+          // rim + accent hover snap to the clay spellings (border-clay-rim).
+          className="w-12 h-12 mx-auto mb-3 grid place-items-center rounded-2xl border-2 border-dashed border-clay-rim transition-colors hover:border-accent"
           style={{
             color: styles.textTertiary,
           }}
@@ -1107,10 +1121,10 @@ function EmptyState({
             <button
               key={label}
               onClick={onClick}
-              className="w-full flex items-center gap-2 h-9 px-3 rounded-xl border border-line bg-subtle text-[12px] font-medium transition-colors hover:bg-hover"
-              style={{
-                color: styles.textSecondary,
-              }}
+              // R126-3e: the quick actions = the chip grammar (border-clay-rim
+              // + bg-well + text-muted, TOKENS §10/§11's quiet container) —
+              // the border-line/bg-subtle bento spelling is retired.
+              className="w-full flex items-center gap-2 h-9 px-3 rounded-xl border border-clay-rim bg-well text-muted text-[12px] font-medium transition-colors hover:bg-hover"
             >
               <Icon size={14} style={{ color: styles.accent }} className="shrink-0" />
               {label}

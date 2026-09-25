@@ -22,31 +22,23 @@ export function Header() {
       {/* Full-bleed chrome: logo/steps pin to the true window corners at every size. */}
       <div className={`relative z-10 py-4 md:py-6 short:py-3 ${WIZARD_EDGE}`}>
         <div className="flex h-10 items-center justify-between">
-          {/* Logo pill */}
+          {/* Logo pill — R126-3g: the clay chrome chip. */}
           <div
-            className="flex items-center gap-2.5 px-4 h-10 rounded-full border-[1.5px]"
-            style={{
-              background: s.card,
-              borderColor: s.borderStrong,
-              boxShadow: s.bentoShadowSm,
-            }}
+            className="flex items-center gap-2.5 px-4 h-10 rounded-full border border-clay-rim ac-clay-sm bg-card"
           >
             <span
               className="w-6 h-6 rounded-full grid place-items-center text-[11px] font-black tracking-tighter"
-              style={{ background: s.accent, color: s.accentText }}
+              style={{ background: s.accentDeep, color: s.accentText }}
             >
               A
             </span>
             <span className="text-[13px] font-bold tracking-[-0.02em]" style={{ color: s.text }}>
               {APP_NAME}
             </span>
+            {/* R126-3g: the vX BETA chip rides the neutral badge + the
+                meta-mono face (WIZARD-DNA §2's "meta-type mono suffix"). */}
             <span
-              className="ml-1 px-2 py-0.5 rounded-full text-[10px] font-bold border"
-              style={{
-                backgroundColor: s.accent,
-                color: s.accentText,
-                borderColor: s.accent,
-              }}
+              className="ml-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-badge-neutral text-badge-neutral-fg"
             >
               {`v${APP_VERSION}`} BETA
             </span>
@@ -56,12 +48,7 @@ export function Header() {
           {showSteps && (
             <div className="flex items-center gap-3">
               <div
-                className="hidden md:flex items-center gap-2 px-3 h-9 rounded-full border-[1.5px]"
-                style={{
-                  background: s.card,
-                  borderColor: s.border,
-                  boxShadow: s.softShadow,
-                }}
+                className="hidden md:flex items-center gap-2 px-3 h-9 rounded-full border border-clay-rim ac-clay-sm bg-card"
               >
                 <span className="text-[11px] font-bold" style={{ color: s.textTertiary }}>
                   STEP
@@ -76,8 +63,11 @@ export function Header() {
                         className="h-1.5 rounded-full transition-all duration-300"
                         style={{
                           width: isCurrent ? "24px" : "14px",
+                          // R126-3g: the morphing dots re-derive from the
+                          // accent family — current = accentDeep, done =
+                          // accent (the toggleActive white/black retired).
                           background: isCurrent
-                            ? s.toggleActive
+                            ? s.accentDeep
                             : isDone
                               ? s.accent
                               : s.border,
@@ -91,12 +81,7 @@ export function Header() {
                 </span>
               </div>
               <div
-                className="w-9 h-9 rounded-full grid place-items-center border-[1.5px]"
-                style={{
-                  background: s.card,
-                  borderColor: s.borderStrong,
-                  boxShadow: s.softShadow,
-                }}
+                className="w-9 h-9 rounded-full grid place-items-center border border-clay-rim ac-clay-sm bg-card"
               >
                 <span style={{ color: s.text }} className="text-[13px]">
                   ✦

@@ -12,12 +12,68 @@
 
 /*
  * ── Typography ────────────────────────────────────────────────────────────
- * Space Grotesk (SIL Open Font License 1.1 — bundled verbatim in
- * src/assets/fonts/OFL.txt; OFL permits redistribution and embedding in any
- * product). Loaded LOCALLY — no CDN dependency, works fully offline.
- * Variable weight 300–700 covers every demo weight (the demo's `font-black`
- * renders at 700 with browser synthesis, exactly as the demos did).
+ * R126 (the Clay Companion redesign): the app's identity faces switch to
+ * Manrope (UI) + JetBrains Mono (machine text) — the SAME faces the Android
+ * app speaks (mobile bundles them via expo-google-fonts; these TTFs are the
+ * verbatim files from that bundle, SIL Open Font License 1.1 — see
+ * Manrope-OFL.txt / JetBrainsMono-OFL.txt alongside). Loaded LOCALLY — no
+ * CDN dependency, works fully offline. The static weights map 1:1 onto the
+ * mobile type ladder's weight law (400 body / 500 medium / 600 row titles /
+ * 700 card titles / 800 display + the mono pair 400/500).
+ *
+ * Space Grotesk (the pre-R126 identity face) stays @font-face'd one more
+ * round for the one legacy reference (the wizard's confetti font stack) —
+ * it no longer rides --font-sans.
  */
+@font-face {
+  font-family: "Manrope";
+  src: url("./assets/fonts/Manrope_400Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Manrope";
+  src: url("./assets/fonts/Manrope_500Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Manrope";
+  src: url("./assets/fonts/Manrope_600SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Manrope";
+  src: url("./assets/fonts/Manrope_700Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Manrope";
+  src: url("./assets/fonts/Manrope_800ExtraBold.ttf") format("truetype");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./assets/fonts/JetBrainsMono_400Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./assets/fonts/JetBrainsMono_500Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
 @font-face {
   font-family: "Space Grotesk";
   src: url("./assets/fonts/SpaceGrotesk-latin-var.woff2") format("woff2-variations");
@@ -53,12 +109,16 @@
  * every existing component keeps working unchanged.
  */
 :root {
-  /* Fallback = derived nova/light values from the table. */
-  --ac-bg: #fffbf0;
-  --ac-card: #ffffff;
-  --ac-text: #111111;
-  --ac-accent: #ff6b2c;
-  --ac-accent-2: #ffd9c0;
+  /* R126: the fallback is now the CLAY/light derivation (clay is the
+     default theme — the pre-paint literal set must match what the JS bridge
+     would write for clay+light, so a plain-HTML snapshot renders the clay
+     material, never the retired nova orange). */
+  --ac-bg: #eceee8;
+  --ac-card: #fdfdfb;
+  --ac-text: #2a2018;
+  --ac-accent: #c4653f;
+  --ac-accent-deep: #b45330;
+  --ac-accent-2: #8a6a55;
   --ac-accent-text: #ffffff;
   --ac-border: rgba(0, 0, 0, 0.1);
   --ac-border-strong: rgba(0, 0, 0, 0.18);
@@ -72,19 +132,47 @@
   --ac-bento-shadow-sm: 3px 3px 0px 0px black;
   --ac-soft-shadow: 0 8px 32px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.04);
   --ac-primary-btn-shadow: 3px 3px 0px 0px black;
-  /* R108-e: the clay material's layered depth — light-mode values (the JS
-     bridge overwrites per mode; TOKENS §9). Same pre-paint role as the
-     literals above. */
-  --ac-clay-shadow: 0 2px 4px rgba(42, 32, 24, 0.08), 0 16px 40px -8px rgba(42, 32, 24, 0.13);
-  --ac-clay-shadow-sm: 0 1px 2px rgba(42, 32, 24, 0.08), 0 8px 20px -4px rgba(42, 32, 24, 0.1);
-  --ac-text-secondary: rgba(0, 0, 0, 0.6);
-  --ac-text-tertiary: rgba(0, 0, 0, 0.4);
+  /* R108-e/R126: the clay material's layered depth — the mobile v2 two-leg
+     strings verbatim (light-mode values; the JS bridge overwrites per
+     mode). Same pre-paint role as the literals above. */
+  --ac-clay-shadow: 0px 2px 4px rgba(38, 34, 28, 0.14), 0px 12px 32px -8px rgba(38, 34, 28, 0.24);
+  --ac-clay-shadow-sm: 0px 1px 2px rgba(38, 34, 28, 0.1), 0px 3px 10px -4px rgba(38, 34, 28, 0.14);
+  --ac-clay-shadow-pressed: 0px 1px 2px rgba(38, 34, 28, 0.12);
+  --ac-clay-shadow-sheet: 0px -2px 6px rgba(38, 34, 28, 0.12), 0px -12px 32px -8px rgba(38, 34, 28, 0.22);
+  /* R126: the Clay Companion surface ladder (clay/light fallback values —
+     the mobile tokens.ts formulas applied to the clay literals above). */
+  --ac-surface-well: #f4f1ee;
+  --ac-surface-header: #e0e2dc;
+  --ac-accent-tint: #f6ebe4;
+  --ac-clay-rim: #e8e7e4;
+  --ac-clay-top-edge: #fefeFe;
+  --ac-mono-bg: #f0f0ed;
+  --ac-mono-border: rgba(42, 32, 24, 0.1);
+  --ac-mono-text: #3a2e22;
+  --ac-success-deep: #15803d;
+  --ac-warning-deep: #b45309;
+  --ac-danger-deep: #dc2626;
+  --ac-running-deep: #1d4ed8;
+  --ac-badge-success-bg: #e3f6e8;
+  --ac-badge-success-fg: #166534;
+  --ac-badge-warning-bg: #fcf2de;
+  --ac-badge-warning-fg: #92400e;
+  --ac-badge-danger-bg: #fbe7e5;
+  --ac-badge-danger-fg: #b91c1c;
+  --ac-badge-running-bg: #e6eefa;
+  --ac-badge-running-fg: #1d4ed8;
+  --ac-badge-accent-bg: #b45330;
+  --ac-badge-accent-fg: #ffffff;
+  --ac-badge-neutral-bg: #f4f1ee;
+  --ac-badge-neutral-fg: rgba(0, 0, 0, 0.62);
+  --ac-text-secondary: rgba(0, 0, 0, 0.62);
+  --ac-text-tertiary: rgba(0, 0, 0, 0.57);
   --ac-pill-bg: black;
   --ac-pill-text: white;
   --ac-toggle-track: rgba(0, 0, 0, 0.04);
   --ac-toggle-active: black;
   --ac-dot-color: rgba(0, 0, 0, 0.06);
-  --ac-dot: #ff6b2c;
+  --ac-dot: #c4653f;
   /* R107-g: liquid-chrome ramp fallbacks (light-mode values — the JS bridge
      in themes.ts syncThemeCssVars overwrites them per mode; TOKENS §8).
      Same pre-paint role as the nova literals above. R108-e: the sheen
@@ -150,9 +238,44 @@
   --color-accent-2: var(--accent-2);
   --color-accent-faded: var(--accent-faded);
   --color-accent-soft: var(--accent-soft);
+  /* R126 (the Clay Companion surface ladder — the Tailwind leg): every new
+     surface/token gains a utility mapping so screens can spell
+     `bg-well`, `text-accent-deep`, `bg-accent-tint`, `border-clay-rim`,
+     `bg-mono-block`, `text-mono-ink`, `bg-badge-success` … without a JS
+     style leg. All resolve to the live --ac-* vars (theme switch with no
+     rebuild, exactly like the original set above). */
+  --color-accent-deep: var(--ac-accent-deep);
+  --color-well: var(--ac-surface-well);
+  --color-header-surface: var(--ac-surface-header);
+  --color-accent-tint: var(--ac-accent-tint);
+  --color-clay-rim: var(--ac-clay-rim);
+  --color-clay-top-edge: var(--ac-clay-top-edge);
+  --color-mono-block: var(--ac-mono-bg);
+  --color-mono-line: var(--ac-mono-border);
+  --color-mono-ink: var(--ac-mono-text);
+  --color-success-deep: var(--ac-success-deep);
+  --color-warning-deep: var(--ac-warning-deep);
+  --color-danger-deep: var(--ac-danger-deep);
+  --color-running-deep: var(--ac-running-deep);
+  --color-badge-success: var(--ac-badge-success-bg);
+  --color-badge-success-fg: var(--ac-badge-success-fg);
+  --color-badge-warning: var(--ac-badge-warning-bg);
+  --color-badge-warning-fg: var(--ac-badge-warning-fg);
+  --color-badge-danger: var(--ac-badge-danger-bg);
+  --color-badge-danger-fg: var(--ac-badge-danger-fg);
+  --color-badge-running: var(--ac-badge-running-bg);
+  --color-badge-running-fg: var(--ac-badge-running-fg);
+  --color-badge-accent: var(--ac-badge-accent-bg);
+  --color-badge-accent-fg: var(--ac-badge-accent-fg);
+  --color-badge-neutral: var(--ac-badge-neutral-bg);
+  --color-badge-neutral-fg: var(--ac-badge-neutral-fg);
 
-  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  /* R126: Manrope is the identity face (the mobile app's face — one product
+     family); JetBrains Mono is the machine face. Space Grotesk (the
+     pre-redesign face) remains @font-face'd for the one legacy reference
+     but no longer fronts the app. */
+  --font-sans: "Manrope", "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 
 /* ── ROUND-100 (R100-D, TOKENS §6): THE ONE global focus idiom ──────────────
@@ -193,10 +316,12 @@
    verdict on the old hard swap). The textarea itself paints NOTHING (its
    outline-none now actually wins — see the global rule's layer fix above);
    the caret is the input's own focus indicator, and dragActive keeps its
-   inline accent border + tint (a REAL state, applied in Composer.tsx). */
-.composer-shell {
-  border-color: var(--ac-border);
-}
+   inline accent border + tint (a REAL state, applied in Composer.tsx).
+   R126 (R126-3d-4): the RESTING border-color declaration is RETIRED — the
+   shell's resting rim is now the CLASS leg (border-clay-rim on the box,
+   Composer.tsx — the clay hairline every card speaks, TOKENS §5/§10); this
+   rule keeps ONLY the :focus-within pair, byte-identical, and being
+   unlayered it still beats the layered utility when the box is focused. */
 .composer-shell:focus-within {
   border-color: color-mix(in srgb, var(--ac-accent) 50%, transparent);
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -233,6 +358,53 @@
 
 .ac-clay-sm {
   box-shadow: var(--ac-clay-shadow-sm);
+}
+
+/* ── ROUND-126 (the Clay Companion redesign): the surface-ladder pattern
+   classes (mobile primitives.tsx ClayCard/ClayInput/Chip/Badge recipes,
+   the CSS-class leg). Host contract unchanged: these paint ONE job each
+   and compose with any bg utility / inline style.
+     · .ac-well        — the recessed well (surfaceWell fill + clay-rim
+       hairline): accordions, activity wells, inputs, skeletons.
+     · .ac-clay-rim    — the warm hairline rim on all four sides (the
+       default card edge in LIGHT mode; dark mode keeps it too — the
+       mobile law: rim always, top-edge highlight dark-only).
+     · .ac-clay-edge-dark — the dark-mode-only matte top edge (14% white
+       over the card): hidden in light mode via :not([data-mode="dark"]).
+     · .ac-clay-pressed / .ac-clay-sheet — the press-collapse + upward
+       shadow steps for interaction states and rising surfaces.
+     · .ac-mono-block — the recessed mono surface (terminal/output). */
+.ac-well {
+  background-color: var(--ac-surface-well);
+  border: 1px solid var(--ac-clay-rim);
+}
+
+.ac-clay-rim {
+  border: 1px solid var(--ac-clay-rim);
+}
+
+/* The top-edge highlight is a DARK-MODE-ONLY device (mobile AMENDMENT 1:
+   the 55% white mix was arithmetically invisible on ~99%-white light
+   cards; at 14% white it finally reads on the dark card). */
+.ac-clay-edge-dark {
+  border-top: 1px solid var(--ac-clay-top-edge);
+}
+:root:not([data-mode="dark"]) .ac-clay-edge-dark {
+  border-top-color: transparent;
+}
+
+.ac-clay-pressed {
+  box-shadow: var(--ac-clay-shadow-pressed);
+}
+
+.ac-clay-sheet {
+  box-shadow: var(--ac-clay-shadow-sheet);
+}
+
+.ac-mono-block {
+  background-color: var(--ac-mono-bg);
+  border: 1px solid var(--ac-mono-border);
+  color: var(--ac-mono-text);
 }
 
 .ac-chrome-metal {
@@ -637,12 +809,15 @@
  * chat's reading surface gets the calmer "I'm alive" signal. Reduced-motion:
  * static + fully visible (the global neutralizer collapses it to end-state,
  * and the explicit rule below guarantees it). */
+/* R126 (MOTION.md §2, the house live rhythm): the caret breathes opacity
+   1↔0.25 with 550ms legs each way (1.1s cycle) — the mobile LiveCaret
+   grammar, replacing the pre-R126 1s/0.4 pulse. */
 @keyframes ac-caret-pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  50% { opacity: 0.25; }
 }
 .ac-caret-pulse {
-  animation: ac-caret-pulse 1s ease-in-out infinite;
+  animation: ac-caret-pulse 1.1s ease-in-out infinite;
 }
 
 @keyframes ac-ellipsis-cycle {
@@ -672,12 +847,15 @@
 
 /* pulse: soft breathing opacity for the streaming avatar tile (round-30 —
    signals "the model is generating" on the avatar while text streams in). */
+/* R126 (MOTION.md §2, STATUS_PULSE_LEG_MS): the shared status dot breathes
+   opacity 1↔0.35 with 600ms legs (1.2s cycle) — the mobile StatusDot
+   grammar, replacing the pre-R126 1.6s/0.55 pulse. */
 @keyframes ac-pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
+  50% { opacity: 0.35; }
 }
 .ac-pulse {
-  animation: ac-pulse 1.6s ease-in-out infinite;
+  animation: ac-pulse 1.2s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .ac-pulse { animation: none !important; opacity: 1 !important; }

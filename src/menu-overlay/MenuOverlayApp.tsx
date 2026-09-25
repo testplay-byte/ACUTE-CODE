@@ -46,11 +46,11 @@ import {
   type UsageSegmentColor,
 } from "../lib/menu-overlay";
 import { formatTokenCount } from "../lib/format";
-// R97-J (m3): the danger/warn ring hexes ride the documented semantic tokens
-// (same values — one source of truth, not literals).
-import { SEMANTIC_COLORS } from "../lib/semantics";
 // R99-D: the bar labels' ink — the theme pipeline's own contrast helper
 // (black/white by luminance, same spelling as every other surface).
+// R126-3h: the SEMANTIC_COLORS import is retired — the ring's warn/danger
+// legs + every status/role ink now arrive through the payload's deep-tier
+// values (MenuTheme's new fields; the overlay never resolves flat hexes).
 import { getContrastText } from "../lib/themes";
 
 /** The lucide icons the payload addresses by name (the quick menu's set +
@@ -222,9 +222,13 @@ export function MenuOverlayApp(): React.ReactElement {
           maxHeight: "100%",
           overflowY: payload.items.length > 7 ? "auto" : "hidden",
           borderRadius: 12,
-          border: `1px solid ${t.border}`,
+          // R126-3h (TOKENS §5/§9 — the menu card RISES): the clay card —
+          // the clay-rim hairline + the UPWARD sheet shadow from the
+          // payload (the border/softShadow legs the pre-R126 theme sent
+          // are retired for the card chrome).
+          border: `1px solid ${t.clayRim}`,
           background: t.card,
-          boxShadow: t.softShadow,
+          boxShadow: t.claySheetShadow,
           padding: 6,
         }}
         role="menu"
@@ -311,8 +315,12 @@ export function MenuOverlayApp(): React.ReactElement {
                   padding: "2px 6px",
                   borderRadius: 6,
                   letterSpacing: "0.08em",
-                  background: withAlpha(t.accent, 0.12),
-                  color: t.accent,
+                  // R126-3h: the code chip = the selection grammar
+                  // (accentTint container + accentDeep ink — the DOM
+                  // twin's WorkingSection code-chip spelling; the
+                  // withAlpha(accent) fill dies).
+                  background: t.accentTint,
+                  color: t.accentDeep,
                 }}
               >
                 {item.code}
@@ -320,16 +328,33 @@ export function MenuOverlayApp(): React.ReactElement {
               <span
                 style={{
                   flexShrink: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
                   fontSize: 9,
                   fontFamily: "var(--font-mono, ui-monospace, monospace)",
                   fontWeight: 700,
                   textTransform: "uppercase",
                   padding: "2px 6px",
                   borderRadius: 6,
-                  color: item.roleColor,
-                  background: withAlpha(item.roleColor, 0.14),
+                  // R126-3h (TOKENS §11 — hue-as-data is dots-only): the
+                  // role chip = the NEUTRAL badge tone container + the role
+                  // hue as a DOT (the DOM twin's spelling; the
+                  // withAlpha(roleColor) fill + roleColor text die).
+                  background: t.badgeNeutralBg,
+                  color: t.badgeNeutralFg,
                 }}
               >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 5,
+                    height: 5,
+                    borderRadius: 999,
+                    background: item.roleColor,
+                    flexShrink: 0,
+                  }}
+                />
                 {item.role}
               </span>
               <span
@@ -346,7 +371,25 @@ export function MenuOverlayApp(): React.ReactElement {
               >
                 {item.title}
               </span>
-              <span style={{ flexShrink: 0, fontSize: 10, color: t.textTertiary }}>{item.status}</span>
+              <span
+                // R126-3h: the status text rides the §11 deep/bright pairs
+                // (the flat tertiary ink dies) — the DOM twin's exact
+                // status-to-tier mapping.
+                style={{
+                  flexShrink: 0,
+                  fontSize: 10,
+                  color:
+                    item.status === "running" || item.status === "queued"
+                      ? t.runningDeep
+                      : item.status === "failed"
+                        ? t.dangerDeep
+                        : item.status === "completed"
+                          ? t.successDeep
+                          : t.textSecondary,
+                }}
+              >
+                {item.status}
+              </span>
             </button>
           ) : (
             /* R92-A: the OPTIONS kind — the composer's mode / thinking /
@@ -370,7 +413,7 @@ export function MenuOverlayApp(): React.ReactElement {
                 borderRadius: 8,
                 cursor: "pointer",
                 textAlign: "left",
-                background: item.selected === true ? withAlpha(t.accent, 0.09) : "transparent",
+                background: item.selected === true ? t.accentTint : "transparent",
               }}
               onMouseEnter={(e) => {
                 if (item.selected !== true) e.currentTarget.style.background = t.subtleHover;
@@ -392,7 +435,10 @@ export function MenuOverlayApp(): React.ReactElement {
                     fontSize: 12,
                     fontWeight: 600,
                     lineHeight: 1.2,
-                    color: item.selected === true ? t.accent : t.text,
+                    // R126-3h: the selected label = accentDeep ink (the
+                    // selection grammar's text tier — the flat accent
+                    // label dies; the row bg is accentTint above).
+                    color: item.selected === true ? t.accentDeep : t.text,
                   }}
                 >
                   {item.label}
@@ -404,7 +450,7 @@ export function MenuOverlayApp(): React.ReactElement {
                 ) : null}
               </span>
               {item.selected === true ? (
-                <Check size={14} style={{ color: t.accent, flexShrink: 0, marginTop: 1 }} aria-hidden />
+                <Check size={14} style={{ color: t.accentDeep, flexShrink: 0, marginTop: 1 }} aria-hidden />
               ) : null}
             </button>
           ),
@@ -480,10 +526,10 @@ function UsageCard({
   );
   const ringHex =
     payload.overview?.ringColor === "danger"
-      ? SEMANTIC_COLORS.danger
+      ? t.dangerDeep
       : payload.overview?.ringColor === "warn"
-        ? SEMANTIC_COLORS.warning
-        : t.accent;
+        ? t.warningDeep
+        : t.accentDeep;
   // R98-C3 → R99-D: THE PANE — the sectioned card's building block, the DOM
   // popover's Pane twin (subtle wash + hairline border + the micro-header —
   // the ONE grammar: 10px uppercase tracked label + the 8px margin below).
@@ -524,9 +570,11 @@ function UsageCard({
           height: "100%",
           overflowY: "auto",
           borderRadius: 12,
-          border: `1px solid ${t.border}`,
+          // R126-3h (TOKENS §5/§9 — the card RISES): the clay card chrome
+          // (clay-rim hairline + the UPWARD sheet shadow from the payload).
+          border: `1px solid ${t.clayRim}`,
           background: t.card,
-          boxShadow: t.softShadow,
+          boxShadow: t.claySheetShadow,
           padding: 10,
           display: "flex",
           flexDirection: "column",

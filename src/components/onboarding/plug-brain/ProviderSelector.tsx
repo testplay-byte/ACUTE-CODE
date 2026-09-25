@@ -11,7 +11,6 @@ import {
   type ProviderView,
 } from "../providers-api";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
-import { withAlpha } from "../../dashboard/helpers";
 
 /** First letter avatar chip — derived, never a hard-coded brand letter. */
 function providerLetter(p: ProviderView): string {
@@ -251,12 +250,14 @@ export function ProviderSelector() {
 
   return (
     <div ref={containerRef} className="relative mt-4">
+      {/* R126-3g: the trigger = a clay field tile; the open state lifts it
+          onto the small clay shadow. */}
       <div
-        className="h-[56px] rounded-[16px] border-[1.5px] flex items-center gap-3 px-4 transition-colors"
-        style={{ background: s.card, borderColor: open ? s.borderStrong : s.border, boxShadow: open ? s.bentoShadowSm : "none" }}
+        className="h-[56px] rounded-[16px] border flex items-center gap-3 px-4 transition-colors border-clay-rim bg-card"
+        style={{ boxShadow: open ? s.clayShadowSm : "none" }}
       >
         {provider && (
-          <span className="w-9 h-9 rounded-full grid place-items-center text-[13px] font-bold shrink-0" style={{ background: s.accent, color: s.accentText }}>
+          <span className="w-9 h-9 rounded-full grid place-items-center text-[13px] font-bold shrink-0" style={{ background: s.accentDeep, color: s.accentText }}>
             {providerLetter(provider)}
           </span>
         )}
@@ -276,27 +277,25 @@ export function ProviderSelector() {
       </div>
 
       {open && (
-        <div className="absolute z-20 top-[64px] left-0 right-0 rounded-[16px] border-[1.5px] p-1.5 max-h-[320px] overflow-y-auto animate-slideDown" style={{ background: s.card, borderColor: s.borderStrong, boxShadow: s.bentoShadow }}>
+        <div className="absolute z-20 top-[64px] left-0 right-0 rounded-[16px] border p-1.5 max-h-[320px] overflow-y-auto animate-slideDown border-clay-rim ac-clay bg-card">
           {/* R98-H: "+ Custom OpenAI-compatible…" — ALWAYS offered at the TOP,
               visually distinct (Plus icon in a pill chip, accent label,
               hairline separator); it survives the loading/empty/error list
-              states below because it renders before them. */}
+              states below because it renders before them. R126-3g: hover =
+              the CSS wash (hover:bg-hover), the JS handlers retired; the
+              chip = the ClayIconChip pair (accentTint + accentDeep). */}
           <button
             type="button"
-            className="h-[48px] rounded-[14px] flex items-center gap-3 px-3 cursor-pointer transition-colors w-full text-left"
-            style={{ background: "transparent" }}
+            className="h-[48px] rounded-[14px] flex items-center gap-3 px-3 cursor-pointer transition-colors w-full text-left hover:bg-hover"
             onClick={handleCustomEntryClick}
-            onMouseEnter={(e) => { e.currentTarget.style.background = s.subtle; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
           >
             <span
-              className="w-9 h-9 rounded-full grid place-items-center shrink-0"
-              style={{ background: withAlpha(s.accent, s.isDark ? 0.16 : 0.1), color: s.accent }}
+              className="w-9 h-9 rounded-full grid place-items-center shrink-0 bg-accent-tint text-accent-deep"
             >
               <Plus size={16} strokeWidth={2.5} />
             </span>
             <span className="flex-1 min-w-0">
-              <span className="block text-[13px] font-bold truncate" style={{ color: s.accent }}>
+              <span className="block text-[13px] font-bold truncate text-accent-deep">
                 Custom OpenAI-compatible…
               </span>
               <span className="block text-[11px] truncate" style={{ color: s.textTertiary }}>
@@ -320,17 +319,23 @@ export function ProviderSelector() {
               <button
                 key={p.id}
                 type="button"
-                className="h-[48px] rounded-[14px] flex items-center gap-3 px-3 cursor-pointer transition-colors w-full text-left"
-                style={{ background: isSelected ? s.subtleHover : "transparent" }}
+                aria-current={isSelected ? "true" : undefined}
+                className={`relative h-[48px] rounded-[14px] flex items-center gap-3 px-3 cursor-pointer transition-colors w-full text-left ${
+                  isSelected ? "bg-accent-tint" : "hover:bg-hover"
+                }`}
                 onClick={() => handleSelect(p)}
-                onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = s.subtle; }}
-                onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
               >
-                <span className="w-9 h-9 rounded-full grid place-items-center text-[13px] font-bold shrink-0" style={{ background: s.pillBg, color: s.pillText }}>
+                {/* R126-3g: the selection grammar — aria-current + the
+                    accentTint fill + accentDeep ink + the 2px accentDeep
+                    leading bar (COMPONENTS §4/§5). */}
+                {isSelected && (
+                  <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-accent-deep" aria-hidden />
+                )}
+                <span className="w-9 h-9 rounded-full grid place-items-center text-[13px] font-bold shrink-0 border-clay-rim border bg-well" style={{ color: s.text }}>
                   {providerLetter(p)}
                 </span>
                 <span className="flex-1 min-w-0">
-                  <span className="block text-[13px] font-bold truncate" style={{ color: s.text }}>{p.name}</span>
+                  <span className={`block text-[13px] font-bold truncate ${isSelected ? "text-accent-deep" : ""}`} style={isSelected ? undefined : { color: s.text }}>{p.name}</span>
                   <span className="block text-[11px] truncate" style={{ color: s.textTertiary }}>
                     {clientDefault
                       ? "recommended · your keys stay local"
@@ -339,7 +344,7 @@ export function ProviderSelector() {
                   </span>
                 </span>
                 {isSelected && (
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="shrink-0" style={{ color: s.text }}>
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="shrink-0 text-accent-deep">
                     <path d="M3 8.5L6.5 12L13 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 )}
@@ -349,14 +354,14 @@ export function ProviderSelector() {
         </div>
       )}
 
-      {/* R98-H: the inline custom-provider form — the wizard idiom card
-          (rounded-[16px], 1.5px border, bentoShadowSm, subtle inset bg on the
-          Provider card's surface) with ConnectionCard input styling and the
-          action row in ActionButton's grammar (h-10 for the inline context). */}
+      {/* R98-H: the inline custom-provider form — R126-3g: the recessed
+          well card (surfaceWell + clayRim hairline, TOKENS §10 — the
+          pre-R126 raised subtle inset + bentoShadowSm retired) with
+          ConnectionCard input styling and the action row in ActionButton's
+          grammar (h-10 for the inline context). */}
       {customFormOpen && (
         <div
-          className="mt-3 rounded-[16px] border-[1.5px] p-4 grid gap-4 text-left"
-          style={{ background: s.subtle, borderColor: s.border, boxShadow: s.bentoShadowSm }}
+          className="ac-well mt-3 rounded-[16px] p-4 grid gap-4 text-left"
         >
           <div>
             <span className="block text-[11px] font-bold uppercase tracking-widest mb-1.5" style={{ color: s.textTertiary }}>
@@ -414,12 +419,10 @@ export function ProviderSelector() {
                     type="button"
                     aria-pressed={active}
                     title={f.hint}
-                    className="h-10 rounded-[10px] border-[1.5px] text-[12px] font-bold transition-colors cursor-pointer"
-                    style={{
-                      borderColor: active ? withAlpha(s.accent, 0.55) : s.border,
-                      background: active ? withAlpha(s.accent, 0.09) : s.card,
-                      color: active ? s.accent : s.textSecondary,
-                    }}
+                    className={`h-10 rounded-[10px] border text-[12px] font-bold transition-colors cursor-pointer ${
+                      active ? "border-accent-deep bg-accent-tint text-accent-deep" : "border-clay-rim bg-card"
+                    }`}
+                    style={active ? undefined : { color: s.textSecondary }}
                     onClick={() => setCustomApiFormat(f.id)}
                   >
                     {f.label}
@@ -427,18 +430,20 @@ export function ProviderSelector() {
                 );
               })}
             </div>
-            <p className="mt-1.5 text-[10.5px]" style={{ color: s.textTertiary }}>
+            <p className="mt-1.5 text-[11px]" style={{ color: s.textTertiary }}>
               {API_FORMATS.find((f) => f.id === customApiFormat)?.hint}
             </p>
           </div>
 
           {customError !== null && (
-            <p role="alert" className="text-[11.5px] font-medium" style={{ color: "#D64545" }}>
+            <p role="alert" className="text-[12px] font-medium text-danger-deep">
               {customError}
             </p>
           )}
 
           <div className="flex items-center gap-2.5">
+            {/* R126-3g: the inline primary rides the ActionButton grammar's
+                accent → accentDeep gradient stops (WIZARD-DNA §7). */}
             <button
               type="button"
               disabled={creating}
@@ -448,9 +453,9 @@ export function ProviderSelector() {
                 creating
                   ? { background: s.subtle, color: s.textTertiary, borderColor: s.border, boxShadow: "none" }
                   : {
-                      background: `linear-gradient(135deg, ${s.accent}, ${s.theme.accent2})`,
+                      background: `linear-gradient(135deg, ${s.accent}, ${s.accentDeep})`,
                       color: s.accentText,
-                      borderColor: s.accent,
+                      borderColor: s.accentDeep,
                       boxShadow: s.bentoShadow,
                     }
               }
@@ -460,8 +465,8 @@ export function ProviderSelector() {
             <button
               type="button"
               onClick={handleCancelCustom}
-              className="h-10 px-4 rounded-full border-[1.5px] font-bold text-[12px] hover:opacity-80 transition-opacity cursor-pointer"
-              style={{ background: s.card, borderColor: s.border, color: s.text, boxShadow: s.softShadow }}
+              className="h-10 px-4 rounded-full border font-bold text-[12px] hover:opacity-80 transition-opacity cursor-pointer border-clay-rim ac-clay-sm bg-card"
+              style={{ color: s.text }}
             >
               Cancel
             </button>

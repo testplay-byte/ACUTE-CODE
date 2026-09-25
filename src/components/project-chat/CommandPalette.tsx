@@ -8,8 +8,11 @@ import { withAlpha } from "../dashboard/helpers";
 /**
  * CommandPalette (Round-28 WS-H): the ⌘K search popover. Opens on Cmd/Ctrl+K.
  * Three search modes: Files (filename substring), Symbols (codebase index
- * prefix match), Content (grep over file contents). Clicking a result opens
- * the file in CodeView (flips chatFocusMode off → 3-panel layout).
+ * prefix match), Content (grep over file contents). Clicking a result hands
+ * the pick to the caller's onPickFile — since R38 the consumer opens it in
+ * the right sidebar's Files tab (the pre-R126 "flips chatFocusMode off →
+ * 3-panel layout / CodeView" wording died with the R126-3d-1 dead-layouts
+ * retirement — CodeView.tsx is deleted; there is no chatFocusMode left).
  *
  * Owner R28 directive: "Utilize advanced searching techniques too, like a
  * grep or other kinds of things."

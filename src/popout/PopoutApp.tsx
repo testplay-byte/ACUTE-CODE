@@ -73,6 +73,16 @@ import {
  *
  * Web mode (no __TAURI__): the honest "needs the desktop app" notice — this
  * page has no shell to draw window controls or host a webview.
+ *
+ * R126-3h (the secondary-OS-windows chrome pass): every card surface rides
+ * THE clay card spelling (TOKENS §5/§9) — the off-ladder rounded-[14px]/
+ * rounded-[9px] radii die (rounded-xl for the chrome bars, rounded-2xl for
+ * the content frame), the 1.5px borders die for the 1px clay-rim hairline,
+ * and the depth is the clay shadow steps (.ac-clay-sm for the bars, .ac-clay
+ * for the content frame — the softShadow-style legs die). The URL field is
+ * the WELL (bg-well + rim); the Go button is the quiet-solid accent species
+ * (bg-accent-deep + the accentText ink pair); the error banner is the §11
+ * danger badge tone; the close-button hover rides the badge-danger tone.
  */
 
 /** The title-bar identity label (mirrors Rust's .title("Acute Browser")). */
@@ -363,13 +373,16 @@ export function PopoutApp() {
       {/* The custom title bar — R59-A design language: a rounded card on the
           window's ambient strip. The drag-region attribute repeats on the
           non-interactive children because Tauri only starts a drag when the
-          mousedown TARGET carries it (which is also why the buttons work). */}
+          mousedown TARGET carries it (which is also why the buttons work).
+          R126-3h: the clay card spelling — rounded-xl + the clay-rim
+          hairline + the small-surface clay shadow (the rounded-[14px] +
+          1.5px border-subtle legs die); the translucent strip fill + the
+          backdrop blur stay (the floating-chrome material). */}
       <header
         data-tauri-drag-region
-        className="flex h-10 w-full shrink-0 select-none items-center justify-between rounded-[14px] border-[1.5px] backdrop-blur"
+        className="ac-clay-sm flex h-10 w-full shrink-0 select-none items-center justify-between rounded-xl border border-clay-rim backdrop-blur"
         style={{
           backgroundColor: "color-mix(in srgb, var(--ac-bg) 72%, transparent)",
-          borderColor: "var(--ac-border-subtle)",
         }}
       >
         <div data-tauri-drag-region className="flex items-center gap-2.5 pl-3.5">
@@ -389,7 +402,7 @@ export function PopoutApp() {
             aria-label="Minimize window"
             title="Minimize"
             onClick={onMinimize}
-            className="grid h-8 w-10 place-items-center rounded-[9px] text-muted transition-colors hover:bg-hover hover:text-ink"
+            className="grid h-8 w-10 place-items-center rounded-lg text-muted transition-colors hover:bg-hover hover:text-ink"
           >
             <Minus className="h-4 w-4" aria-hidden />
           </button>
@@ -398,7 +411,7 @@ export function PopoutApp() {
             aria-label={maximized ? "Restore window" : "Maximize window"}
             title={maximized ? "Restore" : "Maximize"}
             onClick={onToggleMaximize}
-            className="grid h-8 w-10 place-items-center rounded-[9px] text-muted transition-colors hover:bg-hover hover:text-ink"
+            className="grid h-8 w-10 place-items-center rounded-lg text-muted transition-colors hover:bg-hover hover:text-ink"
           >
             {maximized ? (
               <Copy className="h-3.5 w-3.5" aria-hidden />
@@ -411,7 +424,9 @@ export function PopoutApp() {
             aria-label="Close window"
             title="Close"
             onClick={onClose}
-            className="grid h-8 w-10 place-items-center rounded-[9px] text-muted transition-colors hover:bg-red-500/10 hover:text-red-500"
+            // R126-3h: the close hover rides the §11 badge-danger tone (the
+            // red-500/10 wash dies).
+            className="grid h-8 w-10 place-items-center rounded-lg text-muted transition-colors hover:bg-badge-danger hover:text-danger-deep"
           >
             <X className="h-4 w-4" aria-hidden />
           </button>
@@ -420,10 +435,11 @@ export function PopoutApp() {
 
       {/* The themed URL bar — the BrowserPanel's address row, restated for a
           standalone window: nav buttons, the guarded editable field, Go, and
-          the explicit system-browser handoff. */}
+          the explicit system-browser handoff. R126-3h: the clay card
+          (rounded-xl + rim + .ac-clay-sm — the rounded-[14px]/1.5px legs
+          die). */}
       <div
-        className="flex h-11 shrink-0 items-center gap-1.5 rounded-[14px] border-[1.5px] px-2"
-        style={{ background: styles.card, borderColor: styles.border }}
+        className="ac-clay-sm flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-clay-rim bg-card px-2"
       >
         <button
           onClick={() => goDirection("back")}
@@ -461,8 +477,9 @@ export function PopoutApp() {
 
         <form onSubmit={onSubmit} className="flex min-w-0 flex-1 items-center">
           <div
-            className="flex h-7 flex-1 items-center gap-1.5 rounded-full border px-2.5"
-            style={{ background: styles.subtle, borderColor: styles.border }}
+            // R126-3h: the address field is the WELL (bg-well + the clay
+            // rim — TOKENS §10; the subtle/border inline legs die).
+            className="flex h-7 flex-1 items-center gap-1.5 rounded-full border border-clay-rim bg-well px-2.5"
           >
             <Globe size={11} className="shrink-0" style={{ color: styles.textTertiary }} aria-hidden />
             <input
@@ -496,8 +513,11 @@ export function PopoutApp() {
           aria-label="Go"
           title="Go"
           data-testid="popout-go"
-          className="grid h-6 w-6 shrink-0 place-items-center rounded-full"
-          style={{ background: styles.accent, color: styles.accentText }}
+          // R126-3h: the quiet-solid accent species (bg-accent-deep + the
+          // accentText ink pair on the JS leg — TOKENS §1d; the accent fill
+          // + accentText inline pair dies).
+          className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-accent-deep"
+          style={{ color: styles.accentText }}
         >
           <ArrowRight size={12} aria-hidden />
         </button>
@@ -522,12 +542,9 @@ export function PopoutApp() {
         <div
           role="alert"
           data-testid="popout-error"
-          className="flex shrink-0 items-center gap-2 rounded-[14px] border-[1.5px] px-3 py-2 text-[11px]"
-          style={{
-            background: styles.isDark ? "rgba(220,38,38,0.12)" : "rgba(254,226,226,1)",
-            color: styles.isDark ? "#fca5a5" : "#b91c1c",
-            borderColor: styles.border,
-          }}
+          // R126-3h: the §11 danger badge tone (the tinted container + the
+          // deep-tier ink — the hardcoded dark/light red hexes die).
+          className="flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-[11px] font-medium bg-badge-danger text-danger-deep"
         >
           <AlertTriangle size={12} className="shrink-0" aria-hidden />
           <span className="flex-1">{error}</span>
@@ -551,17 +568,17 @@ export function PopoutApp() {
           right side outside it"). */}
       <div className="m-1.5 flex min-h-0 flex-1 gap-2">
         {/* The content card — the title-bar/URL-bar card language applied to
-            the view itself. The webview is a native SQUARE floating above;
-            the placeholder is inset 4px so the square's corners stay inside
-            the card's 14px corner curve (the R59 m-1.5 honesty math, now
-            with a real visible border), and the card's background shows
-            through as the frame around the page. Nothing interactive renders
-            here — the webview floats above it. */}
+            the view itself. R126-3h: the clay card (rounded-2xl + the clay
+            rim + .ac-clay — the rounded-[14px]/1.5px border-subtle legs
+            die). The webview is a native SQUARE floating above; the
+            placeholder is inset 4px so the square's corners stay inside the
+            card's corner curve, and the card's background shows through as
+            the frame around the page. Nothing interactive renders here —
+            the webview floats above it. */}
         <div
-          className="relative min-h-0 flex-1 rounded-[14px] border-[1.5px]"
+          className="ac-clay relative min-h-0 flex-1 rounded-2xl border border-clay-rim"
           style={{
             background: styles.isDark ? "rgba(0,0,0,0.22)" : styles.subtle,
-            borderColor: "var(--ac-border-subtle)",
           }}
         >
           {/* The placeholder whose rectangle the child webview covers —

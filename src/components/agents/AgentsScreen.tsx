@@ -63,7 +63,7 @@ export function AgentsScreen({ embedded = false }: { embedded?: boolean }) {
         className={
           embedded
             ? "flex flex-wrap items-center gap-3 pb-3"
-            : "flex flex-wrap items-center gap-3 border-b-[1.5px] border-line px-5 py-3.5"
+            : "flex flex-wrap items-center gap-3 border-b border-line px-5 py-3.5"
         }
       >
         <div className="ml-auto flex items-center gap-2">
@@ -73,11 +73,16 @@ export function AgentsScreen({ embedded = false }: { embedded?: boolean }) {
                 key={f.id}
                 onClick={() => setFilter(f.id)}
                 aria-pressed={filter === f.id}
+                // R126-3h: the segmented control's active segment = the
+                // selection grammar (bg-accent-tint + text-accent-deep,
+                // TOKENS §10/§1d — the border-accent-faded + text-accent
+                // bento-era spelling dies; the inactive segment stays the
+                // quiet muted/ink pair).
                 className={cn(
-                  "cursor-pointer rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition-all duration-200",
+                  "cursor-pointer rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition-all duration-100",
                   filter === f.id
-                    ? "border-[1.5px] border-accent-faded bg-card text-accent"
-                    : "border-[1.5px] border-transparent text-muted hover:text-ink",
+                    ? "bg-accent-tint text-accent-deep"
+                    : "text-muted hover:text-ink",
                 )}
               >
                 {f.label}
@@ -101,12 +106,15 @@ export function AgentsScreen({ embedded = false }: { embedded?: boolean }) {
         {query.isPending ? (
           <div className="flex flex-col gap-2" aria-label="Loading agents">
             {[0, 1, 2].map((i) => (
-              <div key={i} className="h-[86px] animate-pulse rounded-lg border-[1.5px] border-line bg-hover/50" />
+              // R126-3h: the skeleton rides the clay card's rim hairline (the
+              // 1.5px border-line spelling dies); the h-[86px] skeleton
+              // contract is unchanged.
+              <div key={i} className="h-[86px] animate-pulse rounded-xl border border-clay-rim bg-hover/50" />
             ))}
           </div>
         ) : query.isError ? (
           <div className="flex flex-col items-center gap-3 py-16 text-center">
-            <AlertTriangle size={20} className="text-red-500" />
+            <AlertTriangle size={20} className="text-danger-deep" />
             <div>
               <p className="text-[13px] font-semibold">Could not load agents</p>
               <p className="mt-1 max-w-sm text-[11px] text-muted">

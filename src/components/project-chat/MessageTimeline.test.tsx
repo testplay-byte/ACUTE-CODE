@@ -170,7 +170,10 @@ describe("MessageTimeline structure (R120 + R123 + the R124 verdicts)", () => {
     const restingFill = list[0].querySelector("span") as HTMLElement;
     const activeFill = list[2].querySelector("span") as HTMLElement;
     expect(restingFill.className).toContain("bg-muted");
-    expect(activeFill.className).toContain("bg-accent");
+    // R126-3d-2 re-pin: the current exchange's bar rides the DEEP accent
+    // marker tier (bg-accent-deep, TOKENS §1d — the bare bg-accent spelling
+    // died with the two-tier accent).
+    expect(activeFill.className).toContain("bg-accent-deep");
     // The active row rests a touch taller AND wider than the others.
     expect(list[2].style.height).toBe("8px");
     expect(list[0].style.height).toBe("6px");
@@ -392,7 +395,9 @@ describe("MessageTimeline click-to-scroll", () => {
     expect(rows()[0].getAttribute("data-current")).toBe("true");
     expect(rows()[2].getAttribute("data-current")).toBe("false");
     const fill = rows()[0].querySelector("span") as HTMLElement;
-    expect(fill.className).toContain("bg-accent");
+    // R126-3d-2 re-pin: the active fill is bg-accent-deep (the deep marker
+    // tier) — the bare bg-accent spelling died with TOKENS §1d.
+    expect(fill.className).toContain("bg-accent-deep");
   });
 });
 

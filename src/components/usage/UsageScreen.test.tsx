@@ -413,3 +413,134 @@ describe("UsageScreen API keys section (ROUND-64 R64-e)", () => {
     expect(screen.getByText("1 key · $0.00 all-time")).toBeTruthy();
   });
 });
+
+/* ── ROUND-126 (R126-3b, the Clay Companion redesign): the pins for the
+ * new visual contracts — the segmented-control range grammar (bg-well track
+ * + the gliding bg-accent-deep knob), the ONE-clay-card 4-cell stat row
+ * (SCREENS §3: inset border-strong dividers, NO icon chips), the recessed
+ * sub-agent well, and the drill-down's chip-grammar filter + bulk controls.
+ * The pre-R126 render contracts (aria/roles/text) are unchanged above. */
+describe("UsageScreen ROUND-126 (R126-3b — the clay materials)", () => {
+  it("the day-range picker is the segmented control: bg-well track + ONE bg-accent-deep knob + aria-pressed buttons", async () => {
+    vi.mocked(fetchDetailedUsage).mockResolvedValue(seededDetailedUsage());
+    const { container } = renderUsageScreen();
+    await screen.findByText("Tokens");
+
+    const track = container.querySelector<HTMLElement>('[data-testid="usage-range-selector"]');
+    expect(track).toBeTruthy();
+    // R126 (TOKENS §10): the track is THE recess (bg-well + the rim hairline).
+    expect(track?.className).toContain("bg-well");
+    expect(track?.className).toContain("border-clay-rim");
+    // R126 (SCREENS §3 → the mobile SegmentedControl adapted): the knob is
+    // ONE solid bg-accent-deep pill with NO border of its own.
+    const knob = track?.querySelector<HTMLElement>('[data-testid="range-selector-knob"]');
+    expect(knob).toBeTruthy();
+    expect(knob?.className).toContain("bg-accent-deep");
+    expect(knob?.className).not.toContain("border");
+    expect(knob?.getAttribute("aria-hidden")).toBe("true");
+
+    // The a11y contract rides the buttons (aria-pressed flips with the knob) —
+    // scoped to the toolbar so the model-mix chart's own picker (which mounts
+    // when the shared panel's query settles) can't double-match.
+    const active = within(track as HTMLElement).getByRole("button", { name: "Last 30 days" });
+    expect(active.getAttribute("aria-pressed")).toBe("true");
+    expect(active.className).toContain("font-semibold");
+    const inactive = within(track as HTMLElement).getByRole("button", { name: "Last 7 days" });
+    expect(inactive.getAttribute("aria-pressed")).toBe("false");
+    expect(inactive.className).toContain("tabular-nums");
+  });
+
+  it("the overview is ONE clay card with four h-[92px] cells and NO icon chips", async () => {
+    vi.mocked(fetchDetailedUsage).mockResolvedValue(seededDetailedUsage());
+    const { container } = renderUsageScreen();
+    await screen.findByTestId("usage-stat-row");
+
+    const row = container.querySelector<HTMLElement>('[data-testid="usage-stat-row"]');
+    expect(row).toBeTruthy();
+    // R126 (SCREENS §3): the card is the clay material…
+    expect(row?.className).toContain("ac-clay");
+    // …ONE card, four cells (never four separate StatCards)…
+    const cells = row?.querySelectorAll<HTMLElement>("[data-stat-cell]");
+    expect(cells?.length).toBe(4);
+    for (const cell of cells ?? []) {
+      expect(cell.className).toContain("h-[92px]");
+    }
+    // …the inset border-strong dividers between cells…
+    const dividerCells = Array.from(cells ?? []).filter((c) => c.className.includes("border-l"));
+    expect(dividerCells.length).toBe(3);
+    // …and NO icon chips (the pre-R126 StatCard's icon tiles are gone).
+    expect(row?.querySelectorAll("svg").length).toBe(0);
+    // The values keep the anti-jitter tabular-nums contract.
+    const value = row?.querySelector<HTMLElement>(".tabular-nums");
+    expect(value?.className).toContain("tabular-nums");
+  });
+
+  it("the drill-down: sub-agent runs nest in the recessed well; the chip filter reaches them in one click", async () => {
+    vi.mocked(fetchDetailedUsage).mockResolvedValue(seededDetailedUsage());
+    const { container } = renderUsageScreen();
+
+    // The "Sub-agents only" filter pill — the chip grammar (resting bg-well
+    // + rim; selected = bg-accent-deep)…
+    const subsFilter = await screen.findByRole("button", { name: "Sub-agents only" });
+    expect(subsFilter.className).toContain("rounded-full");
+    expect(subsFilter.getAttribute("aria-pressed")).toBe("false");
+    // …auto-opens the projects that carry sub-agent runs, so the run is
+    // reachable WITHOUT the manual project toggle.
+    fireEvent.click(subsFilter);
+    expect(screen.getByText("Research sub-task")).toBeTruthy();
+    expect(subsFilter.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "All sessions" }).getAttribute("aria-pressed")).toBe("false");
+
+    // The deepest nesting level sinks into the RECESSED WELL (bg-well + the
+    // rim hairline — TOKENS §10's ladder), not a per-row card.
+    const well = container.querySelector<HTMLElement>("[data-subagent-well]");
+    expect(well).toBeTruthy();
+    expect(well?.className).toContain("ac-well");
+  });
+
+  it("Expand all opens every project's sessions without per-project toggles", async () => {
+    vi.mocked(fetchDetailedUsage).mockResolvedValue(seededDetailedUsage());
+    renderUsageScreen();
+
+    expect(await screen.findByRole("button", { name: "Expand all projects" })).toBeTruthy();
+    // Collapsed at rest — settled on data first so the assertion is honest
+    // (findAllByText: the overview's + the shared panel's "Tokens" labels).
+    expect((await screen.findAllByText("Tokens")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Ship the feature")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Expand all projects" }));
+    expect(screen.getByText("Ship the feature")).toBeTruthy();
+  });
+
+  it("the empty state is the mobile minimal-center shape: one icon tile + one line + one action", async () => {
+    vi.mocked(fetchDetailedUsage).mockResolvedValue(emptyDetailedUsage());
+    const { container } = renderUsageScreen();
+
+    expect(await screen.findByText(/No usage yet — start a conversation/i)).toBeTruthy();
+    // ONE icon tile (the accent-tinted 40px square)…
+    const tile = container.querySelector<HTMLElement>(".bg-accent-tint");
+    expect(tile).toBeTruthy();
+    // …and ONE action (the quiet-solid accentDeep CTA — R126-3b successor
+    // pass: pinned at the COMPONENTS §4 primary species, h-9 + 13px/600).
+    const action = screen.getByRole("button", { name: "Open a chat" });
+    expect(action.className).toContain("bg-accent-deep");
+    expect(action.className).toContain("h-9");
+    expect(action.className).toContain("text-[13px]");
+  });
+
+  it("R126-3b successor pass: the retryable error banner is the TOKENS §11 danger badge-tone container + the outlined-danger Retry", async () => {
+    vi.mocked(fetchDetailedUsage).mockRejectedValueOnce(new Error("sidecar down"));
+    renderUsageScreen();
+
+    const banner = await screen.findByRole("alert");
+    // R126 (TOKENS §11): the banner rides the tinted container + the
+    // deep-on-tint ink pair — the pre-R126 flat-hue danger text on a
+    // withAlpha wash died with §11 (re-pinned in this successor run).
+    expect(banner.className).toContain("bg-badge-danger");
+    expect(banner.className).toContain("text-badge-danger-fg");
+    // The Retry button is the outlined danger species (COMPONENTS §4).
+    const retry = screen.getByRole("button", { name: "Retry loading usage analytics" });
+    expect(retry.className).toContain("border-danger-deep");
+    expect(retry.className).toContain("text-danger-deep");
+    expect(retry.className).toContain("active:scale-[0.98]");
+  });
+});

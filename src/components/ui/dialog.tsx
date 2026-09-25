@@ -4,9 +4,14 @@ import type { ComponentProps, ReactNode } from "react";
 import { cn } from "../../lib/utils";
 
 /**
- * Radix Dialog skinned in the demo's visual language: card surface, 1.5px
- * line border, 12px radius. Open/close transitions come from the keyframes in
- * src/index.css.
+ * Radix Dialog skinned in the app's visual language. Open/close transitions
+ * come from the keyframes in src/index.css.
+ *
+ * ROUND-126 (R126-3h, the coherence pass): the content panel is the CLAY
+ * dialog (the settings wave's 3f-2/3f-3 spelling — SCREENS §3 Overlay):
+ * rounded-xl, the 1px `border-clay-rim` hairline, `bg-card`, `.ac-clay`
+ * (TOKENS §9's two-leg shadow). The 1.5px `border-line` + `shadow-2xl`
+ * bento-era legs are retired. The header's divider follows (1px `border-line`).
  */
 
 export const Dialog = DialogPrimitive.Root;
@@ -30,7 +35,7 @@ export function DialogContent({
       <DialogPrimitive.Content
         className={cn(
           "dialog-content fixed top-1/2 left-1/2 z-50 w-[min(560px,92vw)] max-h-[86vh]",
-          "flex flex-col rounded-xl border-[1.5px] border-line bg-card text-ink shadow-2xl",
+          "flex flex-col rounded-xl border border-clay-rim bg-card text-ink ac-clay",
           className,
         )}
         {...props}
@@ -49,7 +54,7 @@ export function DialogContent({
 
 export function DialogHeader({ title, description }: { title: string; description?: string }) {
   return (
-    <div className="border-b-[1.5px] border-line px-5 py-4 pr-10">
+    <div className="border-b border-line px-5 py-4 pr-10">
       <DialogPrimitive.Title className="text-base font-bold tracking-tight">
         {title}
       </DialogPrimitive.Title>

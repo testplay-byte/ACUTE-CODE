@@ -122,8 +122,11 @@ export function AddContextButton({
         aria-expanded={menu.isOpen || domOpen}
         aria-label="Add context"
         title={disabled ? "Attachments need the app backend" : "Attach files or project files"}
-        className="flex items-center justify-center h-7 w-7 rounded-lg text-[11px] font-medium transition-colors hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-        style={{ color: styles.textSecondary }}
+        // R126-3d-4: the chip grammar (the brief's material spec): resting
+        // bg-well + the clay rim hairline + 12px/600 secondary ink; hover =
+        // the CSS wash (border-accent + bg-accent-tint — the class leg; the
+        // old JS color leg is gone).
+        className="flex items-center justify-center h-7 w-7 rounded-lg border border-clay-rim bg-well text-muted text-[12px] font-semibold transition-colors duration-100 hover:border-accent hover:bg-accent-tint disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-clay-rim"
       >
         {/* ROUND-51 (R51-c, owner: "there should be just the logo. There
             should not be the context or text or anything like that") — the
@@ -139,8 +142,10 @@ export function AddContextButton({
         <div
           role="menu"
           aria-label="Add context"
-          className="absolute bottom-9 left-0 w-64 rounded-2xl border p-1.5 z-50"
-          style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+          // R126-3d-4: the flyout = the clay card (card + rim + .ac-clay-sm
+          // — the small-surface shadow step; the old bentoShadow/border JS
+          // legs retired).
+          className="absolute bottom-9 left-0 w-64 rounded-2xl border border-clay-rim bg-card p-1.5 z-50 ac-clay-sm"
         >
           {pickerOpen ? (
             <ProjectFilePicker
@@ -160,10 +165,9 @@ export function AddContextButton({
                 role="menuitem"
                 onClick={() => void attachFromOsPicker()}
                 disabled={busy}
-                className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg text-[12px] transition-colors hover:bg-hover disabled:opacity-50"
-                style={{ color: styles.textSecondary }}
+                className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg text-[12px] transition-colors hover:bg-hover disabled:opacity-50 text-muted"
               >
-                <HardDriveUpload size={12} className="shrink-0" style={{ color: styles.accent }} />
+                <HardDriveUpload size={12} className="shrink-0 text-accent" />
                 Attach files…
                 {busy ? (
                   <span className="ml-auto font-mono text-[10px]" style={{ color: styles.textTertiary }}>
@@ -175,10 +179,9 @@ export function AddContextButton({
                 type="button"
                 role="menuitem"
                 onClick={() => setPickerOpen(true)}
-                className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg text-[12px] transition-colors hover:bg-hover"
-                style={{ color: styles.textSecondary }}
+                className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg text-[12px] transition-colors hover:bg-hover text-muted"
               >
-                <FolderOpen size={12} className="shrink-0" style={{ color: styles.accent }} />
+                <FolderOpen size={12} className="shrink-0 text-accent" />
                 Add project files…
               </button>
               <div

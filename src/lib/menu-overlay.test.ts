@@ -69,6 +69,18 @@ function usagePayload(sections: UsageSectionPayload[], note?: string): UsageCard
       accent: "#3b82f6",
       subtleHover: "rgba(0,0,0,0.05)",
       isDark: false,
+      // R126-3h: the deep-tier/badge-tone/clay legs (MenuTheme grew them —
+      // the JSON-safety pin below covers the whole payload).
+      accentDeep: "#1d4ed8",
+      accentTint: "#e6eefa",
+      clayRim: "#e8e7e4",
+      claySheetShadow: "0px -2px 6px rgba(38,34,28,0.12)",
+      badgeNeutralBg: "#f4f1ee",
+      badgeNeutralFg: "rgba(0,0,0,0.62)",
+      successDeep: "#15803d",
+      runningDeep: "#1d4ed8",
+      warningDeep: "#b45309",
+      dangerDeep: "#dc2626",
     },
   };
 }

@@ -849,6 +849,15 @@ describe("live command output tail (ROUND-52 R52-c)", () => {
     expect(tail.textContent).toContain("PASS src/a.test.ts");
     expect(tail.textContent).toContain("PASS src/b.test.ts");
     expect(tail.textContent).toContain("live");
+    // R126-3d-3 (the brief's material spec): the terminal tail rides THE
+    // RECESSED MONO SURFACE (.ac-mono-block — TOKENS §10: fill + border +
+    // own ink on the CLASS leg) and the "live" label rides the DEEP accent
+    // tier (§1d accent-as-text) — never a blue/accent-border running fill.
+    const monoSurface = tail.querySelector(".ac-mono-block") as HTMLElement;
+    expect(monoSurface).toBeTruthy();
+    expect(monoSurface.className).toContain("ac-mono-block");
+    expect(tail.querySelector(".text-accent-deep")).toBeTruthy();
+    expect(tail.querySelector(".ac-mono-block")!.className).not.toContain("bg-badge-running");
   });
 
   it("the tool-result clears the tail — the settled pill shows the final output only", () => {
@@ -1326,11 +1335,51 @@ describe("thinking display redesign (ROUND-58 R58-cf — no accent rails)", () =
         defaultOpen
       />,
     );
-    const rowsColumn = container.querySelector("div.py-1.flex.flex-col.gap-0\\.5") as HTMLElement;
+    // R126-3d-3 re-pin (the brief's material spec — TOKENS §10): the rows
+    // column is now THE ACTIVITY WELL (bg-well + the clay-rim hairline on
+    // the CLASS leg, rounded-xl) — still NO accent rail, and the rim color
+    // never rides an inline style (the old `div.py-1.flex.flex-col.gap-0.5`
+    // selector died with the well's own class combo).
+    const rowsColumn = container.querySelector('[data-testid="work-section-well"]') as HTMLElement;
     expect(rowsColumn).toBeTruthy();
+    expect(rowsColumn.className).toContain("bg-well");
+    expect(rowsColumn.className).toContain("border-clay-rim");
     expect(rowsColumn.className).not.toContain("border-l-2");
     expect(rowsColumn.className).not.toContain("ml-[7px]");
     expect(rowsColumn.style.borderColor).toBe("");
+  });
+
+  it("R126-3d-3: the well's STRONG HAIRLINE rides between the thinking zone and the work rows (exactly one)", () => {
+    const { container } = renderWithProviders(
+      <WorkingSection
+        entries={[
+          { type: "thinking", text: "plan first", ts: "t0" },
+          { type: "text", content: "let me look", ts: "t1" },
+          { type: "tool", tool: { seq: 9, toolName: "read_file", argsSummary: "path: src/app.ts", ok: true, ts: "t2", outputSummary: "of 42 total" } },
+          { type: "tool", tool: { seq: 10, toolName: "run_command", argsSummary: "cmd: ls", ok: true, ts: "t3", outputSummary: "[exit code: 0]" } },
+        ]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    const well = container.querySelector('[data-testid="work-section-well"]') as HTMLElement;
+    // ONE divider (bg-line-strong — borderStrong, the mobile R118 strong
+    // hairline), rendered BEFORE the first work row, never one per row.
+    const dividers = well.querySelectorAll(".bg-line-strong");
+    expect(dividers).toHaveLength(1);
+    // A tools-only well renders NO divider (nothing precedes the work rows).
+    renderWithProviders(
+      <WorkingSection
+        entries={[{ type: "tool", tool: { seq: 11, toolName: "read_file", argsSummary: "path: src/a.ts", ok: true, ts: "t4" } }]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    const bareWell = document.querySelectorAll('[data-testid="work-section-well"]');
+    const lastWell = bareWell[bareWell.length - 1];
+    expect(lastWell.querySelectorAll(".bg-line-strong")).toHaveLength(0);
   });
 
   it("the collapse/expand affordances survive the redesign (chevron + label + preview line)", () => {
@@ -1791,6 +1840,12 @@ describe("R120-C-PC item 35: file-mutation rows outside the collapse", () => {
     const fold = screen.getByTestId("fold-file-rows");
     const rows = fold.querySelectorAll('[data-testid="tool-line"]');
     expect(rows).toHaveLength(3);
+    // R126-3d-3 (the brief's material spec): the fold's mutations read as
+    // "the project's mutations" — the SAME tool-row vocabulary on a slightly
+    // RAISED tile (bg-card + the clay rim hairline, TOKENS §10's ladder one
+    // rung above the activity well).
+    expect(fold.className).toContain("bg-card");
+    expect(fold.className).toContain("border-clay-rim");
     // The rows are the SAME compact ToolLines the expanded body speaks:
     // verb label + clickable path pill + status glyph.
     expect(fold.textContent).toContain("Wrote");
@@ -1967,6 +2022,9 @@ describe("R117-f failure visibility (the folded header + the failed row)", () =>
   // Whitespace-normalizer: happy-dom re-serializes rgba() with its own
   // spacing (the same treatment the R51-d chip tests use).
   const tight = (v: string): string => v.replace(/\s+/g, "");
+  // R126-3d-3: the deep-pair re-pins read the same theme source the
+  // component does (resetTestState pins nova + dark).
+  const theme = deriveThemeStyles("nova", true);
 
   /** A folded section whose run_command FAILED (stamped exit 1 + an error). */
   const FAILED_ENTRIES: WorkingEntry[] = [
@@ -2028,8 +2086,12 @@ describe("R117-f failure visibility (the folded header + the failed row)", () =>
     expect(container.getAttribute("data-tool-failed")).toBe("true");
     // The tint: a 1px danger-family border + the quiet 5% wash (dark theme →
     // the 0.55 border spelling; whitespace-normalized for happy-dom).
-    expect(tight(container.style.borderColor)).toBe(tight(withAlpha(SEMANTIC_COLORS.danger, 0.55)));
-    expect(tight(container.style.background)).toBe(tight(withAlpha(SEMANTIC_COLORS.danger, 0.05)));
+    // R126-3d-3 re-pin (TOKENS §11): the wash rides the DEEP danger pair
+    // (theme-aware dangerDeep #F87171 on nova dark — status tints never the
+    // flat semantic hue); the geometry (border + rounded-lg + 5% wash) is
+    // the R117-f structure, unchanged.
+    expect(tight(container.style.borderColor)).toBe(tight(withAlpha(theme.dangerDeep, 0.55)));
+    expect(tight(container.style.background)).toBe(tight(withAlpha(theme.dangerDeep, 0.05)));
     expect(container.className).toContain("rounded-lg");
     // The status glyph KEEPS its red (the leading ✗ is unchanged).
     const glyph = container.querySelector('[data-testid="tool-status-glyph"]') as HTMLElement;
@@ -2052,7 +2114,9 @@ describe("R117-f failure visibility (the folded header + the failed row)", () =>
     expect(excerpt.textContent).toBe("error TS2304: Cannot find name 'foo'");
     expect(excerpt.querySelector("span")!.className).toContain("truncate");
     expect(excerpt.querySelector("span")!.className).toContain("font-mono");
-    expect(excerpt.querySelector("span")!.style.color).toBe(SEMANTIC_COLORS.danger);
+    // R126-3d-3 re-pin (TOKENS §11): status TEXT rides the DEEP danger pair
+    // (theme-aware dangerDeep #F87171 on nova dark), never the flat hue.
+    expect(excerpt.querySelector("span")!.style.color).toBe(theme.dangerDeep);
 
     // Expanding: the excerpt goes, the FULL dump (both lines + the exit chip
     // + Copy) renders instead.
@@ -2153,9 +2217,13 @@ describe("R117-f terminal polish (the colored exit chip + Copy)", () => {
     });
     const chip = card.querySelector('[data-tool-status="exit 0"]') as HTMLElement;
     expect(chip).not.toBeNull();
-    const tight = (v: string): string => v.replace(/\s+/g, "");
-    expect(tight(chip.style.background)).toBe(tight(withAlpha(SEMANTIC_COLORS.success, 0.12)));
-    expect(chip.style.color).toBe(SEMANTIC_COLORS.success);
+    // R126-3d-3 re-pin (the brief's material spec — TOKENS §11): the chip
+    // rides the SUCCESS badge tone CONTAINER on the CLASS leg
+    // (bg-badge-success + text-badge-success-fg — deep-on-tint ink, never
+    // the withAlpha fill + flat-hue text pair).
+    expect(chip.className).toContain("bg-badge-success");
+    expect(chip.className).toContain("text-badge-success-fg");
+    expect(chip.className).toContain("font-mono");
   });
 
   it("a non-zero exit renders the DANGER chip — and the Copy button writes the full output to the clipboard", async () => {
@@ -2174,9 +2242,10 @@ describe("R117-f terminal polish (the colored exit chip + Copy)", () => {
     });
     const chip = card.querySelector('[data-tool-status="exit 1"]') as HTMLElement;
     expect(chip).not.toBeNull();
-    const tight = (v: string): string => v.replace(/\s+/g, "");
-    expect(tight(chip.style.background)).toBe(tight(withAlpha(SEMANTIC_COLORS.danger, 0.1)));
-    expect(chip.style.color).toBe(SEMANTIC_COLORS.danger);
+    // R126-3d-3 re-pin (TOKENS §11): the DANGER badge tone container on the
+    // CLASS leg (bg-badge-danger + text-badge-danger-fg).
+    expect(chip.className).toContain("bg-badge-danger");
+    expect(chip.className).toContain("text-badge-danger-fg");
 
     // The Copy button (the CodeBlock idiom): writes the COMPLETE output and
     // flashes "Copied".

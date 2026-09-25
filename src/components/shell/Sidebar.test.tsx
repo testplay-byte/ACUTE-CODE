@@ -469,6 +469,13 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     );
     expect(await screen.findByText("Project not found")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("Back to dashboard")).toBeTruthy());
+    // R126 (SCREENS §3, the mobile empty-state law): the not-found state is
+    // the minimal-center shape — ONE icon tile (the accentTint icon-chip
+    // grammar) + one line + ONE action; "Back to dashboard" is the only
+    // button on the screen.
+    const tile = document.querySelector("[data-project-empty-tile]");
+    expect(tile?.className).toContain("bg-accent-tint");
+    expect(screen.queryAllByRole("button")).toHaveLength(1);
   });
 });
 
@@ -523,14 +530,20 @@ describe("Sidebar minimized rail polish (R101-C)", () => {
     renderMinimizedRail();
     await screen.findByTestId("sidebar-rail");
 
-    // "/" is active → the rail's Dashboard button keeps bg-accent-soft AND
-    // gains the leading accent bar; the resting Usage button has neither bar.
+    // "/" is active → the rail's Dashboard button keeps the selection
+    // container AND gains the leading accent bar; the resting Usage button
+    // has neither bar. R126 re-pin: the selection grammar moved to the Clay
+    // Companion spelling — the accent TINT container (bg-accent-tint) + the
+    // DEEP accent ink (text-accent-deep) + the 2px accentDeep bar
+    // (bg-accent-deep) — TOKENS §1d/§10; the CONTRACT (active row visibly
+    // selected + the 2px marker) is what stays pinned.
     const dashboard = screen.getByTestId("rail-dashboard");
-    expect(dashboard.className).toContain("bg-accent-soft");
-    const bar = dashboard.querySelector(".bg-accent");
+    expect(dashboard.className).toContain("bg-accent-tint");
+    expect(dashboard.className).toContain("text-accent-deep");
+    const bar = dashboard.querySelector(".bg-accent-deep");
     expect(bar).toBeTruthy();
     expect(bar?.className).toContain("w-0.5");
-    expect(screen.getByTestId("rail-usage").querySelector(".bg-accent")).toBeNull();
+    expect(screen.getByTestId("rail-usage").querySelector(".bg-accent-deep")).toBeNull();
   });
 
   it("R101-C: >10 projects renders the +N overflow tile; clicking it EXPANDS the sidebar without navigating", async () => {
@@ -788,6 +801,21 @@ describe("Sidebar + ProjectView state awareness (R97-I part 2)", () => {
     expect(screen.getByText("Could not load projects")).toBeTruthy();
     // The pre-R97 lie: a fetch failure must NOT read as a missing project.
     expect(screen.queryByText("Project not found")).toBeNull();
+    // R126 (TOKENS §11): the error card is the DANGER BADGE-TONE container —
+    // bg-badge-danger + the deep-on-tint ink pair on the title (the
+    // withAlpha washes + the 1.5px bento border retired) — carrying exactly
+    // ONE Retry.
+    const card = document.querySelector("[data-project-load-error]") as HTMLElement;
+    expect(card.className).toContain("bg-badge-danger");
+    expect(card.querySelector("p")?.className).toContain("text-badge-danger-fg");
+    expect(screen.queryAllByRole("button")).toHaveLength(1);
+    // R126-3c (successor): the Retry is the OUTLINED-DANGER species on the
+    // class leg — border-danger-deep + text-danger-deep, duration-100 + the
+    // §4 press floor (the pre-R126 withAlpha border style retired).
+    const retry = screen.getByRole("button", { name: "Retry loading projects" });
+    expect(retry.className).toContain("border-danger-deep");
+    expect(retry.className).toContain("text-danger-deep");
+    expect(retry.className).toContain("active:scale-[0.98]");
 
     // Retry recovers: with the backend back, the project (a seeded id)
     // honestly renders.
@@ -814,6 +842,19 @@ describe("Sidebar + ProjectView state awareness (R97-I part 2)", () => {
     expect(screen.queryByText("No sessions yet")).toBeNull();
     // The project header itself rendered fine (only the sessions join failed).
     expect(screen.getByText("ACUTE-CODE")).toBeTruthy();
+    // R126 (TOKENS §11): the sessions error rides the danger badge-tone
+    // container too — and now owns its ONE Retry (the sessions refetch;
+    // pre-R126 it was a bare one-line note with no recovery whenever only
+    // this join failed while the projects list stayed cached).
+    const note = document.querySelector("[data-project-sessions-error]") as HTMLElement;
+    expect(note.className).toContain("bg-badge-danger");
+    expect(note.querySelector("p")?.className).toContain("text-badge-danger-fg");
+    // R126-3c (successor): the section's Retry rides the SAME outlined-danger
+    // species as the projects error above — one app-wide Retry spelling.
+    const retry = screen.getByRole("button", { name: "Retry loading sessions" });
+    expect(retry.className).toContain("border-danger-deep");
+    expect(retry.className).toContain("text-danger-deep");
+    expect(retry.className).toContain("active:scale-[0.98]");
   });
 });
 
@@ -843,19 +884,38 @@ describe("ProjectView compact header + per-session rows (R113-d)", () => {
     renderProjectView();
 
     // The name renders at the ROW tier (13px/600), the rootPath sits INLINE
-    // beside it (mono, 11px) — no identity tile, no page-title tier.
+    // beside it (mono, 11px) — no page-title tier.
+    // R126: the identity row now rhymes with the sidebar's project row — the
+    // 24px CLAY LETTER-AVATAR rejoins it (flat project color + the clay
+    // small shadow, the mobile letter-avatar law). The pin below stays true
+    // by construction: it kills the pre-R113 44px BENTO tile (.h-11.w-11),
+    // a spelling the 24px clay mark never writes.
     const name = await screen.findByRole("heading", { level: 1, name: "ACUTE-CODE" });
     expect(name.className).toContain("text-[13px]");
     expect(name.className).toContain("font-semibold");
     expect(screen.getByText("/home/dev/ACUTE-CODE")).toBeTruthy();
-    // The pre-R113 chrome is deleted outright.
+    // The clay letter-avatar: the project's OWN flat color + the clay small
+    // shadow as the tile's edge (the pre-R126 black rim is retired).
+    const tile = document.querySelector("[data-project-tile]") as HTMLElement;
+    expect(tile?.style.boxShadow).toContain("var(--ac-clay-shadow-sm)");
+    const seed = (await getFixtureProjects().list()).find((p) => p.name === "ACUTE-CODE");
+    expect(tile?.style.background).toBe(seed?.color);
+    // The pre-R113 chrome is deleted outright (the 44px bento tile).
     expect(document.querySelector(".h-11.w-11")).toBeNull();
     expect(screen.queryByText("Open project chat")).toBeNull();
     expect(screen.queryByText("Project chat")).toBeNull();
-    // The New session affordance rides the row's right end.
-    expect(
-      screen.getByRole("button", { name: "Start a new session in ACUTE-CODE" }),
-    ).toBeTruthy();
+    // The New session affordance rides the row's right end — R126: the
+    // QUIET-SOLID clay primary (COMPONENTS §4 — the accent-soft pill retired)
+    // at h-8/rounded-lg/12px/600. Re-pinned with the 3c successor run: the
+    // fill moved onto the `bg-accent-deep` CLASS (the one instrument-family
+    // spelling) with only the INK on the JS leg — `text-accent-text` is the
+    // phantom utility (no @theme mapping), so `styles.accentText` paints it.
+    const cta = screen.getByRole("button", { name: "Start a new session in ACUTE-CODE" });
+    expect(cta.className).toContain("rounded-lg");
+    expect(cta.className).toContain("bg-accent-deep");
+    expect(cta.className).not.toContain("bg-accent-soft");
+    expect((cta as HTMLElement).style.color).toBeTruthy();
+    expect((cta as HTMLElement).style.background).toBe("");
   });
 
   it("each session row opens THAT session (?session=<its id>) — not the project's latest", async () => {
@@ -917,5 +977,291 @@ describe("ProjectView compact header + per-session rows (R113-d)", () => {
       before + 1,
     );
     expect(created?.agentId).toBe("agt_scribe");
+  });
+});
+
+// ── ROUND-126 (the Clay Companion redesign): the NAVIGATION decision ─────────
+// SCREENS.md §2 law #2 — the project row body NAVIGATES into the project's
+// chat (the pre-R126 body only toggled expansion); the dedicated chevron
+// hit area owns the session-tree toggle; the sessions render in ONE recessed
+// well with hairline dividers (the mobile session-list law, adapted).
+describe("R126: the project-row navigation split (row navigates · chevron expands)", () => {
+  it("clicking the project row body OPENS the project's chat (not the tree toggle)", async () => {
+    const [project] = await getFixtureProjects().list();
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
+        </Routes>
+      </>,
+      { route: "/" },
+    );
+
+    // The row carries the navigation aria-label; the chevron carries the
+    // tree's aria-expanded (two affordances, two contracts). Navigation is
+    // asserted the way every test here asserts it — the route stub renders.
+    const row = await waitFor(() => {
+      const el = container.querySelector<HTMLElement>(`[aria-label="Open ${project.name}"]`);
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    fireEvent.click(row);
+    expect(await screen.findByText("chat stub")).toBeTruthy();
+  });
+
+  it("the chevron button toggles the session tree WITHOUT navigating", async () => {
+    const [project] = await getFixtureProjects().list();
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
+        </Routes>
+      </>,
+      { route: "/" },
+    );
+
+    const chevron = await waitFor(() => {
+      const el = container.querySelector<HTMLElement>(`[data-testid="project-toggle-${project.id}"]`);
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    // Collapsed at rest (the persisted expanded list starts empty on "/").
+    expect(chevron.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(chevron);
+    await waitFor(() => {
+      expect(chevron.getAttribute("aria-expanded")).toBe("true");
+    });
+    // The tree opened WITHOUT leaving the dashboard route (the dashboard
+    // stub is still the rendered route).
+    expect(screen.getByText("dashboard stub")).toBeTruthy();
+    // The session well rendered (the recess that owns the rows).
+    await waitFor(() => {
+      expect(container.querySelector("[data-session-well]")).toBeTruthy();
+    });
+  });
+
+  it("the session tree renders ONE recessed well with hairline dividers between rows", async () => {
+    const [project] = await getFixtureProjects().list();
+    const backend = getFixtureSessions();
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: project.id, title: "Fix login flow" });
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: project.id, title: "Audit deps" });
+
+    const sessions = (await backend.list()).filter((s) => s.projectId === project.id);
+    const activeId = sessions.find((s) => s.title === "Fix login flow")?.id;
+    expect(activeId).toBeTruthy();
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
+        </Routes>
+      </>,
+      { route: `/project/${project.id}/chat?session=${activeId}` },
+    );
+
+    // The ?session= route auto-expands the project + marks the matching row;
+    // the well owns the recess (bg-well + the rim hairline), rows are FLAT
+    // inside it, separated by hairlines.
+    const well = await waitFor(() => {
+      const el = container.querySelector<HTMLElement>("[data-session-well]");
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    expect(well.className).toContain("bg-well");
+    const rows = well.querySelectorAll("[data-session-row]");
+    expect(rows.length).toBe(2);
+    // The R43 "dedicated border" contract evolves to the well's DIVIDERS:
+    // exactly rows−1 hairlines between them, never after the last row
+    // (counted by child iteration — Fragment children land directly in the
+    // well, and :scope support in the DOM shim is unreliable).
+    const dividerCount = Array.from(well.children).filter(
+      (child) => child.tagName === "DIV" && child.getAttribute("aria-hidden") === "true",
+    ).length;
+    expect(dividerCount).toBe(rows.length - 1);
+    // The ACTIVE row still pops: the accent tint + the 2px accentDeep bar.
+    const activeRow = Array.from(rows).find((r) => (r as HTMLElement).dataset.active === "true");
+    expect(activeRow?.className).toContain("bg-accent-tint");
+    expect(activeRow?.querySelector(".bg-accent-deep")).toBeTruthy();
+  });
+});
+
+/* ── ROUND-126 (the Clay Companion redesign): the ProjectView landing
+ * re-skin — SCREENS.md §3's Instrument archetype as a THIN landing. The
+ * sessions list rhymes with the sidebar's session well (ONE bg-well recess +
+ * the rim hairline + inset hairline dividers, flat rows, ACTIVE = the
+ * accentTint fill + the 2px accentDeep bar); the honest states ride the clay
+ * materials (bg-well skeletons, danger badge-tone containers — pinned in the
+ * R97-I block above — and the minimal-center empty shapes). */
+describe("R126: ProjectView clay landing (the well grammar)", () => {
+  /** Mirrors the route's URL (pathname + search) into the DOM. */
+  function ChatProbe() {
+    const { pathname, search } = useLocation();
+    return <div data-testid="chat-probe">{`${pathname}${search}`}</div>;
+  }
+
+  function renderProjectView(route = "/project/prj_seed_acute") {
+    return renderWithProviders(
+      <Routes>
+        <Route path="/project/:id" element={<ProjectView />} />
+        <Route path="/project/:id/chat" element={<ChatProbe />} />
+      </Routes>,
+      { route },
+    );
+  }
+
+  it("the sessions render in ONE recessed well — flat rows, hairline dividers, the ACTIVE row pops (tint + the 2px accentDeep bar)", async () => {
+    const backend = getFixtureSessions();
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: "prj_seed_acute", title: "Fix login flow" });
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: "prj_seed_acute", title: "Audit deps" });
+    const sessions = (await backend.list()).filter((s) => s.projectId === "prj_seed_acute");
+    const activeId = sessions.find((s) => s.title === "Fix login flow")?.id;
+    expect(activeId).toBeTruthy();
+
+    const { container } = renderProjectView(`/project/prj_seed_acute?session=${activeId}`);
+
+    // The well owns the recess (bg-well + the rim hairline + rounded-lg) —
+    // the R113 per-row bordered cards retire; rows are FLAT inside it.
+    const well = await waitFor(() => {
+      const el = container.querySelector<HTMLElement>("[data-project-sessions-well]");
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    expect(well.className).toContain("bg-well");
+    expect(well.className).toContain("rounded-lg");
+    expect(well.className).toContain("border");
+    // R126-3c (successor): the rim rides the `border-clay-rim` CLASS — the
+    // one instrument-family spelling (the inline borderColor leg retired).
+    expect(well.className).toContain("border-clay-rim");
+    const rows = well.querySelectorAll("[data-project-session-row]");
+    expect(rows.length).toBe(2);
+    // Exactly rows−1 hairline dividers between rows, never after the last
+    // (counted by child iteration — Fragment children land directly in the
+    // well; the rows are BUTTONs, the dividers the only aria-hidden DIVs).
+    const dividerCount = Array.from(well.children).filter(
+      (child) => child.tagName === "DIV" && child.getAttribute("aria-hidden") === "true",
+    ).length;
+    expect(dividerCount).toBe(rows.length - 1);
+    // The ACTIVE row (?session=) pops: the accentTint fill + the 2px
+    // accentDeep leading bar (the selection grammar); the inactive row
+    // carries the hover wash only — flat, never a tint at rest.
+    const activeRow = Array.from(rows).find((r) => (r as HTMLElement).dataset.active === "true");
+    expect(activeRow?.className).toContain("bg-accent-tint");
+    expect(activeRow?.querySelector(".bg-accent-deep")).toBeTruthy();
+    const inactiveRow = Array.from(rows).find((r) => (r as HTMLElement).dataset.active === "false");
+    expect(inactiveRow?.className).toContain("hover:bg-hover");
+    expect(inactiveRow?.className).not.toContain("bg-accent-tint");
+  });
+
+  it("each row carries the state-aware icon — running spinner (accent) / failed alert / idle chat-bubble (tertiary)", async () => {
+    const now = new Date().toISOString();
+    const mk = (id: string, status: Session["status"], title: string): Session => ({
+      id, projectId: "prj_seed_acute", agentId: "agt_scribe", mode: "single", status, title,
+      createdAt: now, updatedAt: now,
+    });
+    sessionsOverride.backend = {
+      ...getFixtureSessions(),
+      list: () =>
+        Promise.resolve([
+          mk("s_lag", "completed", "Stream live"),
+          mk("s_fail", "failed", "Broken build"),
+          mk("s_idle", "queued", "Quiet chat"),
+        ]),
+    };
+    // The completed row flips to running ONLY through the live-streams store
+    // (the R58-cf law, shared verbatim with the sidebar via
+    // deriveSessionRowState: the stream wins even when the status lags).
+    useActiveStreams.setState({ active: new Set(["s_lag"]) });
+
+    const { container } = renderProjectView();
+
+    const rows = await waitFor(() => {
+      const found = container.querySelectorAll<HTMLElement>("[data-project-session-row]");
+      expect(found.length).toBe(3);
+      return found;
+    });
+    const byState = (state: string) => Array.from(rows).find((r) => r.dataset.state === state);
+    // Running: the accent spinner (the only icon that animates).
+    const spinner = byState("running")?.querySelector('[aria-label="Session is working"]');
+    expect(spinner?.className).toContain("text-accent");
+    expect(spinner?.className).toContain("animate-spin");
+    // Failed: the alert glyph on the danger hue.
+    expect(byState("failed")?.querySelector('[aria-label="Session failed"]')).toBeTruthy();
+    // Idle: the plain chat bubble (tertiary at rest — no state label).
+    const idle = byState("idle");
+    expect(idle?.querySelector("svg")).toBeTruthy();
+    expect(idle?.querySelector('[aria-label="Session is working"]')).toBeNull();
+    expect(idle?.querySelector('[aria-label="Session failed"]')).toBeNull();
+  });
+
+  it("a pending sessions query renders the WELL skeleton — bg-well rows breathing in the rim footprint (never the false 'No sessions yet')", async () => {
+    sessionsOverride.backend = {
+      ...getFixtureSessions(),
+      list: () => new Promise<Session[]>(() => {}),
+    };
+    const { container } = renderProjectView();
+
+    // The identity row rendered (projects settled) while the sessions ghost
+    // holds the well's shape: the rim outline + pulsing bg-well rows, ONE
+    // role=status announcement for the region.
+    expect(await screen.findByText("ACUTE-CODE")).toBeTruthy();
+    const skeleton = await waitFor(() => {
+      const el = container.querySelector<HTMLElement>("[data-project-sessions-skeleton]");
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    expect(skeleton.getAttribute("role")).toBe("status");
+    expect(skeleton.getAttribute("aria-label")).toBe("Loading sessions");
+    expect(skeleton.querySelectorAll(".animate-pulse.bg-well").length).toBe(3);
+    expect(skeleton.className).toContain("border-clay-rim");
+    expect(screen.queryByText("No sessions yet")).toBeNull();
+    expect(container.querySelector("[data-project-sessions-well]")).toBeNull();
+  });
+
+  it("a pending PROJECTS query renders the mirrored landing skeleton — the identity ghosts + the well ghost, never 'Project not found'", async () => {
+    projectsOverride.backend = {
+      ...createFixtureProjects([]),
+      list: () => new Promise<Project[]>(() => {}),
+    };
+    renderProjectView();
+
+    // ONE announcement owns the whole loading page; the anti-jitter mirror
+    // (the identity-row ghosts + the kicker ghost + the well ghost) holds
+    // the ready layout's shape; no false state paints while unknown.
+    expect(await screen.findByLabelText("Loading project")).toBeTruthy();
+    expect(document.querySelectorAll(".animate-pulse.bg-well").length).toBeGreaterThan(3);
+    expect(screen.queryByText("Project not found")).toBeNull();
+    expect(document.querySelector("[data-project-load-error]")).toBeNull();
+  });
+
+  it("the settled-empty sessions section renders the minimal-center empty — one icon tile + one line + one action", async () => {
+    // The default fixture sessions are project-less: prj_seed_acute settles
+    // EMPTY once the list resolves.
+    const { container } = renderProjectView();
+
+    expect(await screen.findByText("No sessions yet")).toBeTruthy();
+    const tile = container.querySelector("[data-project-empty-tile]");
+    expect(tile?.className).toContain("bg-accent-tint");
+    // One line + one action — the empty's action is the SECONDARY species
+    // (the identity row's quiet-solid CTA above stays the screen's ONE
+    // primary, the mobile law).
+    const action = screen.getByRole("button", { name: "Start a session" });
+    expect(action.className).toContain("rounded-lg");
+    expect(action.className).toContain("border-line-strong");
+    // R126-3c (successor): the §4 secondary species — the bg-subtle hover
+    // wash + the press floor at duration-100 (the row-grammar hover:bg-hover
+    // retired from buttons).
+    expect(action.className).toContain("hover:bg-subtle");
+    expect(action.className).toContain("active:scale-[0.98]");
+  });
+
+  afterEach(() => {
+    // The live-streams store is transient but shared with every other
+    // describe in this file — never leak a running-state set across tests.
+    useActiveStreams.setState({ active: new Set() });
   });
 });

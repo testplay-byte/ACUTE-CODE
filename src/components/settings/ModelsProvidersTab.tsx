@@ -36,6 +36,9 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { Kicker } from "../ui/Kicker";
 import { SectionCard } from "../ui/SectionCard";
 import { SettingsRow } from "../ui/SettingsRow";
+// R126-3f-2: the shared clay toggle (the 3f-1 conversion — accentDeep ON track
+// + the well rest) replaces this file's local switch spelling for free.
+import { ToggleSwitch } from "../ui/toggle-switch";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
 // ROUND-87 (R87): the shared ease curve for the dialog/entrance animations.
 import { ease } from "../../lib/motion";
@@ -147,6 +150,23 @@ import {
  * header Test button opens a three-option scope ROW (Test All | Test Only
  * Failed | Test Only Working, divider-separated); the list gap grows to
  * separate the model cards. The R50 "Danger zone" section is gone.
+ *
+ * ROUND-126 (R126-3f-2, the Clay Companion redesign) — the api tab's
+ * MATERIAL re-skin (structure/logic byte-identical): the master list rows
+ * carry THE SELECTION GRAMMAR (COMPONENTS §4 — aria-current +
+ * bg-accent-tint + text-accent-deep + the 2px bg-accent-deep leading bar,
+ * hover wash at rest); the detail pane's cards ride the clay SectionCard
+ * (free via the 3f-1 primitive conversion); ALL ~48 arbitrary 1.5px
+ * borders retire to the 1px clay-rim hairline (TOKENS §5); every
+ * input/stepper/value field = THE WELL + THE RIM (TOKENS §10); the R89-C6
+ * test bands + the R118-F testing band ride the §11 badge TONE containers
+ * (running/success/danger — behavior byte-identical); the key-pool rows
+ * are mono-on-the-well with badge-tone state chips, the quiet-solid
+ * accentDeep primary on every CTA, and the outlined-danger species on
+ * every destructive control; the three dialogs (AddProvider / AddModels /
+ * ModelConfig) are the clay card (the AddProjectDialog spelling —
+ * rounded-xl + rim + .ac-clay). ZERO logic changes; every testid/aria/
+ * role preserved.
  */
 
 /* ── API plumbing ───────────────────────────────────────────────────────────
@@ -515,10 +535,10 @@ export function ModelsProvidersTab() {
       <SectionCard
         className="w-[280px] shrink-0 h-full min-h-[280px] overflow-hidden flex flex-col p-0"
       >
-        <div
-          className="shrink-0 flex items-center gap-2 px-3.5 py-3 border-b"
-          style={{ borderColor: styles.border }}
-        >
+        {/* R126-3f-2: the rail header's inside-panel divider is the 1px
+            hairline on the CSS-var leg (border-line) — the inline
+            borderColor style is retired. */}
+        <div className="shrink-0 flex items-center gap-2 px-3.5 py-3 border-b border-line">
           <SectionLabel>Providers</SectionLabel>
           {/* ROUND-59 (R59-C, R113-d re-scoped): the count reflects the
               "Your providers" group — the configured inventory the owner
@@ -535,8 +555,7 @@ export function ModelsProvidersTab() {
         {providersQuery.isError && (
           <div
             role="alert"
-            className="px-3.5 py-2 border-b text-[11px]"
-            style={{ borderColor: styles.border, color: SEMANTIC_COLORS.danger }}
+            className="px-3.5 py-2 border-b border-line text-[11px] text-danger-deep"
           >
             Couldn&apos;t load providers —{" "}
             {providersQuery.error instanceof Error ? providersQuery.error.message : String(providersQuery.error)}
@@ -583,7 +602,7 @@ export function ModelsProvidersTab() {
               path to the catalog). */}
           {addableProviders.length > 0 && (
             <>
-              <div className="mx-2.5 my-2 border-t" style={{ borderColor: styles.border }} />
+              <div className="mx-2.5 my-2 border-t border-line" />
               <Kicker className="px-2.5 pb-1.5">Add a provider</Kicker>
               {addableProviders.map((p) => (
                 <ProviderListRow
@@ -598,7 +617,7 @@ export function ModelsProvidersTab() {
           )}
         </div>
         {/* + Add provider → the preset-or-custom DIALOG (owner R37) */}
-        <div className="shrink-0 p-1.5 border-t" style={{ borderColor: styles.border }}>
+        <div className="shrink-0 p-1.5 border-t border-line">
           <button
             onClick={() => {
               // ROUND-59 (R59-C): no longer deselects — pre-select keeps the
@@ -606,11 +625,11 @@ export function ModelsProvidersTab() {
               // the user's context instead of a blank placeholder.
               setAdding(true);
             }}
-            /* R100-E2: the JS hover pair retired — the accent wash rides the
-               CSS-var leg (bg-accent-soft ≈ 0.1 rest, bg-accent-faded ≈ 0.18
-               hover), TOKENS.md §6 (hover is a class, never a handler). */
-            className="w-full h-9 flex items-center justify-center gap-1.5 rounded-lg text-[12px] font-semibold transition-colors bg-accent-soft hover:bg-accent-faded"
-            style={{ color: styles.accent }}
+            /* R126-3f-2: the quiet accent-tint action (TOKENS §1d/§10) — the
+               accent-tint container + accentDeep ink on the CSS-var leg, the
+               hover wash + the press floor per COMPONENTS §4; the accent-soft /
+               accent-faded pair + the JS color leg are retired. */
+            className="w-full h-9 flex items-center justify-center gap-1.5 rounded-lg text-[12px] font-semibold transition-colors duration-100 bg-accent-tint text-accent-deep hover:bg-hover active:scale-[0.98] cursor-pointer"
           >
             <Plus size={13} strokeWidth={2.5} /> Add provider
           </button>
@@ -638,11 +657,13 @@ export function ModelsProvidersTab() {
             />
           </DetailScrollArea>
         ) : (
-          <div className="flex-1 min-h-0 grid place-items-center rounded-2xl border-[1.5px] border-dashed" style={{ borderColor: styles.border }}>
+          // R126-3f-2: the placeholder keeps the dashed hairline on the clay
+          // rim (TOKENS §5) — the 1.5px border + the inline color are
+          // retired; the icon tile is the accent-tint pair.
+          <div className="flex-1 min-h-0 grid place-items-center rounded-2xl border border-dashed border-clay-rim">
             <div className="text-center px-6">
               <div
-                className="w-12 h-12 mx-auto rounded-xl grid place-items-center"
-                style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
+                className="w-12 h-12 mx-auto rounded-xl grid place-items-center bg-accent-tint text-accent-deep"
                 aria-hidden
               >
                 <Globe size={22} />
@@ -722,31 +743,32 @@ function ProviderListRow({
     <button
       onClick={onClick}
       aria-current={active ? "true" : undefined}
-      /* R100-E2: the JS hover pair retired — the ACTIVE row's accent-soft
-         fill and the inactive rows' hover:bg-hover wash ride the CSS-var
-         leg (TOKENS.md §6); the 2.5px accent bar keeps the selection
-         grammar (COMPONENTS §5). */
-      className={`relative w-full h-11 flex items-center gap-2.5 px-2.5 rounded-lg transition-colors text-left ${
-        active ? "bg-accent-soft" : "hover:bg-hover"
+      /* R126-3f-2: THE SELECTION GRAMMAR (COMPONENTS §4/§5 + TOKENS §1d/§10):
+         the ACTIVE row = the accent-tint container + the accentDeep ink +
+         the 2px accentDeep leading bar; the RESTING row = the hover wash
+         (hover:bg-hover) with secondary ink — every leg on the CSS-var
+         classes (the old inline accent fill + the 2.5px accent bar are
+         retired; aria-current unchanged). */
+      className={`relative w-full h-11 flex items-center gap-2.5 px-2.5 rounded-lg transition-colors duration-100 text-left cursor-pointer ${
+        active ? "bg-accent-tint" : "hover:bg-hover"
       }`}
     >
       {active && (
         <span
-          className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-full"
-          style={{ background: styles.accent }}
+          className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-accent-deep"
           aria-hidden
         />
       )}
       <span
-        className="w-7 h-7 shrink-0 rounded-lg grid place-items-center"
-        style={{ background: styles.inputBg, color: styles.textSecondary }}
+        className="w-7 h-7 shrink-0 rounded-lg grid place-items-center bg-well"
+        style={{ color: styles.textSecondary }}
       >
         <Globe size={13} />
       </span>
       <span className="min-w-0 flex-1 flex flex-col items-start">
         <span
-          className="w-full truncate text-[13px] font-medium"
-          style={{ color: active ? styles.text : styles.textSecondary }}
+          className={`w-full truncate text-[13px] font-medium ${active ? "text-accent-deep" : ""}`}
+          style={active ? undefined : { color: styles.textSecondary }}
         >
           {provider.name}
         </span>
@@ -766,8 +788,7 @@ function ProviderListRow({
       {keyCount >= 1 && (
         <span
           data-testid={`provider-key-count-${provider.id}`}
-          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium tabular-nums"
-          style={{ background: styles.subtle, color: styles.textSecondary }}
+          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium tabular-nums bg-badge-neutral text-badge-neutral-fg"
           title={
             keyCount === 1
               ? "1 API key stored"
@@ -783,8 +804,7 @@ function ProviderListRow({
       {addable ? (
         <span
           data-testid={`provider-add-${provider.id}`}
-          className="shrink-0 w-4 h-4 grid place-items-center rounded-full"
-          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          className="shrink-0 w-4 h-4 grid place-items-center rounded-full bg-accent-tint text-accent-deep"
           title="Add this provider — open its detail to set the key"
           aria-hidden
         >
@@ -794,7 +814,10 @@ function ProviderListRow({
         <span
           className="w-2 h-2 shrink-0 rounded-full"
           style={{
-            background: provider.hasKey ? SEMANTIC_COLORS.success : withAlpha(styles.text, 0.25),
+            // R126-3f-2: flat hues are for DOTS ONLY (TOKENS §11) — the
+            // keyless dot rides the sanctioned border token instead of an
+            // inline alpha wash.
+            background: provider.hasKey ? SEMANTIC_COLORS.success : styles.border,
           }}
           title={provider.hasKey ? "Key stored" : "No key set"}
         />
@@ -984,20 +1007,18 @@ function ProviderDetailPane({
     }
   };
 
-  const inputStyle = {
-    background: styles.bg,
-    borderColor: styles.border,
-    color: styles.text,
-  } as const;
+  // R126-3f-2: the input/stepper material is THE WELL + THE RIM (TOKENS
+  // §10 — bg-well + border-clay-rim on the CSS-var leg, text-ink for the
+  // value ink); the old `inputStyle` JS leg (bg + borderColor + color) is
+  // retired — every site below spells the classes directly.
 
   return (
     <div className="flex flex-col gap-5">
       {/* ── Header: provider identity + status — R100-E2: the SectionCard
-          primitive (rounded-2xl / 1.5px border-line / bg-card). ──────── */}
+          primitive (now the CLAY card — TOKENS §5/§9, free via 3f-1). */}
       <SectionCard className="p-4 flex items-center gap-3 flex-wrap">
         <span
-          className="w-10 h-10 shrink-0 rounded-xl grid place-items-center"
-          style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
+          className="w-10 h-10 shrink-0 rounded-xl grid place-items-center bg-accent-tint text-accent-deep"
           aria-hidden
         >
           <Globe size={17} />
@@ -1027,8 +1048,7 @@ function ProviderDetailPane({
                 }
               }}
               aria-label="Provider name"
-              className="h-9 w-full max-w-[320px] rounded-lg border-[1.5px] px-3 text-[13px] font-medium outline-none"
-              style={inputStyle}
+              className="h-9 w-full max-w-[320px] rounded-lg border border-clay-rim bg-well px-3 text-[13px] font-medium text-ink outline-none"
             />
           ) : (
             <button
@@ -1053,22 +1073,19 @@ function ProviderDetailPane({
         {/* Enabled badge + key badge + the enable/disable toggle (every
             provider — ROUND-58 R58-d: a proper SWITCH, not the old bare
             underlined text link; ROUND-59 R59-C: flipping it acts
-            OUTRIGHT). */}
+            OUTRIGHT). R126-3f-2: the badges are the §11 TONE CONTAINERS
+            (success on / neutral off) on the CSS-var leg. */}
         <span
-          className="px-2 py-0.5 rounded-full text-[10px] font-medium"
-          style={{
-            background: provider.enabled ? withAlpha(SEMANTIC_COLORS.success, 0.12) : styles.subtle,
-            color: provider.enabled ? SEMANTIC_COLORS.success : styles.textTertiary,
-          }}
+          className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
+            provider.enabled ? "bg-badge-success text-badge-success-fg" : "bg-badge-neutral text-badge-neutral-fg"
+          }`}
         >
           {provider.enabled ? "● Enabled" : "○ Disabled"}
         </span>
         <span
-          className="px-2 py-0.5 rounded-full text-[10px] font-medium"
-          style={{
-            background: provider.hasKey ? withAlpha(SEMANTIC_COLORS.success, 0.12) : styles.subtle,
-            color: provider.hasKey ? SEMANTIC_COLORS.success : styles.textTertiary,
-          }}
+          className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
+            provider.hasKey ? "bg-badge-success text-badge-success-fg" : "bg-badge-neutral text-badge-neutral-fg"
+          }`}
         >
           {provider.hasKey ? "● Key stored" : "○ No key"}
         </span>
@@ -1080,11 +1097,16 @@ function ProviderDetailPane({
           <span className="text-[11px] font-medium" style={{ color: styles.textSecondary }}>
             {provider.enabled ? "Enabled" : "Disabled"}
           </span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={provider.enabled}
-            aria-label={`Toggle provider ${provider.name}`}
+          {/* R126-3f-2: the shared ui/ToggleSwitch (the 3f-1 clay conversion —
+              accentDeep ON track + the well rest) — same role/aria/title/
+              disabled contract, the local 1.5px-bordered spelling retired. */}
+          <ToggleSwitch
+            checked={provider.enabled}
+            onToggle={() => {
+              // R59-C: NO gate — the PATCH fires immediately.
+              saveDetails.mutate({ enabled: !provider.enabled });
+            }}
+            label={`Toggle provider ${provider.name}`}
             title={
               provider.enabled
                 ? agentsUsingProvider.length > 0
@@ -1093,44 +1115,20 @@ function ProviderDetailPane({
                 : "Re-enable this provider"
             }
             disabled={saveDetails.isPending}
-            onClick={() => {
-              // R59-C: NO gate — the PATCH fires immediately.
-              saveDetails.mutate({ enabled: !provider.enabled });
-            }}
-            className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
-            style={{
-              background: provider.enabled ? styles.accent : withAlpha(styles.text, 0.18),
-              border: `1.5px solid ${provider.enabled ? styles.accent : styles.border}`,
-            }}
-          >
-            {/* R93-A4: the knob is now contrast-aware (accentText/toggleActive
-                via the theme) — on Mono Stone dark's #E0E0E0 track it turns
-                #111111 instead of the vanishing white. */}
-            <span
-              className="absolute top-1/2 block rounded-full shadow transition-all"
-              style={{
-                left: provider.enabled ? "calc(100% - 21px)" : "3px",
-                height: 18,
-                width: 18,
-                transform: "translateY(-50%)",
-                background: provider.enabled ? styles.accentText : styles.toggleActive,
-              }}
-            />
-          </button>
+          />
         </span>
         {saveMsg && (
-          <span className="text-[11px] font-medium" style={{ color: styles.accent }}>
-            {saveMsg}
-          </span>
+          <span className="text-[11px] font-medium text-accent-deep">{saveMsg}</span>
         )}
         {/* ROUND-95 (R95-A, the owner: "The option to delete a provider should
             not be shown at the very bottom but it should be shown at the very
             top. At the very top there should be a trash can icon"): the delete
             affordance lives IN THE HEADER now — the bottom Danger zone card is
-            retired. R100-E2: the JS hover-red pair retired — the button now
-            RESTS in the danger color (the R100-D WorkingSection destructive
-            idiom) with the hover:bg-hover CSS wash; the click opens the
-            shared styled ConfirmDialog (never a browser confirm). */}
+            retired. R100-E2: the JS hover-red pair retired. R126-3f-2: the
+            button is the OUTLINED DANGER species (COMPONENTS §4 — 1px
+            border-danger-deep + text-danger-deep on the class leg, the
+            3a/3b press floor); the click opens the shared styled
+            ConfirmDialog (never a browser confirm). */}
         <button
           type="button"
           onClick={() => {
@@ -1141,11 +1139,7 @@ function ProviderDetailPane({
           aria-label={`Delete provider ${provider.name}`}
           title="Delete provider"
           data-testid="provider-delete-top"
-          className="w-9 h-9 shrink-0 grid place-items-center rounded-lg border-[1.5px] transition-colors hover:bg-hover cursor-pointer"
-          style={{
-            borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
-            color: SEMANTIC_COLORS.danger,
-          }}
+          className="w-9 h-9 shrink-0 grid place-items-center rounded-lg border border-danger-deep text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] cursor-pointer"
         >
           <Trash2 size={14} />
         </button>
@@ -1153,11 +1147,11 @@ function ProviderDetailPane({
 
       {/* R90-A1 → R95-A: the delete failure lands INLINE directly under the
           header (the click site is the header trash now) — in the danger
-          color, announced to screen readers. */}
+          color, announced to screen readers. R126-3f-2: status text = the
+          §11 deep pair on the class leg. */}
       {deleteError !== null && (
         <p
-          className="-mt-3 text-[11px] font-medium"
-          style={{ color: SEMANTIC_COLORS.danger }}
+          className="-mt-3 text-[11px] font-medium text-danger-deep"
           role="alert"
           data-testid="delete-provider-error"
         >
@@ -1189,14 +1183,18 @@ function ProviderDetailPane({
                   value={baseUrlDraft}
                   onChange={(e) => setBaseUrlDraft(e.target.value)}
                   aria-label="Base URL"
-                  className="h-10 flex-1 min-w-0 rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                  style={inputStyle}
+                  className="h-10 flex-1 min-w-0 rounded-lg border border-clay-rim bg-well px-3 font-mono text-[12px] text-ink outline-none"
                 />
                 {baseUrlDraft.trim() !== (provider.baseUrl ?? "") && (
                   <button
                     onClick={() => saveDetails.mutate({ baseUrl: baseUrlDraft.trim() })}
-                    className="h-10 px-4 rounded-lg text-[12px] font-semibold"
-                    style={{ background: styles.accent, color: styles.accentText }}
+                    /* R126-3f-2: the QUIET-SOLID clay primary (COMPONENTS §4 —
+                       the AddProjectDialog spelling): the accentDeep fill on
+                       the class leg + the accentText ink on the JS leg
+                       (text-accent-text is a phantom utility), rounded-lg,
+                       the ac-clay-pressed press collapse. */
+                    className="ac-clay-pressed h-10 px-4 rounded-lg text-[12px] font-semibold bg-accent-deep transition-transform active:scale-[0.98] cursor-pointer"
+                    style={{ color: styles.accentText }}
                   >
                     Save
                   </button>
@@ -1217,12 +1215,15 @@ function ProviderDetailPane({
                       onClick={() => !active && saveDetails.mutate({ apiFormat: f.id })}
                       aria-pressed={active}
                       title={f.hint}
-                      className="h-10 rounded-lg border-[1.5px] text-[12px] font-semibold transition-colors"
-                      style={{
-                        borderColor: active ? withAlpha(styles.accent, 0.55) : styles.border,
-                        background: active ? withAlpha(styles.accent, 0.09) : styles.bg,
-                        color: active ? styles.accent : styles.textSecondary,
-                      }}
+                      /* R126-3f-2: the segmented selection material — the 1px
+                         clay rim + the well rest, the accentTint/accentDeep
+                         ACTIVE segment (the ModelSelector spelling); the
+                         1.5px border + the withAlpha legs are retired. */
+                      className={`h-10 rounded-lg border text-[12px] font-semibold transition-colors duration-100 cursor-pointer ${
+                        active
+                          ? "border-accent-deep bg-accent-tint text-accent-deep"
+                          : "border-clay-rim bg-well hover:bg-hover"
+                      }`}
                     >
                       {f.label}
                     </button>
@@ -1250,8 +1251,8 @@ function ProviderDetailPane({
             onChange={(e) =>
               setTestKeyChoice(e.target.value === "primary" ? "primary" : Number(e.target.value))
             }
-            className="h-9 rounded-lg border-[1.5px] px-2 text-[11px] outline-none cursor-pointer"
-            style={{ background: styles.bg, borderColor: styles.border, color: styles.textSecondary }}
+            className="h-9 rounded-lg border border-clay-rim bg-well px-2 text-[11px] outline-none cursor-pointer"
+            style={{ color: styles.textSecondary }}
           >
             <option value="primary">Key 1 (primary)</option>
             {heldPoolSlots.map((slot) => (
@@ -1266,8 +1267,8 @@ function ProviderDetailPane({
             value={testModel}
             onChange={(e) => setTestModel(e.target.value)}
             disabled={catalogQuery.isFetching && catalogEntries.length === 0}
-            className="h-9 max-w-[260px] rounded-lg border-[1.5px] px-2 text-[11px] outline-none cursor-pointer disabled:opacity-50"
-            style={{ background: styles.bg, borderColor: styles.border, color: styles.textSecondary }}
+            className="h-9 max-w-[260px] rounded-lg border border-clay-rim bg-well px-2 text-[11px] outline-none cursor-pointer disabled:opacity-50"
+            style={{ color: styles.textSecondary }}
           >
             <option value="">(reachability only)</option>
             {catalogIds.map((id) => (
@@ -1279,20 +1280,24 @@ function ProviderDetailPane({
           <button
             onClick={() => void runTest()}
             disabled={testState.kind === "testing" || (testKeyChoice === "primary" && !provider.hasKey)}
-            className="h-9 px-3.5 rounded-lg border-[1.5px] text-[12px] font-semibold flex items-center gap-1.5 disabled:opacity-50"
-            style={{ background: styles.bg, borderColor: styles.border, color: styles.textSecondary }}
+            /* R126-3f-2: the SECONDARY species (COMPONENTS §4) — the 1px
+               border-strong outline + secondary ink + the hover bg-subtle
+               wash + the press floor; the 1.5px border and the JS legs are
+               retired. */
+            className="ac-clay-pressed h-9 px-3.5 rounded-lg border border-line-strong text-[12px] font-semibold flex items-center gap-1.5 transition-colors duration-100 hover:bg-subtle active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+            style={{ color: styles.textSecondary }}
           >
             {testState.kind === "testing" ? <RefreshCw size={12} className="animate-spin" /> : <Zap size={12} />}
             Test connection
           </button>
           {testState.kind === "ok" && (
-            <span className="text-[11px] font-medium" style={{ color: SEMANTIC_COLORS.success }}>
+            <span className="text-[11px] font-medium text-success-deep">
               <Check size={11} className="inline" /> Connected · {testState.ms}ms
               {testState.model ? ` · ${testState.model}` : ""}
             </span>
           )}
           {testState.kind === "fail" && (
-            <span className="text-[11px] font-medium break-all" style={{ color: SEMANTIC_COLORS.danger }}>
+            <span className="text-[11px] font-medium break-all text-danger-deep">
               {testState.message}
             </span>
           )}
@@ -1366,8 +1371,7 @@ function ProviderDetailPane({
         >
           {agentsUsingProvider.length > 0 ? (
             <p
-              className="text-[11px] font-medium"
-              style={{ color: SEMANTIC_COLORS.danger }}
+              className="text-[11px] font-medium text-danger-deep"
               data-testid="delete-used-by-warning"
             >
               In use by {agentsUsingProvider.length} agent{agentsUsingProvider.length === 1 ? "" : "s"}:{" "}
@@ -1471,12 +1475,9 @@ function AddProviderDialog({
     onError: (err: Error) => setError(err.message),
   });
 
-  const inputStyle = {
-    background: styles.bg,
-    borderColor: styles.border,
-    color: styles.text,
-  } as const;
   const valid = name.trim().length > 0 && !nameTaken && /^https?:\/\/.+/.test(baseUrl.trim());
+  // R126-3f-2: the dialog's inputs ride the well + rim on the CSS-var leg
+  // (TOKENS §10) — the shared `inputStyle` JS leg is retired.
 
   return (
     <div
@@ -1490,10 +1491,12 @@ function AddProviderDialog({
       }}
     >
       <div
-        className="w-full max-w-[520px] max-h-[86vh] overflow-y-auto auto-scroll rounded-xl border-[1.5px] p-5 flex flex-col gap-4"
-        /* R100-E2: floating dialog = softShadow (TOKENS.md §5 — bentoShadow
-           is wizard + primary-CTA only). */
-        style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.softShadow }}
+        /* R126-3f-2: the DIALOG = the clay card (the AddProjectDialog
+           spelling — rounded-xl + the 1px clay rim + .ac-clay; TOKENS §5/§9:
+           the card's depth IS the clay shadow, the 1.5px border + the
+           softShadow leg are retired). */
+        className="ac-clay w-full max-w-[520px] max-h-[86vh] overflow-y-auto auto-scroll rounded-xl border p-5 flex flex-col gap-4"
+        style={{ background: styles.card, borderColor: styles.clayRim }}
       >
         {preset === null ? (
           <>
@@ -1523,16 +1526,15 @@ function AddProviderDialog({
                   <button
                     key={p.id}
                     onClick={() => choosePreset(p.id)}
-                    /* R100-E2: the JS hover pair retired — the standard
-                       hover:bg-hover wash (TOKENS.md §6); the resting bg
-                       moves off the inline leg so the class can express
-                       the wash. */
-                    className="h-12 px-4 rounded-xl border-[1.5px] flex items-center gap-3 text-left transition-colors bg-bg hover:bg-hover"
-                    style={{ borderColor: styles.border, color: styles.text }}
+                    /* R126-3f-2: the preset tile = the WELL recess + the clay
+                       rim (TOKENS §10) with the rim→strong hover swap
+                       (COMPONENTS §3, 120ms max) — the 1.5px border + the
+                       bg-bg fill + the JS legs are retired. */
+                    className="h-12 px-4 rounded-xl border border-clay-rim bg-well flex items-center gap-3 text-left transition-colors duration-100 hover:border-line-strong hover:bg-hover cursor-pointer"
+                    style={{ color: styles.text }}
                   >
                     <span
-                      className="w-8 h-8 shrink-0 rounded-lg grid place-items-center"
-                      style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
+                      className="w-8 h-8 shrink-0 rounded-lg grid place-items-center bg-accent-tint text-accent-deep"
                       aria-hidden
                     >
                       <Globe size={14} />
@@ -1545,14 +1547,13 @@ function AddProviderDialog({
                     </span>
                     {configured ? (
                       <span
-                        className="shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full"
-                        style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
+                        className="shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full bg-badge-success text-badge-success-fg"
                         title="Already configured — you can still add another one under a different name"
                       >
                         configured
                       </span>
                     ) : null}
-                    <span className="shrink-0 text-[11px] font-medium" style={{ color: styles.accent }}>
+                    <span className="shrink-0 text-[11px] font-medium text-accent-deep">
                       Add →
                     </span>
                   </button>
@@ -1603,14 +1604,12 @@ function AddProviderDialog({
                 placeholder={presetId !== null && presetId !== "custom" ? `${preset?.name} 2` : "My Gateway"}
                 aria-label="Provider name"
                 aria-invalid={nameTaken}
-                className="h-10 w-full rounded-lg border-[1.5px] px-3 text-[13px] outline-none"
-                style={{
-                  ...inputStyle,
-                  ...(nameTaken ? { borderColor: SEMANTIC_COLORS.danger } : {}),
-                }}
+                className={`h-10 w-full rounded-lg border border-clay-rim bg-well px-3 text-[13px] text-ink outline-none ${
+                  nameTaken ? "border-danger-deep" : ""
+                }`}
               />
               {nameTaken ? (
-                <p className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+                <p className="mt-1.5 text-[11px] text-danger-deep" role="alert">
                   That name is already in use — every provider needs a distinct display name.
                 </p>
               ) : (
@@ -1628,8 +1627,7 @@ function AddProviderDialog({
                 onChange={(e) => setBaseUrl(e.target.value)}
                 placeholder="https://api.example.com/v1"
                 aria-label="Base URL"
-                className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                style={inputStyle}
+                className="h-10 w-full rounded-lg border border-clay-rim bg-well px-3 font-mono text-[12px] text-ink outline-none"
               />
             </div>
             {isPreset ? (
@@ -1640,11 +1638,7 @@ function AddProviderDialog({
                * never a choice. */
               <div className="flex items-center gap-2">
                 <span
-                  className="text-[11px] font-medium uppercase tracking-wider px-2.5 py-1 rounded-full"
-                  style={{
-                    background: withAlpha(styles.accent, 0.08),
-                    color: styles.textSecondary,
-                  }}
+                  className="text-[11px] font-medium uppercase tracking-wider px-2.5 py-1 rounded-full bg-badge-neutral text-badge-neutral-fg"
                 >
                   {formatLabel(apiFormat)}
                 </span>
@@ -1666,12 +1660,14 @@ function AddProviderDialog({
                         onClick={() => setApiFormat(f.id)}
                         aria-pressed={active}
                         title={f.hint}
-                        className="h-9 rounded-lg border-[1.5px] text-[11px] font-semibold transition-colors"
-                        style={{
-                          borderColor: active ? withAlpha(styles.accent, 0.55) : styles.border,
-                          background: active ? withAlpha(styles.accent, 0.09) : styles.bg,
-                          color: active ? styles.accent : styles.textSecondary,
-                        }}
+                        /* R126-3f-2: the segmented selection material — the 1px
+                           clay rim + the well rest, the accentTint/accentDeep
+                           ACTIVE segment (the ModelSelector spelling). */
+                        className={`h-9 rounded-lg border text-[11px] font-semibold transition-colors duration-100 cursor-pointer ${
+                          active
+                            ? "border-accent-deep bg-accent-tint text-accent-deep"
+                            : "border-clay-rim bg-well hover:bg-hover"
+                        }`}
                       >
                         {f.label}
                       </button>
@@ -1694,8 +1690,7 @@ function AddProviderDialog({
                   onChange={(e) => setKey(e.target.value)}
                   placeholder="sk-…"
                   aria-label="API key"
-                  className="h-10 w-full rounded-lg border-[1.5px] px-3 pr-10 font-mono text-[12px] outline-none"
-                  style={inputStyle}
+                  className="h-10 w-full rounded-lg border border-clay-rim bg-well px-3 pr-10 font-mono text-[12px] text-ink outline-none"
                 />
                 <button
                   onClick={() => setShowKey((v) => !v)}
@@ -1709,7 +1704,7 @@ function AddProviderDialog({
             </div>
 
             {error && (
-              <p role="alert" className="text-[12px]" style={{ color: SEMANTIC_COLORS.danger }}>
+              <p role="alert" className="text-[12px] text-danger-deep">
                 {error}
               </p>
             )}
@@ -1717,8 +1712,13 @@ function AddProviderDialog({
             <button
               onClick={() => create.mutate()}
               disabled={!valid || create.isPending}
-              className="h-11 rounded-full text-[13px] font-semibold disabled:opacity-50 transition-transform active:scale-[0.99]"
-              style={{ background: styles.accent, color: styles.accentText }}
+              /* R126-3f-2: the QUIET-SOLID clay primary (COMPONENTS §4 — the
+                 AddProjectDialog spelling): the accentDeep fill on the class
+                 leg + the accentText ink on the JS leg, rounded-lg (the input
+                 radius), the ac-clay-pressed press collapse; the accent fill
+                 + the pill radius are retired. */
+              className="ac-clay-pressed h-11 rounded-lg text-[13px] font-semibold bg-accent-deep transition-transform active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+              style={{ color: styles.accentText }}
             >
               {create.isPending ? "Adding…" : "Add provider"}
             </button>
@@ -1974,9 +1974,11 @@ function TestIconButton({
   const styles = useThemeStyles();
   const { tinted, outcome } = useTestTint(state);
   const testing = state.kind === "testing";
-  // R94-C: the settled outcome keeps its icon color (green/red) — the hover
-  // only swaps the color of an UNTINTED, UNANSWERED button to the accent.
-  const baseColor = outcome === "pass" ? SEMANTIC_COLORS.success : outcome === "fail" ? SEMANTIC_COLORS.danger : styles.textSecondary;
+  // R94-C: the settled outcome keeps its icon color — the hover only swaps
+  // the color of an UNTINTED, UNANSWERED button to the accent.
+  // R126-3f-2: status ink = the §11 DEEP pairs (styles.successDeep /
+  // dangerDeep) — the flat SEMANTIC hues are for DOTS only now.
+  const baseColor = outcome === "pass" ? styles.successDeep : outcome === "fail" ? styles.dangerDeep : styles.textSecondary;
   return (
     <button
       onClick={run}
@@ -1992,21 +1994,20 @@ function TestIconButton({
         // never clips it).
         "active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]",
         variant === "segment" ? "w-8 px-0" : "rounded-lg px-2.5",
-        /* R100-E2: the JS hover pair retired — an UNTINTED button gets the
-           accent-soft CSS wash (TOKENS.md §6); a TINTED one keeps its
-           settled green/red fill (the inline leg wins over the class, so
-           the R87 tint contract is untouched). */
+        /* R100-E2: an UNTINTED button gets the accent-soft CSS wash
+           (TOKENS.md §6). R126-3f-2: the TINTED one rides the §11 badge
+           TONE CONTAINERS (success/danger) on the class leg — the R87
+           spin/5s-tint/pass-fail contract is byte-identical, only the
+           material moved. */
         "hover:bg-accent-soft",
+        tinted && outcome === "pass" ? "bg-badge-success text-badge-success-fg" : "",
+        tinted && outcome === "fail" ? "bg-badge-danger text-badge-danger-fg" : "",
       ].join(" ")}
       style={{
         width: label === undefined ? 32 : undefined,
-        color: baseColor,
-        background: tinted
-          ? outcome === "pass"
-            ? withAlpha(SEMANTIC_COLORS.success, 0.14)
-            : withAlpha(SEMANTIC_COLORS.danger, 0.12)
-          : undefined,
-        borderColor: "transparent",
+        // The tone classes own the tinted ink; the JS leg colors only the
+        // untinted rest (secondary) + the settled-icon deep pairs.
+        color: tinted ? undefined : baseColor,
       }}
     >
       {testing ? (
@@ -2054,16 +2055,17 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
   }, [state]);
   // R119-P — the tools leg's one-line verdict (the agent-readiness line;
   // null when the leg never ran). One computation, both verdict branches.
+  // R126-3f-2: status ink = the §11 deep pairs on the JS leg.
   const toolsLine =
     state.kind === "pass" || state.kind === "fail"
       ? modelTestToolsLine(state.tools, state.kind === "fail" ? state.reason : undefined)
       : null;
   const toolsColor =
     state.kind === "fail"
-      ? SEMANTIC_COLORS.danger
+      ? styles.dangerDeep
       : state.kind === "pass" && state.tools?.called
-        ? SEMANTIC_COLORS.success
-        : SEMANTIC_COLORS.warning;
+        ? styles.successDeep
+        : styles.warningDeep;
 
   return (
     <>
@@ -2080,9 +2082,12 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
             data-model-test={state.kind}
           >
             {state.kind === "testing" ? (
+              /* R126-3f-2: the TESTING band = the running badge tone
+                 (bg-badge-running + text-badge-running-fg, TOKENS §11) with
+                 the spinner — the R118-F "shows while testing" contract
+                 byte-identical, only the material moved. */
               <div
-                className="flex items-center gap-1.5 text-[11px]"
-                style={{ color: styles.textSecondary }}
+                className="flex items-center gap-1.5 text-[11px] rounded-lg px-2.5 py-1.5 bg-badge-running text-badge-running-fg"
                 data-testid="model-test-busy"
               >
                 <RefreshCw size={12} className="animate-spin" aria-hidden />
@@ -2091,7 +2096,7 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
             ) : state.kind === "pass" ? (
               <div className="flex flex-col gap-0.5 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap text-[11px]">
-                  <span className="font-medium" style={{ color: SEMANTIC_COLORS.success }}>
+                  <span className="font-medium text-success-deep">
                     ✓ responded in {state.latencyMs}ms
                   </span>
                   {state.usage !== undefined && (
@@ -2125,8 +2130,8 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
                 ) : null}
                 {showReply && state.preview !== undefined && (
                   <div
-                    className="font-mono text-[11px] break-all rounded-sm px-2 py-1 max-h-24 overflow-y-auto"
-                    style={{ background: styles.subtle, color: styles.textSecondary }}
+                    className="font-mono text-[11px] break-all rounded-sm px-2 py-1 max-h-24 overflow-y-auto bg-well border border-clay-rim"
+                    style={{ color: styles.textSecondary }}
                   >
                     {state.preview}
                   </div>
@@ -2139,16 +2144,14 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
                     the scannable "the AGENT path is dead" verdict. */}
                 {toolsLine !== null ? (
                   <div
-                    className="text-[11px] font-medium"
-                    style={{ color: SEMANTIC_COLORS.danger }}
+                    className="text-[11px] font-medium text-danger-deep"
                     data-testid="model-test-tools"
                   >
                     {toolsLine}
                   </div>
                 ) : null}
                 <div
-                  className="text-[11px] break-all"
-                  style={{ color: SEMANTIC_COLORS.danger }}
+                  className="text-[11px] break-all text-danger-deep"
                   data-testid="model-test-reason"
                 >
                   {showFull ? state.reason : `${state.reason.slice(0, 240)}${state.reason.length > 240 ? "…" : ""}`}
@@ -2220,16 +2223,17 @@ function ModelCard({
   // R119-P — the tools leg's one-line verdict (the agent-readiness line;
   // null when the leg never ran — the pong phase failed first). One
   // computation, both verdict branches of the band below.
+  // R126-3f-2: status ink = the §11 deep pairs on the JS leg.
   const toolsLine =
     state.kind === "pass" || state.kind === "fail"
       ? modelTestToolsLine(state.tools, state.kind === "fail" ? state.reason : undefined)
       : null;
   const toolsColor =
     state.kind === "fail"
-      ? SEMANTIC_COLORS.danger
+      ? styles.dangerDeep
       : state.kind === "pass" && state.tools?.called
-        ? SEMANTIC_COLORS.success
-        : SEMANTIC_COLORS.warning;
+        ? styles.successDeep
+        : styles.warningDeep;
 
   // ── R93-A7 → R94-C: the Test-All wiring. A new seq fires the card's own
   // test once; every SETTLED outcome is reported to the header through the
@@ -2301,8 +2305,9 @@ function ModelCard({
   const outChips = row !== null ? capabilityChips(row, "out") : [];
   // R94-C: the action group's divider — a 1px hairline inset top/bottom
   // between the segments (self-stretch inside the items-stretch cluster).
+  // R126-3f-2: the hairline rides the bg-line CSS-var leg.
   const actionDivider = (
-    <span className="w-px my-[3px] shrink-0" style={{ background: withAlpha(styles.border, 0.6) }} aria-hidden />
+    <span className="w-px my-[3px] shrink-0 bg-line" aria-hidden />
   );
   // R91-C: the STAT FACTS — only the CONFIGURED ones (null = unknown =
   // absent). The section's shape follows the count (the owner: "If nothing
@@ -2333,20 +2338,15 @@ function ModelCard({
           Now ONE border, ONE background: the identity row on top, the stats
           band fused underneath, separated only by a hairline. The test
           section (below) stays a SIBLING of this merged section — it is a
-          transient result, not model identity. */}
+          transient result, not model identity. R126-3f-2: the catalog row =
+          FLAT + the clay-rim hairline (TOKENS §5; the 1.5px border + the
+          neutral-overlay fill are retired — the recess lives in the action
+          group's well now), the accent edge still marks the unconfigured
+          row. */}
       <div
-        className="rounded-xl border-[1.5px] overflow-hidden"
-        style={{
-          // R95-A (the owner: "add some proper separation between the models
-          // so that they are properly separated… the user can easily
-          // visually distinguish between the two models"): the card overlay
-          // is dialed up a notch (the list gap grew to gap-3 for the same
-          // ask) so each model reads as its own card AT A GLANCE against
-          // the section's styles.card background — the same neutral-overlay
-          // idiom this file already uses, just one step stronger.
-          borderColor: m.configured ? styles.border : withAlpha(styles.accent, 0.3),
-          background: withAlpha(styles.text, styles.isDark ? 0.03 : 0.02),
-        }}
+        className={`rounded-xl border overflow-hidden ${
+          m.configured ? "border-clay-rim" : "border-accent"
+        }`}
       >
       {/* ── the identity row (the "top half" — stays exactly as it is when
           the test section expands below). R91-C (the owner: "The inputs
@@ -2369,16 +2369,14 @@ function ModelCard({
             </span>
             {isFreeModelEntry(m) && (
               <span
-                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
-                style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
+                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-badge-success text-badge-success-fg"
               >
                 FREE
               </span>
             )}
             {m.hidden && (
               <span
-                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
-                style={{ background: styles.subtle, color: styles.textTertiary }}
+                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-badge-neutral text-badge-neutral-fg"
                 title="Hidden from the chat model picker (still visible here)"
               >
                 HIDDEN
@@ -2386,8 +2384,7 @@ function ModelCard({
             )}
             {m.configured && m.sizeLabel !== null && m.sizeLabel !== "" && (
               <span
-                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium font-mono"
-                style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
+                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium font-mono bg-badge-neutral text-badge-neutral-fg"
               >
                 {m.sizeLabel}
               </span>
@@ -2453,8 +2450,7 @@ function ModelCard({
                 {statFacts.map((fact) => (
                   <span
                     key={fact.label}
-                    className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px] font-medium"
-                    style={{ background: styles.subtle, color: styles.textSecondary }}
+                    className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px] font-medium tabular-nums bg-badge-neutral text-badge-neutral-fg"
                     title={`${fact.label}: ${fact.value}`}
                   >
                     {fact.short}
@@ -2468,19 +2464,21 @@ function ModelCard({
         {/* RIGHT: the actions — R94-C: the owner's "cleaner UI, like an
             actual button kind of interface". The R87 icon trio + the R93-A7
             hide/show toggle are now ONE segmented ACTION GROUP: a shared
-            rounded container with a hairline border + a subtle fill, a
+            rounded container with a hairline border + a recessed fill, a
             divider between the buttons, a pressed scale, and a focus-visible
             ring. R100-E2: the three JS hover pairs retired — each segment
             gets the standard hover:bg-hover CSS wash (TOKENS.md §6) and the
             destructive delete RESTS in the danger color (the R100-D
             WorkingSection idiom) instead of turning red on hover.
+            R126-3f-2: the cluster's recess = THE WELL + the clay rim
+            (TOKENS §10 — the 2% subtle fill + the withAlpha border are
+            retired); the hidden-eye's accent tier moved to accentDeep.
             The Test segment keeps the R87 spin/pass/fail tint contract; the
             Eye keeps its accent-when-hidden state; every aria-label,
             title and data-testid is unchanged. */}
         {m.configured && row !== null && (
           <div
-            className="inline-flex items-stretch rounded-lg shrink-0 overflow-hidden"
-            style={{ border: `1px solid ${withAlpha(styles.border, 0.9)}`, background: styles.subtle }}
+            className="inline-flex items-stretch rounded-lg border border-clay-rim bg-well shrink-0 overflow-hidden"
           >
             <TestIconButton model={row} state={state} run={runManual} variant="segment" />
             {actionDivider}
@@ -2502,7 +2500,7 @@ function ModelCard({
                   title={row.hidden ? "Hidden from the chat picker — click to show" : "Shown in the chat picker — click to hide"}
                   data-testid="model-toggle-hidden"
                   className="h-8 w-8 grid place-items-center shrink-0 transition-all duration-200 hover:bg-hover active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
-                  style={{ color: row.hidden ? styles.accent : styles.textSecondary }}
+                  style={{ color: row.hidden ? styles.accentDeep : styles.textSecondary }}
                 >
                   {row.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
                 </button>
@@ -2513,8 +2511,7 @@ function ModelCard({
               onClick={onDelete}
               aria-label={`Delete model ${m.displayName || m.modelId}`}
               title="Delete this model"
-              className="h-8 w-8 grid place-items-center shrink-0 transition-all duration-200 hover:bg-hover active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
-              style={{ color: SEMANTIC_COLORS.danger }}
+              className="h-8 w-8 grid place-items-center shrink-0 transition-all duration-200 hover:bg-hover active:scale-[0.92] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)] text-danger-deep"
             >
               <Trash2 size={13} />
             </button>
@@ -2533,18 +2530,13 @@ function ModelCard({
           with the identity row; a hairline separates them (R90-A2). */}
       {statFacts.length >= 3 ? (
         <div
-          className="grid grid-cols-2 min-[420px]:grid-cols-4"
-          style={{ borderTop: `1px solid ${withAlpha(styles.border, 0.55)}` }}
+          className="grid grid-cols-2 min-[420px]:grid-cols-4 border-t border-clay-rim"
           data-testid="model-details-band"
         >
           {statFacts.map((fact, i) => (
             <div
               key={fact.label}
-              className="px-3 py-1.5 flex flex-col gap-0"
-              style={{
-                background: withAlpha(styles.text, styles.isDark ? 0.012 : 0.006),
-                ...(i > 0 ? { borderLeft: `1px solid ${withAlpha(styles.border, 0.5)}` } : {}),
-              }}
+              className={`px-3 py-1.5 flex flex-col gap-0 ${i > 0 ? "border-l border-clay-rim" : ""}`}
             >
               <span className="text-[10px] font-medium uppercase tracking-widest tabular-nums" style={{ color: styles.textTertiary }}>
                 {fact.label}
@@ -2577,23 +2569,26 @@ function ModelCard({
             data-model-test={state.kind}
           >
             {state.kind === "testing" ? (
+              /* R126-3f-2: the TESTING band = the running badge tone
+                 (TOKENS §11) — the R118-F "shows while testing" contract
+                 byte-identical, only the material moved. */
               <div
-                className="mt-1.5 rounded-xl border-[1.5px] px-3.5 py-2.5 flex items-center gap-2 text-[11px]"
-                style={{ borderColor: withAlpha(styles.border, 0.9), color: styles.textSecondary }}
+                className="mt-1.5 rounded-xl px-3.5 py-2.5 flex items-center gap-2 text-[11px] bg-badge-running text-badge-running-fg"
                 data-testid="model-test-busy"
               >
                 <RefreshCw size={12} className="animate-spin" aria-hidden />
                 Testing {m.displayName || m.modelId}…
               </div>
             ) : state.kind === "pass" ? (
+              /* R126-3f-2: the PASS band = the success badge tone (TOKENS §11;
+                 the 1.5px success border + the 0.05 wash are retired) — the
+                 R118-F 10s fold byte-identical. */
               <div
-                className="mt-1.5 rounded-xl border-[1.5px] px-3.5 py-2.5 flex flex-col gap-1.5"
-                style={{ borderColor: withAlpha(SEMANTIC_COLORS.success, 0.45), background: withAlpha(SEMANTIC_COLORS.success, 0.05) }}
+                className="mt-1.5 rounded-xl px-3.5 py-2.5 flex flex-col gap-1.5 bg-badge-success text-badge-success-fg"
               >
                 <div className="flex items-center gap-2.5 flex-wrap text-[11px]">
                   <span
                     className="inline-flex items-center gap-1.5 font-medium"
-                    style={{ color: SEMANTIC_COLORS.success }}
                   >
                     <Check size={12} strokeWidth={2.5} /> responded in {state.latencyMs}ms
                   </span>
@@ -2632,8 +2627,8 @@ function ModelCard({
                 ) : null}
                 {showReply && state.preview !== undefined && (
                   <div
-                    className="font-mono text-[11px] break-all rounded-lg px-2.5 py-1.5 max-h-28 overflow-y-auto auto-scroll"
-                    style={{ background: withAlpha(styles.text, styles.isDark ? 0.25 : 0.04), color: styles.textSecondary }}
+                    className="font-mono text-[11px] break-all rounded-lg px-2.5 py-1.5 max-h-28 overflow-y-auto auto-scroll bg-well border border-clay-rim"
+                    style={{ color: styles.textSecondary }}
                     data-testid="model-test-reply-body"
                   >
                     {state.preview}
@@ -2641,11 +2636,12 @@ function ModelCard({
                 )}
               </div>
             ) : (
+              /* R126-3f-2: the FAIL band = the danger badge tone (TOKENS §11)
+                 — the R118-F/R124 persistence byte-identical. */
               <div
-                className="mt-1.5 rounded-xl border-[1.5px] px-3.5 py-2.5 flex flex-col gap-1.5"
-                style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), background: withAlpha(SEMANTIC_COLORS.danger, 0.05) }}
+                className="mt-1.5 rounded-xl px-3.5 py-2.5 flex flex-col gap-1.5 bg-badge-danger text-badge-danger-fg"
               >
-                <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: SEMANTIC_COLORS.danger }}>
+                <div className="flex items-center gap-1.5 text-[11px] font-medium">
                   <AlertTriangle size={12} /> the test request failed
                 </div>
                 {/* R119-P — the tools rejection named distinctly: the reason
@@ -2655,7 +2651,7 @@ function ModelCard({
                 {toolsLine !== null ? (
                   <div
                     className="text-[11px] font-medium"
-                    style={{ color: SEMANTIC_COLORS.danger }}
+                    style={{ color: toolsColor }}
                     data-testid="model-test-tools"
                   >
                     {toolsLine}
@@ -2764,7 +2760,7 @@ function ScopeOptionButton({
       <Icon
         size={13}
         className="shrink-0"
-        style={{ color: disabled ? styles.textTertiary : styles.accent }}
+        style={{ color: disabled ? styles.textTertiary : styles.accentDeep }}
       />
       <span className="text-[11px] font-medium leading-tight whitespace-nowrap">{label}</span>
     </button>
@@ -2966,9 +2962,10 @@ function ModelListSection({
 
   return (
     /* R100-E2: the SectionCard primitive with p-0 — the section header and
-       the model rows own their own padding. */
+       the model rows own their own padding. R126-3f-2: the primitive now
+       carries the clay card (3f-1) — free. */
     <SectionCard className="overflow-hidden p-0">
-      <div className="flex items-center gap-2 px-4 py-3 border-b flex-wrap" style={{ borderColor: styles.border }}>
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-line flex-wrap">
         <SectionLabel>Models</SectionLabel>
         {/* ROUND-60 (R60-B): the count is the CONFIGURED row count only —
             catalog entries are picker-only now (the free/all scope moved
@@ -3004,16 +3001,21 @@ function ModelListSection({
               aria-haspopup="menu"
               aria-expanded={scopeMenu !== null}
               data-testid="test-all-models"
-              className="h-7 px-2.5 rounded-full text-[11px] font-semibold flex items-center gap-1.5 disabled:cursor-default transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]"
-              style={{
-                background: withAlpha(styles.accent, 0.1),
-                color:
-                  testAll !== null && !testRunActive
+              /* R126-3f-2: the Test pill rides the §11 tone containers on
+                 the class leg — RUNNING while a run settles (the running
+                 tone + the spinner), the settled summary in the success /
+                 danger tones, the rest in the accent-tint/accentDeep pair;
+                 the withAlpha fill + the JS color ladder are retired (the
+                 R94-C/R95-A progress + summary contract byte-identical). */
+              className={`h-7 px-2.5 rounded-full text-[11px] font-semibold flex items-center gap-1.5 disabled:cursor-default transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)] cursor-pointer ${
+                testRunActive
+                  ? "bg-badge-running text-badge-running-fg"
+                  : testAll !== null
                     ? testAll.failed > 0
-                      ? SEMANTIC_COLORS.danger
-                      : SEMANTIC_COLORS.success
-                    : styles.accent,
-              }}
+                      ? "bg-badge-danger text-badge-danger-fg"
+                      : "bg-badge-success text-badge-success-fg"
+                    : "bg-accent-tint text-accent-deep"
+              }`}
               title="Test — all models, only the failed ones, or only the working ones"
             >
               {testRunActive ? (
@@ -3039,14 +3041,14 @@ function ModelListSection({
               <div
                 role="menu"
                 aria-label="Test scope"
-                className="fixed z-50 w-[470px] rounded-xl border-[1.5px] p-1.5 flex items-stretch"
+                /* R126-3f-2: the anchored menu = the clay card (the
+                   ModelSelector flyout spelling — border-clay-rim + bg-card
+                   + .ac-clay-sm); the 1.5px border + the softShadow leg
+                   are retired, the fixed top/left positioning stays. */
+                className="ac-clay-sm fixed z-50 w-[470px] rounded-xl border border-clay-rim bg-card p-1.5 flex items-stretch"
                 style={{
                   top: scopeMenu.top,
                   left: scopeMenu.left,
-                  background: styles.card,
-                  borderColor: styles.border,
-                  /* R100-E2: floating popover = softShadow (TOKENS.md §5). */
-                  boxShadow: styles.softShadow,
                 }}
                 onKeyDown={(e) => {
                   // R94-C → R95-A: the keyboard ladder — now HORIZONTAL
@@ -3083,8 +3085,7 @@ function ModelListSection({
                   onClick={() => runScope("all")}
                 />
                 <span
-                  className="w-px my-1 shrink-0"
-                  style={{ background: withAlpha(styles.border, 0.8) }}
+                  className="w-px my-1 shrink-0 bg-line"
                   aria-hidden
                 />
                 <ScopeOptionButton
@@ -3107,8 +3108,7 @@ function ModelListSection({
                   onClick={() => runScope("failed")}
                 />
                 <span
-                  className="w-px my-1 shrink-0"
-                  style={{ background: withAlpha(styles.border, 0.8) }}
+                  className="w-px my-1 shrink-0 bg-line"
                   aria-hidden
                 />
                 <ScopeOptionButton
@@ -3140,17 +3140,17 @@ function ModelListSection({
             add-by-id fallback) — replacing the type-an-id inline form. */}
         <button
           onClick={() => setPickerOpen(true)}
-          className="h-7 px-2.5 rounded-full text-[11px] font-semibold flex items-center gap-1"
-          style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
+          /* R126-3f-2: the quiet accent-tint action — the accent-tint
+             container + accentDeep ink (TOKENS §1d/§10) + the press floor;
+             the withAlpha fill + the JS accent color are retired. */
+          className="h-7 px-2.5 rounded-full text-[11px] font-semibold flex items-center gap-1 bg-accent-tint text-accent-deep transition-transform active:scale-[0.98] cursor-pointer"
         >
           <Plus size={11} strokeWidth={2.5} /> Add models
         </button>
       </div>
 
       {error && (
-        <div className="px-4 py-2 border-b text-[11px]" style={{ borderColor: styles.border, color: SEMANTIC_COLORS.danger }}>
-          {error}
-        </div>
+        <div className="px-4 py-2 border-b border-line text-[11px] text-danger-deep">{error}</div>
       )}
 
       {/* ROUND-62 (R62-2b): the load error replaces the empty state — an
@@ -3158,8 +3158,7 @@ function ModelListSection({
       {modelsLoadError !== null && (
         <div
           role="alert"
-          className="px-4 py-3 text-[11px]"
-          style={{ color: SEMANTIC_COLORS.danger }}
+          className="px-4 py-3 text-[11px] text-danger-deep"
         >
           Couldn&apos;t load this provider&apos;s models — {modelsLoadError}
         </div>
@@ -3592,11 +3591,8 @@ function AddModelsDialog({
     };
   };
 
-  const inputStyle = {
-    background: styles.bg,
-    borderColor: styles.border,
-    color: styles.text,
-  } as const;
+  // R126-3f-2: the picker's inputs ride the well + rim on the CSS-var leg
+  // (TOKENS §10) — the shared `inputStyle` JS leg is retired.
 
   return (
     <div
@@ -3610,9 +3606,11 @@ function AddModelsDialog({
       }}
     >
       <div
-        className="w-full max-w-[560px] max-h-[82vh] rounded-xl border-[1.5px] flex flex-col overflow-hidden"
-        /* R100-E2: floating dialog = softShadow (TOKENS.md §5). */
-        style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.softShadow }}
+        /* R126-3f-2: the DIALOG = the clay card (the AddProjectDialog
+           spelling — rounded-xl + the 1px clay rim + .ac-clay; TOKENS §5/§9
+           — the 1.5px border + the softShadow leg are retired). */
+        className="ac-clay w-full max-w-[560px] max-h-[82vh] rounded-xl border flex flex-col overflow-hidden"
+        style={{ background: styles.card, borderColor: styles.clayRim }}
       >
         {/* header */}
         <div className="flex items-center gap-2 px-5 pt-4 pb-3 shrink-0">
@@ -3649,8 +3647,7 @@ function AddModelsDialog({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search by model id or name…"
               aria-label="Search catalog models"
-              className="h-10 w-full rounded-xl border-[1.5px] pl-9 pr-3 text-[13px] outline-none"
-              style={inputStyle}
+              className="h-10 w-full rounded-xl border border-clay-rim bg-well pl-9 pr-3 text-[13px] text-ink outline-none"
             />
           </div>
           {/* Same segmented visual language the rest of the app uses
@@ -3660,8 +3657,11 @@ function AddModelsDialog({
           <div
             role="group"
             aria-label="Catalog filter"
-            className="flex items-center rounded-xl border-[1.5px] overflow-hidden shrink-0"
-            style={{ borderColor: styles.border }}
+            /* R126-3f-2: the segmented control = the 1px clay rim + the
+               accentTint/accentDeep ACTIVE segment (the ModelSelector
+               Free/All spelling from 3d-4); the 1.5px bento border + the
+               withAlpha fill are retired. */
+            className="flex items-center rounded-xl border border-clay-rim overflow-hidden shrink-0"
           >
             {([
               { id: "free", label: "Free only", active: freeOnly, pick: () => setFreeOnly(true) },
@@ -3672,11 +3672,9 @@ function AddModelsDialog({
                 onClick={seg.pick}
                 aria-pressed={seg.active}
                 data-testid={seg.id === "free" ? "picker-free-only-toggle" : "picker-all-models-toggle"}
-                className="h-10 px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap"
-                style={{
-                  background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
-                  color: seg.active ? styles.accent : styles.textTertiary,
-                }}
+                className={`h-10 px-2.5 text-[11px] font-medium transition-colors duration-100 whitespace-nowrap cursor-pointer ${
+                  seg.active ? "bg-accent-tint text-accent-deep" : "text-muted hover:text-ink"
+                }`}
               >
                 {seg.label}
               </button>
@@ -3716,17 +3714,14 @@ function AddModelsDialog({
                 data-testid="picker-model-row"
                 data-model-id={entry.id}
                 data-selected={isSelected ? "true" : undefined}
-                className="flex items-stretch gap-2 rounded-xl border-[1.5px] transition-all"
-                style={{
-                  borderColor: isSelected
-                    ? withAlpha(styles.accent, 0.55)
-                    : withAlpha(styles.accent, 0.28),
-                  background: isSelected
-                    ? withAlpha(styles.accent, 0.08)
-                    : styles.isDark
-                      ? withAlpha(styles.text, 0.015)
-                      : withAlpha(styles.text, 0.008),
-                }}
+                /* R126-3f-2: the catalog rows = FLAT + the clay-rim hairline
+                   (TOKENS §5), the SELECTED row = the accentDeep tier
+                   (border-accent-deep + bg-accent-tint — the brief's §5
+                   selection spelling); the accent withAlpha borders + the
+                   neutral overlay fills are retired. */
+                className={`flex items-stretch gap-2 rounded-xl border transition-all ${
+                  isSelected ? "border-accent-deep bg-accent-tint" : "border-clay-rim"
+                }`}
               >
                 {/* ── LEFT zone: the select checkbox + the text. PointerDOWN
                     toggles and opens the paint session; sweeping the pointer
@@ -3753,11 +3748,12 @@ function AddModelsDialog({
                   <span
                     aria-hidden
                     data-testid="picker-model-checkbox"
-                    className="shrink-0 w-4.5 h-4.5 rounded-sm grid place-items-center border-[1.5px] transition-colors"
-                    style={{
-                      borderColor: isSelected ? styles.accent : styles.border,
-                      background: isSelected ? styles.accent : "transparent",
-                    }}
+                    /* R126-3f-2: the selected checkbox = the accentDeep
+                       tier + the accentText ink (TOKENS §1d) on the class
+                       leg; the 1.5px border is retired. */
+                    className={`shrink-0 w-4.5 h-4.5 rounded-sm grid place-items-center border transition-colors ${
+                      isSelected ? "border-accent-deep bg-accent-deep" : "border-clay-rim bg-transparent"
+                    }`}
                   >
                     {isSelected ? <Check size={12} style={{ color: styles.accentText }} /> : null}
                   </span>
@@ -3771,26 +3767,24 @@ function AddModelsDialog({
                       </span>
                       {free ? (
                         <span
-                          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
-                          style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
+                          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-badge-success text-badge-success-fg"
                         >
                           FREE
                         </span>
                       ) : meta ? (
                         <span
-                          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
-                          style={{ background: styles.subtle, color: styles.textTertiary }}
+                          className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-badge-neutral text-badge-neutral-fg"
                         >
                           PAID
                         </span>
                       ) : null}
                     </span>
                     <span className="flex items-center gap-2 min-w-0 flex-wrap">
-                      <span className="truncate font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+                      <span className="truncate font-mono text-[10px] tabular-nums" style={{ color: styles.textTertiary }}>
                         {entry.id}
                       </span>
                       {meta && (
-                        <span className="shrink-0 font-mono text-[10px]" style={{ color: styles.textTertiary }}>
+                        <span className="shrink-0 font-mono text-[10px] tabular-nums" style={{ color: styles.textTertiary }}>
                           {formatPricingSummary(meta) ?? "pricing unknown"}
                           {meta.contextWindow > 0 ? ` · ${formatTokenCount(meta.contextWindow)}` : ""}
                         </span>
@@ -3814,7 +3808,7 @@ function AddModelsDialog({
                     style={{
                       color:
                         rowFetchState.get(entry.id) === "details"
-                          ? styles.accent
+                          ? styles.accentDeep
                           : styles.textTertiary,
                     }}
                   >
@@ -3836,11 +3830,11 @@ function AddModelsDialog({
                   disabled={batchBusy}
                   aria-label={`Add ${entry.id}`}
                   data-testid="picker-model-direct-add"
-                  /* R100-E2: the JS hover pair retired — the accent wash
-                     rides the CSS-var leg (soft ≈ the old 0.14 rest,
-                     faded ≈ the old 0.22 hover). */
-                  className="shrink-0 self-center flex items-center gap-1 h-8 px-3 mr-2 rounded-full text-[11px] font-semibold transition-all bg-accent-soft hover:bg-accent-faded active:scale-[0.97] disabled:opacity-50"
-                  style={{ color: styles.accent }}
+                  /* R126-3f-2: the quiet accent-tint action (TOKENS §1d/§10)
+                     — the accent-tint container + the accentDeep ink on the
+                     class leg; the accent-soft/faded pair + the JS accent
+                     color are retired. */
+                  className="shrink-0 self-center flex items-center gap-1 h-8 px-3 mr-2 rounded-full text-[11px] font-semibold transition-all duration-100 bg-accent-tint text-accent-deep hover:bg-hover active:scale-[0.97] disabled:opacity-50 cursor-pointer"
                   title="Configure this model before adding — Save creates it"
                 >
                   <Plus size={12} /> Add
@@ -3871,8 +3865,9 @@ function AddModelsDialog({
         {selectedCount > 0 ? (
           <div
             data-testid="picker-batch-strip"
-            className="shrink-0 border-t px-5 py-3 flex items-center gap-3"
-            style={{ borderColor: styles.border, background: withAlpha(styles.accent, 0.05) }}
+            /* R126-3f-2: the batch strip = the accent-tint footer zone on
+               the CSS-var leg (the withAlpha 0.05 wash retired). */
+            className="shrink-0 border-t border-line px-5 py-3 flex items-center gap-3 bg-accent-tint"
           >
             <span className="text-[12px] font-medium" style={{ color: styles.text }}>
               {selectedCount} model{selectedCount === 1 ? "" : "s"} selected
@@ -3894,7 +3889,7 @@ function AddModelsDialog({
               type="button"
               onClick={clearSelection}
               disabled={batchBusy}
-              className="h-9 px-3.5 rounded-full text-[11px] font-semibold disabled:opacity-50"
+              className="h-9 px-3.5 rounded-full text-[11px] font-semibold transition-colors duration-100 hover:bg-hover disabled:opacity-50 cursor-pointer"
               style={{ color: styles.textSecondary }}
             >
               Clear
@@ -3904,8 +3899,12 @@ function AddModelsDialog({
               onClick={() => void addSelected()}
               disabled={batchBusy}
               data-testid="picker-batch-add"
-              className="h-9 px-4 rounded-full text-[12px] font-semibold disabled:opacity-50 flex items-center gap-1.5"
-              style={{ background: styles.accent, color: styles.accentText }}
+              /* R126-3f-2: the QUIET-SOLID clay primary (COMPONENTS §4) —
+                 the accentDeep fill on the class leg + the accentText ink
+                 on the JS leg, rounded-lg + the press collapse; the accent
+                 fill + the pill radius are retired. */
+              className="ac-clay-pressed h-9 px-4 rounded-lg text-[12px] font-semibold bg-accent-deep transition-transform active:scale-[0.98] disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+              style={{ color: styles.accentText }}
             >
               {batchBusy ? <RefreshCw size={12} className="animate-spin" /> : <Plus size={12} />}
               {batchBusy ? "Adding…" : `Add ${selectedCount} model${selectedCount === 1 ? "" : "s"}`}
@@ -3919,8 +3918,7 @@ function AddModelsDialog({
         {batchError !== null ? (
           <div
             data-testid="picker-batch-error"
-            className="shrink-0 border-t px-5 py-3 flex items-center gap-2 text-[11px] font-medium"
-            style={{ borderColor: styles.border, color: SEMANTIC_COLORS.danger }}
+            className="shrink-0 border-t border-line px-5 py-3 flex items-center gap-2 text-[11px] font-medium text-danger-deep"
           >
             <AlertTriangle size={13} className="shrink-0" />
             <span className="min-w-0 flex-1">{batchError}</span>
@@ -3943,8 +3941,7 @@ function AddModelsDialog({
             current semantics (Save UPDATES the existing row), and the hint
             below says so before the click. */}
         <div
-          className="shrink-0 border-t px-5 py-3.5 flex flex-col gap-1.5"
-          style={{ borderColor: styles.border, background: withAlpha(styles.accent, 0.02) }}
+          className="shrink-0 border-t border-line px-5 py-3.5 flex flex-col gap-1.5"
           data-testid="picker-manual-add"
         >
           <div className="flex items-center gap-2">
@@ -3956,14 +3953,16 @@ function AddModelsDialog({
               }}
               placeholder="…or enter a model id not in the list"
               aria-label="Model id"
-              className="h-10 flex-1 min-w-0 rounded-xl border-[1.5px] px-3.5 font-mono text-[12px] outline-none"
-              style={inputStyle}
+              className="h-10 flex-1 min-w-0 rounded-xl border border-clay-rim bg-well px-3.5 font-mono text-[12px] text-ink outline-none"
             />
             <button
               onClick={() => addOne(manualId.trim())}
               disabled={!manualId.trim() || batchBusy}
-              className="h-10 px-4 rounded-full text-[12px] font-semibold disabled:opacity-50 shrink-0"
-              style={{ background: styles.accent, color: styles.accentText }}
+              /* R126-3f-2: the QUIET-SOLID clay primary (COMPONENTS §4) —
+                 the accentDeep fill + the accentText ink, rounded-lg + the
+                 press collapse. */
+              className="ac-clay-pressed h-10 px-4 rounded-lg text-[12px] font-semibold bg-accent-deep transition-transform active:scale-[0.98] disabled:opacity-50 shrink-0 cursor-pointer"
+              style={{ color: styles.accentText }}
             >
               Add
             </button>
@@ -4113,7 +4112,10 @@ function CapChip({
       disabled={locked}
       title={title}
       data-testid={testId}
-      className="h-8 px-3 rounded-full text-[11px] font-medium border-[1.5px] transition-all shrink-0 disabled:cursor-default flex items-center gap-1.5 cursor-pointer border-line text-muted hover:border-[var(--cap)] hover:bg-[color-mix(in_srgb,var(--cap)_10%,transparent)]"
+      /* R126-3f-2: the pill's hairline is the 1px token leg (TOKENS §5 —
+         the 1.5px bento border retired); the ON/OFF paint stays the owner's
+         R87 colored-toggle directive verbatim. */
+      className="h-8 px-3 rounded-full text-[11px] font-medium border transition-all shrink-0 disabled:cursor-default flex items-center gap-1.5 cursor-pointer border-line text-muted hover:border-[var(--cap)] hover:bg-[color-mix(in_srgb,var(--cap)_10%,transparent)]"
       style={
         {
           // the modality's color, exposed to the hover classes above.
@@ -4337,11 +4339,8 @@ function ModelConfigDialog({
     });
   };
 
-  const inputStyle = {
-    background: styles.bg,
-    borderColor: styles.border,
-    color: styles.text,
-  } as const;
+  // R126-3f-2: the dialog's inputs ride the well + rim on the CSS-var leg
+  // (TOKENS §10) — the shared `inputStyle` JS leg is retired.
 
   // R89-C4: the preview line's per-field compact formatting (unused parts
   // of the old single-string preview were retired with it).
@@ -4358,9 +4357,12 @@ function ModelConfigDialog({
       }}
     >
       <div
-        className="w-full max-w-[680px] max-h-[86vh] overflow-y-auto auto-scroll rounded-xl border-[1.5px] p-5 flex flex-col gap-4"
-        /* R100-E2: floating dialog = softShadow (TOKENS.md §5). */
-        style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.softShadow }}
+        /* R126-3f-2: THE CONFIG DIALOG = the clay card (the brief's §6 —
+           the AddProjectDialog spelling from Phase 2: rounded-xl + the 1px
+           clay rim + .ac-clay; TOKENS §5/§9 — the 1.5px border + the
+           softShadow leg are retired). */
+        className="ac-clay w-full max-w-[680px] max-h-[86vh] overflow-y-auto auto-scroll rounded-xl border p-5 flex flex-col gap-4"
+        style={{ background: styles.card, borderColor: styles.clayRim }}
       >
         {/* header — ROUND-87 (R87): ADD vs CONFIGURE + the provider chip
             (the send wire's actual routing target). */}
@@ -4369,8 +4371,7 @@ function ModelConfigDialog({
             {addMode ? "Add model" : "Configure model"}
           </span>
           <span
-            className="px-1.5 py-0.5 rounded-full font-mono text-[10px] font-medium"
-            style={{ background: styles.subtle, color: styles.textTertiary }}
+            className="px-1.5 py-0.5 rounded-full font-mono text-[10px] font-medium bg-badge-neutral text-badge-neutral-fg"
             title="The provider that serves this model (the send wire routes here since R82)"
           >
             {providerId}
@@ -4401,7 +4402,7 @@ function ModelConfigDialog({
                 className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
                 style={{
                   background:
-                    smartFillState === "details" ? styles.accent : styles.textTertiary,
+                    smartFillState === "details" ? styles.accentDeep : styles.textTertiary,
                 }}
                 aria-hidden
               />
@@ -4427,8 +4428,7 @@ function ModelConfigDialog({
                   onChange={(e) => set("displayName", e.target.value)}
                   placeholder={draft.modelId || "the friendly name shown in pickers"}
                   aria-label="Display name"
-                  className="h-10 w-full rounded-lg border-[1.5px] px-3 text-[13px] outline-none"
-                  style={inputStyle}
+                  className="h-10 w-full rounded-lg border border-clay-rim bg-well px-3 text-[13px] text-ink outline-none"
                 />
               </div>
               <div>
@@ -4441,14 +4441,13 @@ function ModelConfigDialog({
                     onChange={(e) => set("modelId", e.target.value)}
                     placeholder="provider/model-name"
                     aria-label="Model id"
-                    className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[11px] outline-none"
-                    style={inputStyle}
+                    className="h-10 w-full rounded-lg border border-clay-rim bg-well px-3 font-mono text-[11px] text-ink outline-none"
                     data-testid="model-config-id-input"
                   />
                 ) : (
                   <p
-                    className="h-10 flex items-center w-full rounded-lg border-[1.5px] px-3 font-mono text-[11px] break-all overflow-hidden"
-                    style={{ borderColor: styles.border, background: styles.subtle, color: styles.textTertiary }}
+                    className="h-10 flex items-center w-full rounded-lg border border-clay-rim bg-well px-3 font-mono text-[11px] break-all overflow-hidden"
+                    style={{ color: styles.textTertiary }}
                     aria-label="Model id (read-only)"
                   >
                     {draft.modelId}
@@ -4466,8 +4465,7 @@ function ModelConfigDialog({
                   onChange={(e) => set("sizeLabel", e.target.value)}
                   placeholder="unknown"
                   aria-label="Size label"
-                  className="h-10 w-full rounded-lg border-[1.5px] px-3 text-[13px] outline-none"
-                  style={inputStyle}
+                  className="h-10 w-full rounded-lg border border-clay-rim bg-well px-3 text-[13px] text-ink outline-none"
                   data-testid="model-config-size-input"
                 />
               </div>
@@ -4478,8 +4476,11 @@ function ModelConfigDialog({
                 <div
                   role="group"
                   aria-label="Hide from chat picker"
-                  className="flex items-center rounded-lg border-[1.5px] overflow-hidden shrink-0"
-                  style={{ borderColor: styles.border }}
+                  /* R126-3f-2: the segmented control = the 1px clay rim + the
+                     accentTint/accentDeep ACTIVE segment (the ModelSelector
+                     spelling); the 1.5px border + the withAlpha fill are
+                     retired. */
+                  className="flex items-center rounded-lg border border-clay-rim overflow-hidden shrink-0"
                 >
                   {([
                     { id: "on", label: "On", active: draft.hidden, pick: () => set("hidden", true) },
@@ -4489,11 +4490,9 @@ function ModelConfigDialog({
                       key={seg.id}
                       onClick={seg.pick}
                       aria-pressed={seg.active}
-                      className="h-7 px-3 text-[11px] font-medium transition-colors"
-                      style={{
-                        background: seg.active ? withAlpha(styles.accent, 0.12) : "transparent",
-                        color: seg.active ? styles.accent : styles.textTertiary,
-                      }}
+                      className={`h-7 px-3 text-[11px] font-medium transition-colors duration-100 cursor-pointer ${
+                        seg.active ? "bg-accent-tint text-accent-deep" : "text-muted hover:text-ink"
+                      }`}
                     >
                       {seg.label}
                     </button>
@@ -4597,8 +4596,7 @@ function ModelConfigDialog({
                     onChange={(e) => set("contextWindow", e.target.value)}
                     placeholder="unknown"
                     aria-label="Context window (tokens)"
-                    className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                    style={inputStyle}
+                    className="h-10 w-full rounded-lg border border-clay-rim bg-well px-3 font-mono text-[12px] text-ink outline-none tabular-nums"
                   />
                   <TokenHint raw={draft.contextWindow} />
                 </div>
@@ -4611,8 +4609,7 @@ function ModelConfigDialog({
                     onChange={(e) => set("maxOutputTokens", e.target.value)}
                     placeholder="unknown"
                     aria-label="Max output tokens"
-                    className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                    style={inputStyle}
+                    className="h-10 w-full rounded-lg border border-clay-rim bg-well px-3 font-mono text-[12px] text-ink outline-none tabular-nums"
                   />
                   <TokenHint raw={draft.maxOutputTokens} />
                 </div>
@@ -4633,8 +4630,7 @@ function ModelConfigDialog({
                     inputMode="decimal"
                     placeholder="unknown"
                     aria-label="Input price ($ per 1M tokens)"
-                    className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                    style={inputStyle}
+                    className="h-10 w-full rounded-lg border border-clay-rim bg-well px-3 font-mono text-[12px] text-ink outline-none tabular-nums"
                   />
                 </div>
                 <div>
@@ -4647,8 +4643,7 @@ function ModelConfigDialog({
                     inputMode="decimal"
                     placeholder="unknown"
                     aria-label="Output price ($ per 1M tokens)"
-                    className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                    style={inputStyle}
+                    className="h-10 w-full rounded-lg border border-clay-rim bg-well px-3 font-mono text-[12px] text-ink outline-none tabular-nums"
                   />
                 </div>
                 <div>
@@ -4661,8 +4656,7 @@ function ModelConfigDialog({
                     inputMode="decimal"
                     placeholder="unknown"
                     aria-label="Cache read price ($ per 1M tokens)"
-                    className="h-10 w-full rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
-                    style={inputStyle}
+                    className="h-10 w-full rounded-lg border border-clay-rim bg-well px-3 font-mono text-[12px] text-ink outline-none tabular-nums"
                   />
                 </div>
               </div>
@@ -4672,10 +4666,13 @@ function ModelConfigDialog({
             </div>
 
             {/* live preview — R89-C4: the formatted summary (context +
-                max output in compact form + the pricing trio, unset → —). */}
+                max output in compact form + the pricing trio, unset → —).
+                R126-3f-2: the preview rides THE WELL + the clay rim
+                (TOKENS §10) with mono tabular-nums — the subtle fill is
+                retired. */}
             <div
-              className="rounded-lg px-3 py-2 font-mono text-[11px] flex flex-wrap gap-x-3 gap-y-0.5"
-              style={{ background: styles.subtle, color: styles.textTertiary }}
+              className="rounded-lg border border-clay-rim bg-well px-3 py-2 font-mono text-[11px] tabular-nums flex flex-wrap gap-x-3 gap-y-0.5"
+              style={{ color: styles.textTertiary }}
               data-testid="model-config-preview"
             >
               <span>{`ctx ${formatTokenCount(numOrNull(draft.contextWindow))}`}</span>
@@ -4688,7 +4685,7 @@ function ModelConfigDialog({
         </div>
 
         {error && (
-          <p role="alert" className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }}>
+          <p role="alert" className="text-[11px] text-danger-deep">
             {error}
           </p>
         )}
@@ -4696,8 +4693,11 @@ function ModelConfigDialog({
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={onClose}
-            className="h-10 px-4 rounded-lg border-[1.5px] text-[12px] font-semibold"
-            style={{ borderColor: styles.border, color: styles.textSecondary }}
+            /* R126-3f-2: the SECONDARY species (COMPONENTS §4) — the 1px
+               border-strong outline + secondary ink + the hover bg-subtle
+               wash + the press floor. */
+            className="h-10 px-4 rounded-lg border border-line-strong text-[12px] font-semibold transition-colors duration-100 hover:bg-subtle active:scale-[0.98] cursor-pointer"
+            style={{ color: styles.textSecondary }}
           >
             Cancel
           </button>
@@ -4706,8 +4706,14 @@ function ModelConfigDialog({
           <button
             onClick={submit}
             disabled={save.isPending}
-            className="h-10 px-5 rounded-full text-[13px] font-semibold disabled:opacity-50"
-            style={{ background: styles.accent, color: styles.accentText }}
+            /* R126-3f-2: the QUIET-SOLID clay primary (COMPONENTS §4 — the
+               AddProjectDialog spelling, the brief's §6 CTA): the accentDeep
+               fill on the class leg + the accentText ink on the JS leg
+               (text-accent-text is a phantom utility), rounded-lg + the
+               ac-clay-pressed press collapse; the accent fill + the pill
+               radius are retired. */
+            className="ac-clay-pressed h-10 px-5 rounded-lg text-[13px] font-semibold bg-accent-deep transition-transform active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+            style={{ color: styles.accentText }}
             data-testid="model-config-save"
           >
             {save.isPending ? "Saving…" : addMode ? "Add model" : "Save configuration"}
@@ -5066,9 +5072,9 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
   const revealedValue = revealState.kind === "shown" ? revealState.value : null;
 
   return (
-    /* R100-E2: the SectionCard primitive (rounded-2xl / 1.5px border-line /
-       bg-card) — the aria-label passthrough keeps the card's accessible
-       name (its tests pin the "API keys" label). */
+    /* R100-E2: the SectionCard primitive — the aria-label passthrough keeps
+       the card's accessible name (its tests pin the "API keys" label).
+       R126-3f-2: the primitive now carries the CLAY card (3f-1) — free. */
     <SectionCard
       className="p-4 md:p-5 flex flex-col gap-3"
       ariaLabel="API keys"
@@ -5081,13 +5087,15 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
           sub-agents use the same pool.
         </p>
       </div>
-      <div className="rounded-lg border-[1.5px] overflow-hidden" style={{ borderColor: styles.border }}>
+      {/* R126-3f-2: the keys list = the flat rows + hairline dividers inside
+          the pane (the brief's §1) — the 1.5px container border is the clay
+          rim now. */}
+      <div className="rounded-lg border border-clay-rim overflow-hidden">
         {/* ── Key 1 — the primary (R60-B editor, verbatim semantics) ─────── */}
         <div
           data-pool-slot={0}
           data-key-ordinal={1}
-          className="flex items-center gap-2.5 px-3 py-2.5 border-b"
-          style={{ borderColor: styles.borderSubtle, background: withAlpha(styles.accent, 0.02) }}
+          className="flex items-center gap-2.5 px-3 py-2.5 border-b border-line"
         >
           {/* R95-A: the label groups of Key 1 AND every pool row share a fixed
               min-width so the value fields + action buttons all start at the
@@ -5097,9 +5105,9 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
             <span className="text-[11px] font-mono font-medium" style={{ color: styles.textSecondary }}>
               KEY 1
             </span>
+            {/* R126-3f-2: the state chip = the §11 ACCENT badge tone. */}
             <span
-              className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5"
-              style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent }}
+              className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 bg-badge-accent text-badge-accent-fg"
               title="The provider's first key — stored at slot 0 and tried first"
             >
               primary
@@ -5155,17 +5163,13 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
               // ROUND-60: any typed/pasted change while at rest IS the
               // paste-to-replace gesture — the draft takes over (edit mode).
               onChange={(e) => setKeyDraft(e.target.value)}
-              className="h-10 flex-1 min-w-0 rounded-lg border-[1.5px] px-3 font-mono text-[12px] outline-none"
-              style={{
-                background: styles.bg,
-                color: styles.text,
-                borderColor:
-                  keyDraft !== null
-                    ? withAlpha(styles.accent, 0.55)
-                    : revealState.kind === "shown"
-                      ? withAlpha(styles.accent, 0.45)
-                      : styles.border,
-              }}
+              /* R126-3f-2: the masked keys = MONO ON THE WELL (the brief's §4
+                 — bg-well + the 1px clay rim + the accent EDGE class when a
+                 draft is live or the value is revealed; the withAlpha
+                 accent borders are retired). */
+              className={`h-10 flex-1 min-w-0 rounded-lg border border-clay-rim bg-well px-3 font-mono text-[12px] text-ink outline-none ${
+                keyDraft !== null || revealState.kind === "shown" ? "border-accent" : ""
+              }`}
             />
             {/* THE eye toggle — the exact same slot in every state: masked
                 rest → Eye (reveal), loading → spinner, revealed → EyeOff
@@ -5188,11 +5192,9 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                     ? "Mask the stored key again"
                     : "Show the stored key"
               }
-              className="h-10 w-10 grid place-items-center rounded-lg border-[1.5px] shrink-0 disabled:opacity-40"
+              className="h-10 w-10 grid place-items-center rounded-lg border border-clay-rim bg-well shrink-0 disabled:opacity-40"
               style={{
-                background: styles.bg,
-                borderColor: styles.border,
-                color: revealState.kind === "shown" ? styles.accent : styles.textTertiary,
+                color: revealState.kind === "shown" ? styles.accentDeep : styles.textTertiary,
               }}
             >
               {revealState.kind === "loading" ? (
@@ -5216,8 +5218,11 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                   disabled={keyDraft === null || keyDraft.trim() === "" || saveKey.isPending}
                   aria-label="Save key"
                   data-testid="save-key-button"
-                  className="h-10 px-4 rounded-lg text-[12px] font-semibold disabled:opacity-50 shrink-0"
-                  style={{ background: styles.accent, color: styles.accentText }}
+                  /* R126-3f-2: the QUIET-SOLID clay primary (COMPONENTS §4) —
+                     the accentDeep fill on the class leg + the accentText
+                     ink on the JS leg, rounded-lg + the press collapse. */
+                  className="ac-clay-pressed h-10 px-4 rounded-lg text-[12px] font-semibold bg-accent-deep transition-transform active:scale-[0.98] disabled:opacity-50 shrink-0 cursor-pointer"
+                  style={{ color: styles.accentText }}
                 >
                   {saveKey.isPending ? "Saving…" : "Save key"}
                 </button>
@@ -5228,8 +5233,8 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                     aria-label="Cancel key edit"
                     data-testid="cancel-key-edit-button"
                     title="Restore the stored key display"
-                    className="h-10 w-10 grid place-items-center rounded-lg border-[1.5px] shrink-0"
-                    style={{ borderColor: styles.border, color: styles.textTertiary }}
+                    className="h-10 w-10 grid place-items-center rounded-lg border border-clay-rim shrink-0 transition-colors duration-100 hover:bg-hover cursor-pointer"
+                    style={{ color: styles.textTertiary }}
                   >
                     <X size={13} />
                   </button>
@@ -5252,8 +5257,8 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                       aria-label="Copy stored key"
                       data-testid="copy-stored-key-button"
                       title="Copy the stored key"
-                      className="h-10 px-3.5 rounded-lg border-[1.5px] text-[12px] font-semibold flex items-center gap-1.5 shrink-0 whitespace-nowrap"
-                      style={{ borderColor: styles.border, color: styles.textSecondary }}
+                      className="h-10 px-3.5 rounded-lg border border-clay-rim text-[12px] font-semibold flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+                      style={{ color: styles.textSecondary }}
                     >
                       <Copy size={12} /> Copy
                     </button>
@@ -5285,8 +5290,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
               key={k.slot}
               data-pool-slot={k.slot}
               data-key-ordinal={ordinal}
-              className="flex items-center gap-2.5 px-3 py-2.5 border-b last:border-b-0"
-              style={{ borderColor: styles.borderSubtle }}
+              className="flex items-center gap-2.5 px-3 py-2.5 border-b border-line last:border-b-0"
             >
               <span className="flex items-center gap-1.5 shrink-0 min-w-[108px]">
                 <span className="text-[11px] font-mono font-medium" style={{ color: styles.textSecondary }}>
@@ -5305,12 +5309,13 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                       ? "The stored key — revealed"
                       : "The stored key (masked) — use the eye to reveal"
                   }
-                  className="min-h-10 flex-1 min-w-0 rounded-lg border-[1.5px] px-3 flex items-center font-mono text-[12px] overflow-hidden"
+                  /* R126-3f-2: the masked value = MONO ON THE WELL with the
+                     accent EDGE while revealed (the brief's §4). */
+                  className={`min-h-10 flex-1 min-w-0 rounded-lg border border-clay-rim bg-well px-3 flex items-center font-mono text-[12px] overflow-hidden ${
+                    revealed !== undefined ? "border-accent" : ""
+                  }`}
                   style={{
-                    background: styles.bg,
                     color: revealed !== undefined ? styles.text : styles.textSecondary,
-                    borderColor:
-                      revealed !== undefined ? withAlpha(styles.accent, 0.45) : styles.border,
                   }}
                 >
                   {revealed !== undefined ? (
@@ -5330,11 +5335,9 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                   disabled={revealLoadingSlot !== null}
                   aria-label={revealed !== undefined ? `Hide key ${ordinal}` : `Reveal key ${ordinal}`}
                   title={revealed !== undefined ? "Mask again" : "Show the full key"}
-                  className="h-10 w-10 grid place-items-center rounded-lg border-[1.5px] shrink-0 disabled:opacity-40"
+                  className="h-10 w-10 grid place-items-center rounded-lg border border-clay-rim bg-well shrink-0 disabled:opacity-40"
                   style={{
-                    background: styles.bg,
-                    borderColor: styles.border,
-                    color: revealed !== undefined ? styles.accent : styles.textTertiary,
+                    color: revealed !== undefined ? styles.accentDeep : styles.textTertiary,
                   }}
                 >
                   {rowLoading ? (
@@ -5364,8 +5367,8 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                         aria-label={`Copy key ${ordinal}`}
                         data-testid="copy-pool-key-button"
                         title="Copy the full key"
-                        className="h-10 px-3.5 rounded-lg border-[1.5px] text-[12px] font-semibold flex items-center gap-1.5 shrink-0 whitespace-nowrap"
-                        style={{ borderColor: styles.border, color: styles.textSecondary }}
+                        className="h-10 px-3.5 rounded-lg border border-clay-rim text-[12px] font-semibold flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+                        style={{ color: styles.textSecondary }}
                       >
                         <Copy size={12} /> Copy
                       </button>
@@ -5373,20 +5376,17 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                   )}
                 </AnimatePresence>
                 {/* The trash — the same bordered button family. R100-E2: the
-                    JS hover-red pair retired — it RESTS in the danger color
-                    (the R100-D WorkingSection destructive idiom) with the
-                    hover:bg-hover CSS wash. Opens the styled
-                    ConfirmDialog (R95-A), never window.confirm. */}
+                    JS hover-red pair retired. R126-3f-2: the OUTLINED DANGER
+                    species (the brief's §4 — 1px border-danger-deep +
+                    text-danger-deep on the class leg + the 3a/3b press
+                    floor). Opens the styled ConfirmDialog (R95-A), never
+                    window.confirm. */}
                 <button
                   type="button"
                   onClick={() => setPendingRemoveSlot(k)}
                   aria-label={`Remove key ${ordinal}`}
                   title="Remove key"
-                  className="h-10 w-10 grid place-items-center rounded-lg border-[1.5px] shrink-0 transition-colors hover:bg-hover cursor-pointer"
-                  style={{
-                    borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
-                    color: SEMANTIC_COLORS.danger,
-                  }}
+                  className="h-10 w-10 grid place-items-center rounded-lg border border-danger-deep text-danger-deep shrink-0 transition-colors duration-100 hover:bg-hover active:scale-[0.98] cursor-pointer"
                 >
                   <Trash2 size={13} />
                 </button>
@@ -5414,17 +5414,14 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
             A full pool replaces it with the honest note. */}
         {nextFreeSlot(pool.filter((k) => k.hasKey).map((k) => k.slot)) < 0 ? (
           <div
-            className="px-3 py-2.5 text-[11px] border-t"
-            style={{ borderColor: styles.borderSubtle, color: styles.textTertiary }}
+            className="px-3 py-2.5 text-[11px] border-t border-line"
+            style={{ color: styles.textTertiary }}
             data-testid="pool-full-note"
           >
             The key pool is full (31 keys) — remove one to add another.
           </div>
         ) : (
-          <div
-            className="flex items-center gap-2 px-3 py-2 border-t"
-            style={{ borderColor: styles.borderSubtle, background: withAlpha(styles.accent, 0.03) }}
-          >
+          <div className="flex items-center gap-2 px-3 py-2 border-t border-line">
             <span className="text-[11px] font-mono font-medium shrink-0" style={{ color: styles.textTertiary }}>
               KEY {keyCount + 1}
             </span>
@@ -5436,8 +5433,7 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
                 placeholder="another key for this provider (sk-…)"
                 aria-label="New API key"
                 data-testid="add-key-input"
-                className="h-8 w-full rounded-lg border-[1.5px] px-2.5 pr-8 font-mono text-[11px] outline-none"
-                style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
+                className="h-8 w-full rounded-lg border border-clay-rim bg-well px-2.5 pr-8 font-mono text-[11px] text-ink outline-none"
               />
               <button
                 onClick={() => setShowNew((v) => !v)}
@@ -5452,31 +5448,35 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
               onClick={() => newKey.trim() && addKey.mutate(newKey.trim())}
               disabled={!newKey.trim() || addKey.isPending}
               aria-label="Add key"
-              className="h-8 px-3 rounded-lg text-[11px] font-semibold flex items-center gap-1 disabled:opacity-50"
-              style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+              /* R126-3f-2: the add-key CTA = the QUIET-SOLID primary (the
+                 brief's §4) — the accentDeep fill + the accentText ink on
+                 the JS leg + the press collapse; the accent wash + the JS
+                 accent color are retired. */
+              className="ac-clay-pressed h-8 px-3 rounded-lg text-[11px] font-semibold flex items-center gap-1 bg-accent-deep transition-transform active:scale-[0.98] disabled:opacity-50 cursor-pointer"
+              style={{ color: styles.accentText }}
             >
               <Plus size={11} strokeWidth={2.5} /> {addKey.isPending ? "Adding…" : "Add key"}
             </button>
           </div>
         )}
       </div>
-      {/* Primary-editor status (save/copy confirmations + reveal failures). */}
+      {/* Primary-editor status (save/copy confirmations + reveal failures).
+          R126-3f-2: status TEXT = the §11 deep pairs on the class leg. */}
       {revealState.kind === "error" && (
-        <p className="text-[11px] break-all" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+        <p className="text-[11px] break-all text-danger-deep" role="alert">
           {revealState.message}
         </p>
       )}
       {keyStatus && (
         <p
           data-testid={keyStatusIsWarning ? "key-store-disclosure" : undefined}
-          className="text-[11px]"
-          style={{
-            color: saveKey.isError || keyStatusIsError
-              ? SEMANTIC_COLORS.danger
+          className={`text-[11px] ${
+            saveKey.isError || keyStatusIsError
+              ? "text-danger-deep"
               : keyStatusIsWarning
-                ? SEMANTIC_COLORS.warning
-                : SEMANTIC_COLORS.success,
-          }}
+                ? "text-warning-deep"
+                : "text-success-deep"
+          }`}
         >
           {keyStatus}
         </p>
@@ -5484,27 +5484,26 @@ export function ProviderKeysCard({ provider }: { provider: ProviderView }) {
       {/* Pool add/remove status + reveal failures. */}
       {poolMsg && (
         <p
-          className="text-[11px]"
-          style={{
-            color: addKey.isError || removeKey.isError
-              ? SEMANTIC_COLORS.danger
+          className={`text-[11px] ${
+            addKey.isError || removeKey.isError
+              ? "text-danger-deep"
               : poolMsgIsWarning
-                ? SEMANTIC_COLORS.warning
-                : SEMANTIC_COLORS.success,
-          }}
+                ? "text-warning-deep"
+                : "text-success-deep"
+          }`}
         >
           {poolMsg}
         </p>
       )}
       {revealError && (
-        <p className="text-[11px] break-all" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+        <p className="text-[11px] break-all text-danger-deep" role="alert">
           {revealError}
         </p>
       )}
       {/* A failed pool listing is honest — the primary editor still works,
           but Key 2..N cannot render from a lie. */}
       {poolQuery.isError && (
-        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+        <p className="text-[11px] text-danger-deep" role="alert">
           Key pool listing unavailable —{" "}
           {poolQuery.error instanceof Error ? poolQuery.error.message : String(poolQuery.error)}
         </p>

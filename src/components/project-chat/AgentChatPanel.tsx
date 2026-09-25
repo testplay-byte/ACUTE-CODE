@@ -294,10 +294,13 @@ function CopyButton({
       title={title}
       // R100-D: the hover wash is a CSS class (hover:bg-hover — the CSS-var
       // leg); no JS hover painting.
-      className="w-6 h-6 rounded-md grid place-items-center transition-colors hover:bg-hover"
+      className="w-6 h-6 rounded-md grid place-items-center transition-colors duration-100 hover:bg-hover"
       style={{ color: styles.textTertiary }}
     >
-      {copied ? <Check size={11} style={{ color: SEMANTIC_COLORS.success }} /> : <Icon size={11} />}
+      {/* R126-3d-2: the copied-check ink is the SUCCESS deep pair
+          (TOKENS §11 — the flat SEMANTIC_COLORS hue died with the status
+          grammar; deep-on-card is the sanctioned status-text tier). */}
+      {copied ? <Check size={11} style={{ color: styles.successDeep }} /> : <Icon size={11} />}
     </button>
   );
 }
@@ -534,7 +537,7 @@ function TurnFooter({
         aria-pressed={filled}
         title={label}
         data-testid={`rate-${value}`}
-        className="w-6 h-6 rounded-md grid place-items-center transition-colors hover:bg-hover"
+        className="w-6 h-6 rounded-md grid place-items-center transition-colors duration-100 hover:bg-hover"
         style={{ color: filled ? styles.accent : styles.textTertiary }}
       >
         <Icon size={11} style={filled ? { fill: "currentColor" } : undefined} />
@@ -591,8 +594,12 @@ function TurnFooter({
                 aria-label="Edit the saved rating note"
                 title={`Saved note: ${current.note}`}
                 data-testid="rating-note-chip"
-                className="ml-0.5 flex h-5 max-w-[180px] items-center gap-1 rounded-full px-1.5 text-[10px] font-medium"
-                style={{ background: styles.subtle, color: styles.textTertiary }}
+                // R126-3d-2: the §2 status-chip spelling — the NEUTRAL badge
+                // tone container (bg-badge-neutral + text-badge-neutral-fg,
+                // TOKENS §11's neutral row: the well fill + the secondary
+                // ink pair — one spelling with every identity chip in this
+                // panel; the inline tertiary leg died with it).
+                className="ml-0.5 flex h-5 max-w-[180px] items-center gap-1 rounded-full px-1.5 text-[10px] font-medium bg-badge-neutral text-badge-neutral-fg"
               >
                 <MessageSquareText size={10} aria-hidden />
                 <span className="truncate">noted</span>
@@ -621,10 +628,11 @@ function TurnFooter({
             placeholder="What went wrong?"
             data-testid="rating-note-input"
             maxLength={MAX_RATING_NOTE_CHARS}
-            className="flex-1 min-w-[160px] h-7 rounded-lg px-2.5 text-[12px] border outline-none"
+            // R126-3d-2: the input fill rides the WELL (TOKENS §10 — input
+            // fills are the workhorse recess; the old bg fill is retired).
+            className="flex-1 min-w-[160px] h-7 rounded-lg px-2.5 text-[12px] border outline-none bg-well"
             style={{
               borderColor: styles.border,
-              background: styles.bg,
               color: styles.text,
             }}
           />
@@ -633,8 +641,12 @@ function TurnFooter({
             onClick={onNoteSave}
             aria-label="Save rating note"
             data-testid="rating-note-save"
-            className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border"
-            style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
+            // R126-3d-2: the outlined accent species on the CLASS leg
+            // (COMPONENTS §4 — border-accent-deep + text-accent-deep, the
+            // app-wide outlined spelling; the pre-R126 withAlpha(accentDeep,
+            // 0.5) border leg died with it — TOKENS §1 rule 3's 0.08–0.13
+            // range never covered borders).
+            className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border border-accent-deep text-accent-deep transition-opacity duration-100 hover:opacity-85 active:scale-[0.98]"
           >
             Save
           </button>
@@ -642,8 +654,7 @@ function TurnFooter({
             type="button"
             onClick={() => setNoteOpen(false)}
             aria-label="Cancel rating note"
-            className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border"
-            style={{ borderColor: styles.border, color: styles.textSecondary }}
+            className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border border-line text-muted transition-colors duration-100 hover:bg-subtle active:scale-[0.98]"
           >
             Cancel
           </button>
@@ -654,7 +665,9 @@ function TurnFooter({
           role="alert"
           data-rating-error
           className="mt-1 text-[11px] leading-[1.4] break-words"
-          style={{ color: SEMANTIC_COLORS.danger }}
+          // R126-3d-2: status text without a container uses the DEEP danger
+          // pair (TOKENS §11) — never the flat semantic hue.
+          style={{ color: styles.dangerDeep }}
         >
           {ratingError}
         </div>
@@ -700,7 +713,10 @@ function TimestampChip({ ts, className = "" }: { ts: string | undefined; classNa
     <span
       data-chat-timestamp
       title="When this message was sent"
-      className={`font-mono text-[10px] tabular-nums shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${className}`}
+      // R126-3d-2: the hover timestamp chip rides the WELL surface (the
+      // brief's material spec — the quiet recess container, TOKENS §10's
+      // workhorse; the ink stays tertiary metadata).
+      className={`font-mono text-[10px] tabular-nums shrink-0 rounded-md bg-well px-1.5 py-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${className}`}
       style={{ color: styles.textTertiary }}
     >
       {today
@@ -726,7 +742,6 @@ function TimestampChip({ ts, className = "" }: { ts: string | undefined; classNa
  * A11y: the dot + model chip are decorative (aria-hidden) — the timestamp
  * stays perceivable exactly as today. */
 function AssistantTurnHeader({ model, ts }: { model?: string; ts?: string }) {
-  const styles = useThemeStyles();
   const mode = useThemeStore((s) => s.timestampsMode);
   const tsValid =
     ts !== undefined && ts !== "" && !Number.isNaN(Date.parse(ts));
@@ -743,11 +758,15 @@ function AssistantTurnHeader({ model, ts }: { model?: string; ts?: string }) {
         className="flex items-center gap-1.5 min-w-0"
         title={model}
       >
-        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: styles.accent }} />
+        {/* R126-3d-2: the 6px marker dot rides the DEEP accent tier
+            (bg-accent-deep — TOKENS §1d's marker tier, the shape stays);
+            the model identity chip is the NEUTRAL badge tone
+            (bg-badge-neutral + text-badge-neutral-fg — TOKENS §11's
+            neutral row, the well fill + textSecondary ink pair). */}
+        <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-accent-deep" />
         {model !== undefined && model !== "" ? (
           <span
-            className="shrink-0 min-w-0 truncate max-w-[240px] font-mono text-[10px] px-1.5 py-0.5 rounded-md"
-            style={{ background: styles.subtle, color: styles.textTertiary }}
+            className="shrink-0 min-w-0 truncate max-w-[240px] font-mono text-[10px] px-1.5 py-0.5 rounded-md bg-badge-neutral text-badge-neutral-fg"
           >
             {model}
           </span>
@@ -765,19 +784,21 @@ function AssistantTurnHeader({ model, ts }: { model?: string; ts?: string }) {
  * as continuation, not a flash. Decorative (the container announces
  * "Loading conversation" once). */
 function TranscriptSkeleton() {
-  const styles = useThemeStyles();
-  const bubbleTint = withAlpha(styles.accent, styles.isDark ? 0.16 : 0.11);
+  // R126-3d-2: every skeleton row rides the WELL (TOKENS §10 law 4 — the
+  // recessed ladder step, SkeletonBlock's own bg-well pulse; the brief's
+  // material spec names no skeleton exception, and the app's one skeleton
+  // spelling is the well, not an accent-tinted preview of the bubble).
   return (
     <div className="flex flex-col gap-4" aria-hidden>
       <div className="flex justify-end">
-        <SkeletonBlock className="h-10 w-[38%] max-w-[300px] rounded-xl" style={{ background: bubbleTint }} />
+        <SkeletonBlock className="h-10 w-[38%] max-w-[300px] rounded-2xl rounded-br-[5px]" />
       </div>
       <div className="flex flex-col gap-2">
         <SkeletonBlock className="h-3.5 w-[52%] max-w-[420px] rounded-full" />
         <SkeletonBlock className="h-3.5 w-[44%] max-w-[380px] rounded-full" />
       </div>
       <div className="flex justify-end">
-        <SkeletonBlock className="h-10 w-[30%] max-w-[240px] rounded-xl" style={{ background: bubbleTint }} />
+        <SkeletonBlock className="h-10 w-[30%] max-w-[240px] rounded-2xl rounded-br-[5px]" />
       </div>
       <div className="flex flex-col gap-2">
         <SkeletonBlock className="h-3.5 w-[58%] max-w-[460px] rounded-full" />
@@ -793,29 +814,30 @@ function TranscriptSkeleton() {
  * one action) replaces it on the empty transcript; a populated transcript
  * with a background-refetch failure still renders normally. */
 function ChatLoadErrorCard({ onRetry }: { onRetry: () => void }) {
-  const styles = useThemeStyles();
   return (
     <div
       role="alert"
       data-chat-load-error
-      className="max-w-md rounded-xl border px-4 py-3.5 text-center"
-      style={{
-        borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
-        background: withAlpha(SEMANTIC_COLORS.danger, styles.isDark ? 0.08 : 0.05),
-      }}
+      // R126-3d-2: the badge-tone danger container (TOKENS §11 — the
+      // withAlpha wash + flat-hue danger text died with the status
+      // grammar; the dashboard/usage error banners' exact species).
+      className="max-w-md rounded-xl px-4 py-3.5 text-center bg-badge-danger text-badge-danger-fg"
     >
-      <div className="text-[13px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+      <div className="text-[13px] font-semibold">
         Could not load this conversation
       </div>
-      <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
+      {/* R126-3d-2: the description line inherits the badge fg (the
+          deep-on-tint pair — the dashboard/usage error cards' exact species;
+          never an inline textSecondary override on a tinted container). */}
+      <p className="mt-1.5 text-[12px] leading-relaxed">
         The session history failed to load — the agent sidecar may be down or the connection dropped. Your messages are safe on disk.
       </p>
       <button
         type="button"
         onClick={onRetry}
         aria-label="Retry loading the conversation"
-        className="mt-3 h-8 px-3.5 rounded-lg text-[12px] font-semibold border transition-opacity hover:opacity-85"
-        style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+        // R126-3d-2: the outlined danger species (COMPONENTS §4).
+        className="mt-3 h-8 px-3.5 rounded-lg text-[12px] font-semibold border border-danger-deep text-danger-deep transition-opacity duration-100 hover:opacity-85 active:scale-[0.98]"
       >
         Retry
       </button>
@@ -943,7 +965,10 @@ function AttachmentImageThumb({
         alt={attachment.name}
         title={`${attachment.name}${attachment.size !== undefined ? ` · ${fmtBytes(attachment.size)}` : ""}`}
         className="rounded-lg max-w-[220px] max-h-[160px] object-cover"
-        style={{ border: `1px solid ${withAlpha(styles.accent, 0.18)}` }}
+        // R126-3d-2: the frame rides the NEUTRAL hairline (the mobile
+        // UserImageThumb's own borderSubtle material — a quiet frame inside
+        // the tinted bubble, never an accent-tinted edge).
+        style={{ border: `1px solid ${styles.borderSubtle}` }}
       />
     );
   }
@@ -955,11 +980,14 @@ function AttachmentImageThumb({
       title={`${attachment.name}${attachment.size !== undefined ? ` · ${fmtBytes(attachment.size)}` : ""}`}
       className="inline-flex items-center gap-1.5 h-9 px-2 rounded-lg font-mono text-[10px] max-w-[220px]"
       style={{
-        border: `1px dashed ${withAlpha(styles.accent, 0.25)}`,
+        border: `1px dashed ${styles.borderSubtle}`,
         color: styles.textTertiary,
       }}
     >
-      <ImageIcon size={12} className="shrink-0" aria-hidden style={{ color: styles.accent }} />
+      {/* R126-3d-2: the placeholder glyph rides the tertiary ink (the
+          mobile's own quiet no-pixels leg — icons stay accent only on live
+          affordances). */}
+      <ImageIcon size={12} className="shrink-0" aria-hidden style={{ color: styles.textTertiary }} />
       <span className="truncate">{attachment.name}</span>
     </span>
   );
@@ -1027,8 +1055,16 @@ function UserMessage({
   // alpha) with a 1px accent@0.18 border, the text is 13px/400 (the
   // font-medium is gone — body weight per the weight law), padding
   // 10px 14px, leading 1.55. The attachment chips go mono 10px rounded-lg.
-  const bubbleBg = withAlpha(styles.accent, styles.isDark ? 0.11 : 0.09);
-  const bubbleBorder = withAlpha(styles.accent, 0.18);
+  // R126-3d-2 (MATERIALS — the Clay Companion re-skin): the fill is now the
+  // mobile recipe — mix(card, accent, 0.16), spelled on the color-mix
+  // CLASS leg (the shell wave's arbitrary-utility spelling — survives every
+  // renderer, unlike an inline color-mix style) + the 0.34 edge on the JS
+  // withAlpha leg (the brief's sanctioned inline-computing alternative);
+  // the radius returns to COMPONENTS §7's sanctioned shape (16px + the 5px
+  // br tail hint) on the scale utilities (rounded-2xl + rounded-br-[5px]).
+  // The cap/padding/typography are structure and stay byte-for-byte.
+  const bubbleFillClass = "bg-[color-mix(in_srgb,var(--ac-card)_84%,var(--ac-accent))]";
+  const bubbleBorder = withAlpha(styles.accent, 0.34);
   return (
     <motion.div
       // min-w-0 — the row is a flex item of the transcript column; flex
@@ -1072,7 +1108,7 @@ function UserMessage({
               disabled={revertDisabled}
               aria-label="Revert to this message"
               title="Revert to this message"
-              className="w-6 h-6 rounded-md grid place-items-center transition-colors hover:bg-hover disabled:cursor-not-allowed disabled:opacity-40"
+              className="w-6 h-6 rounded-md grid place-items-center transition-colors duration-100 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-40"
               style={{ color: styles.textTertiary }}
             >
               <History size={11} />
@@ -1080,9 +1116,8 @@ function UserMessage({
           ) : null}
         </div>
         <div
-          className="rounded-xl px-3.5 py-2.5 text-[13px] leading-[1.55] border min-w-0"
+          className={`rounded-2xl rounded-br-[5px] px-3.5 py-2.5 text-[13px] leading-[1.55] border min-w-0 ${bubbleFillClass}`}
           style={{
-            background: bubbleBg,
             borderColor: bubbleBorder,
             color: styles.text,
           }}
@@ -1115,11 +1150,12 @@ function UserMessage({
                   <span
                     key={`${a.path ?? a.name}-${i}`}
                     title={a.path ?? a.name}
-                    className="inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-lg font-mono text-[10px] max-w-[220px]"
-                    style={{
-                      background: withAlpha(styles.accent, styles.isDark ? 0.14 : 0.1),
-                      color: styles.textSecondary,
-                    }}
+                    // R126-3d-2: the mobile's chipFill — accent mixed 0.18
+                    // into the card (one family deeper than the bubble's
+                    // 0.16 fill), on the color-mix CLASS leg; the old
+                    // withAlpha alpha-hack dies with the surface ladder.
+                    className="inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-lg font-mono text-[10px] max-w-[220px] bg-[color-mix(in_srgb,var(--ac-card)_82%,var(--ac-accent))]"
+                    style={{ color: styles.textSecondary }}
                   >
                     <File size={10} className="shrink-0" style={{ color: styles.accent }} />
                     <span className="truncate">
@@ -1368,7 +1404,6 @@ export function TurnErrorCard({
   onRetry?: () => void;
   disabled?: boolean;
 }) {
-  const styles = useThemeStyles();
   const resetAfter = useTimeoutClear();
   const [copied, setCopied] = useState(false);
   // R77 (owner: "show the actual error messages too, which were returned
@@ -1399,18 +1434,21 @@ export function TurnErrorCard({
     <motion.div variants={msgVariants} initial="initial" animate="animate" className="min-w-0">
       <div
         role="alert"
-        className="rounded-xl border px-3.5 py-2.5 flex items-start gap-2.5"
-        style={{
-          borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4),
-          background: withAlpha(SEMANTIC_COLORS.danger, styles.isDark ? 0.09 : 0.05),
-        }}
+        // R126-3d-2: the badge-tone danger container (TOKENS §11 — the
+        // withAlpha wash + flat-hue danger text died with the status
+        // grammar; the dashboard/usage error banners' exact species).
+        className="rounded-xl px-3.5 py-2.5 flex items-start gap-2.5 bg-badge-danger text-badge-danger-fg"
       >
-        <AlertTriangle size={14} className="mt-0.5 shrink-0 text-red-500" aria-hidden />
+        <AlertTriangle size={14} className="mt-0.5 shrink-0 text-danger-deep" aria-hidden />
         <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+          <div className="text-[12px] font-semibold">
             Generation failed
             {error.attempts !== undefined ? (
-              <span className="ml-1.5" style={{ color: styles.textSecondary }}>
+              // R126-3d-2: inherits the badge fg (TOKENS §11's deep-on-tint
+              // pair — no inline textSecondary on the tinted container) and
+              // rides tabular-nums (COMPONENTS §7's numbers discipline —
+              // every count the chat renders holds its digit widths).
+              <span className="ml-1.5 tabular-nums">
                 after {error.attempts} attempt{error.attempts === 1 ? "" : "s"}
               </span>
             ) : null}
@@ -1418,8 +1456,10 @@ export function TurnErrorCard({
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
             {error.errorClass !== undefined ? (
               <span
-                className="text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0 uppercase tracking-wide"
-                style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.12), color: SEMANTIC_COLORS.danger }}
+                // R126-3d-2: the NEUTRAL badge tone — the container already
+                // carries the danger tint (COMPONENTS §2: one tinted surface
+                // per row, never a chip inside a chip).
+                className="text-[10px] font-mono px-1.5 py-0.5 rounded-md shrink-0 uppercase tracking-wide bg-badge-neutral text-badge-neutral-fg"
                 title={`provider error class: ${error.errorClass}`}
               >
                 {error.errorClass.replace(/_/g, " ")}
@@ -1427,8 +1467,9 @@ export function TurnErrorCard({
             ) : null}
             {error.model ? (
               <span
-                className="font-mono text-[10px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate"
-                style={{ background: styles.subtle, color: styles.textTertiary }}
+                // R126-3d-2: the identity chip = the neutral badge tone
+                // (§11's neutral row — the old subtle fill retired).
+                className="font-mono text-[10px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate bg-badge-neutral text-badge-neutral-fg"
                 title={error.model}
               >
                 {error.model}
@@ -1442,14 +1483,16 @@ export function TurnErrorCard({
             {error.usage ? (
               <span
                 data-error-usage
-                className="font-mono text-[10px] tabular-nums px-1.5 py-0.5 rounded-md shrink-0"
-                style={{ background: styles.subtle, color: styles.textSecondary }}
+                className="font-mono text-[10px] tabular-nums px-1.5 py-0.5 rounded-md shrink-0 bg-badge-neutral text-badge-neutral-fg"
                 title="The tokens this failed turn actually spent (completed iterations + the failed call's streamed-so-far)"
               >
                 {fmtTokens(error.usage.inputTokens)} sent ↑ · {fmtTokens(error.usage.outputTokens)} received ↓
               </span>
             ) : null}
-            <span className="text-[12px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
+            {/* R126-3d-2: the reason line inherits the badge fg (the
+                deep-on-tint pair — TOKENS §11; the inline textSecondary
+                override died with the status grammar). */}
+            <span className="text-[12px] leading-[1.5] min-w-0 break-words">
               {shortReason}
             </span>
             {/* R93-B1: the stranded queue is never silent — the card says
@@ -1458,8 +1501,10 @@ export function TurnErrorCard({
             {error.queuedKept !== undefined ? (
               <span
                 data-error-queued-kept
-                className="text-[11px] font-medium px-2 py-0.5 rounded-md shrink-0"
-                style={{ background: withAlpha(SEMANTIC_COLORS.warning, 0.12), color: SEMANTIC_COLORS.warning }}
+                // R126-3d-2: neutral badge tone — an informational note on
+                // the danger card (the card carries the tone, §2's law) —
+                // with tabular-nums on the count (§7's numbers discipline).
+                className="text-[11px] font-medium tabular-nums px-2 py-0.5 rounded-md shrink-0 bg-badge-neutral text-badge-neutral-fg"
                 title="They stay queued server-side and send with your next message"
               >
                 {error.queuedKept} message{error.queuedKept === 1 ? "" : "s"} kept — they&apos;ll send with your next message
@@ -1474,8 +1519,8 @@ export function TurnErrorCard({
                 onClick={() => setExpanded((v) => !v)}
                 aria-expanded={expanded}
                 data-error-expand
-                className="h-6 px-2 rounded-lg text-[11px] font-semibold border transition-colors shrink-0"
-                style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4), color: SEMANTIC_COLORS.danger }}
+                // R126-3d-2: the outlined danger species (COMPONENTS §4).
+                className="h-6 px-2 rounded-lg text-[11px] font-semibold border border-danger-deep text-danger-deep transition-opacity duration-100 hover:opacity-85 active:scale-[0.98] shrink-0"
                 title={expanded ? "Collapse the error text" : "Show the complete error message returned by the API"}
               >
                 {expanded ? "Show less" : "Show full error"}
@@ -1485,18 +1530,20 @@ export function TurnErrorCard({
           {expanded ? (
             <pre
               data-error-full-text
-              className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10px] leading-[1.55] whitespace-pre-wrap break-words min-w-0"
-              style={{
-                borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3),
-                background: styles.subtle,
-                color: styles.textSecondary,
-              }}
+              // R126-3d-2: the recessed MONO surface (TOKENS §10 —
+              // .ac-mono-block paints fill + border + its own ink; the old
+              // subtle fill + withAlpha border died with the ladder).
+              className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10px] leading-[1.55] whitespace-pre-wrap break-words min-w-0 ac-mono-block"
             >
               {reason}
             </pre>
           ) : null}
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            <span className="text-[10px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
+            {/* R126-3d-2: the timestamp inherits the badge fg (no inline
+                tertiary on the tinted container — TOKENS §11) and renders
+                tabular-nums (COMPONENTS §7's numbers discipline — every
+                timestamp the chat renders holds its digit widths). */}
+            <span className="text-[10px] font-mono tabular-nums shrink-0">
               {formatTime(error.ts)}
             </span>
             {onRetry ? (
@@ -1506,8 +1553,9 @@ export function TurnErrorCard({
                 disabled={disabled}
                 aria-label="Retry the failed message"
                 title={disabled ? "Wait for the current turn to finish" : "Send the same message again"}
-                className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+                // R126-3d-2: the outlined danger species (COMPONENTS §4 —
+                // the flat-hue Retry died with the status grammar).
+                className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border border-danger-deep text-danger-deep transition-opacity duration-100 hover:opacity-85 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Retry
               </button>
@@ -1521,8 +1569,9 @@ export function TurnErrorCard({
                 });
               }}
               aria-label="Copy error details"
-              className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors"
-              style={{ borderColor: styles.border, color: styles.textSecondary }}
+              // R126-3d-2: the outlined SECONDARY species (COMPONENTS §4 —
+              // class leg, CSS hover wash, press feedback).
+              className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border border-line text-muted transition-colors duration-100 hover:bg-subtle active:scale-[0.98]"
             >
               {copied ? "Copied" : "Copy details"}
             </button>
@@ -1555,24 +1604,26 @@ export function ThinkingStoppedCard({
   onRetry?: () => void;
   disabled?: boolean;
 }) {
-  const styles = useThemeStyles();
   return (
     <motion.div variants={msgVariants} initial="initial" animate="animate" className="min-w-0">
       <div
         role="status"
         data-testid="thinking-stopped-card"
-        className="rounded-xl border px-3.5 py-2.5 flex items-start gap-2.5"
-        style={{
-          borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4),
-          background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.09 : 0.05),
-        }}
+        // R126-3d-2: the badge-tone warning container (TOKENS §11 — amber
+        // reassurance, never an alert; the withAlpha wash + flat-hue amber
+        // text died with the status grammar).
+        className="rounded-xl px-3.5 py-2.5 flex items-start gap-2.5 bg-badge-warning text-badge-warning-fg"
       >
-        <Brain size={14} className="mt-0.5 shrink-0" style={{ color: SEMANTIC_COLORS.warning }} aria-hidden />
+        <Brain size={14} className="mt-0.5 shrink-0 text-warning-deep" aria-hidden />
         <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-semibold" style={{ color: SEMANTIC_COLORS.warning }}>
+          <div className="text-[12px] font-semibold">
             Thinking stopped by the guard
           </div>
-          <div className="mt-1 text-[12px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
+          {/* R126-3d-2: the description line inherits the badge fg (the
+              deep-on-tint pair — TOKENS §11, the app-wide error-card
+              species; the inline textSecondary override died with the
+              status grammar). */}
+          <div className="mt-1 text-[12px] leading-[1.5] min-w-0 break-words">
             The model kept reasoning with no text, tool call, or finish past your thresholds, so the thinking-loop
             guard stopped it (one de-escalating retry was attempted first). This is not a provider failure — the
             guard is a setting you control.
@@ -1580,16 +1631,20 @@ export function ThinkingStoppedCard({
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
             {error.model ? (
               <span
-                className="font-mono text-[10px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate"
-                style={{ background: styles.subtle, color: styles.textTertiary }}
+                // R126-3d-2: the identity chip = the neutral badge tone
+                // (§11's neutral row — the old subtle fill retired).
+                className="font-mono text-[10px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate bg-badge-neutral text-badge-neutral-fg"
                 title={error.model}
               >
                 {error.model}
               </span>
             ) : null}
-            <span className="text-[11px]" style={{ color: styles.textTertiary }}>
+            {/* R126-3d-2: the hint line inherits the badge fg (no inline
+                tertiary on the tinted container — TOKENS §11; the link keeps
+                its warning-deep + underline emphasis). */}
+            <span className="text-[11px]">
               Turn it off or tune it in{" "}
-              <Link to="/settings?tab=advanced" className="font-semibold underline" style={{ color: SEMANTIC_COLORS.warning }}>
+              <Link to="/settings?tab=advanced" className="font-semibold underline text-warning-deep">
                 {/* R98-I1: the label follows the honest rename ("General" →
                     "Functionality", the owner's word) — the URL id stays
                     "advanced" (the load-bearing deep-link contract). */}
@@ -1602,8 +1657,9 @@ export function ThinkingStoppedCard({
                 type="button"
                 onClick={onRetry}
                 disabled={disabled}
-                className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors disabled:opacity-50"
-                style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4), color: SEMANTIC_COLORS.warning }}
+                // R126-3d-2: the outlined warning species (COMPONENTS §4's
+                // danger-outline grammar, warning tone).
+                className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border border-warning-deep text-warning-deep transition-opacity duration-100 hover:opacity-85 active:scale-[0.98] disabled:opacity-50"
               >
                 Retry
               </button>
@@ -1633,7 +1689,6 @@ export function ThinkingStoppedCard({
  * what the provider said while the ladder waits.
  */
 export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
-  const styles = useThemeStyles();
   // The live countdown — ticks once a second locally (the backend's 60 s
   // heartbeat refreshes the anchor; the local tick keeps it smooth).
   const [nowMs, setNowMs] = useState(Date.now());
@@ -1673,27 +1728,29 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
         role="status"
         data-retry-status-card
         // R100-D: the card's 135° amber GRADIENT is retired (TOKENS §5 —
-        // gradient fills are wizard + primary-CTA only); the flat amber wash
-        // matches every other status card. 16px radius via the scale utility.
-        className="rounded-2xl border px-3.5 py-3 flex items-start gap-3"
-        style={{
-          borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4),
-          background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.09 : 0.05),
-        }}
+        // gradient fills are wizard + primary-CTA only).
+        // R126-3d-2: the badge-tone warning container (TOKENS §11 — the
+        // withAlpha wash + flat-hue amber text died with the status
+        // grammar; reassurance, never an alarm) at the status-card family's
+        // ONE radius spelling (rounded-xl — the same tier every badge-tone
+        // card in this panel + the dashboard/usage error banners speaks;
+        // the lone rounded-2xl was the family's odd one out).
+        className="rounded-xl px-3.5 py-3 flex items-start gap-3 bg-badge-warning text-badge-warning-fg"
       >
         {/* The spinner badge — the slow patient rotation (R75) now inside a
-            soft circular chip instead of a bare floating glyph. */}
+            soft circular chip instead of a bare floating glyph. R126-3d-2:
+            the chip rides the WELL recess (the withAlpha wash died with the
+            surface ladder); the glyph rides the warning DEEP pair. */}
         <div
-          className="w-7 h-7 rounded-full grid place-items-center shrink-0 mt-0.5"
-          style={{ background: withAlpha(SEMANTIC_COLORS.warning, 0.16) }}
+          className="w-7 h-7 rounded-full grid place-items-center shrink-0 mt-0.5 bg-well"
           aria-hidden
         >
-          <RefreshCw size={13} className="ac-retry-spin" style={{ color: SEMANTIC_COLORS.warning }} />
+          <RefreshCw size={13} className="ac-retry-spin text-warning-deep" />
         </div>
         <div className="min-w-0 flex-1">
           {/* Header + the attempt dot-ladder. */}
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="text-[12px] font-semibold" style={{ color: SEMANTIC_COLORS.warning }}>
+            <span className="text-[12px] font-semibold tabular-nums">
               Retrying — attempt {retry.attempt} of {retry.totalAttempts}
             </span>
             <span className="flex items-center gap-[3px]" aria-hidden data-retry-dots>
@@ -1719,16 +1776,21 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
               })}
             </span>
           </div>
-          {/* The cause — class chip (rounded-full now) + the class message. */}
+          {/* The cause — class chip (rounded-full now) + the class message.
+              R126-3d-2: the class chip rides the NEUTRAL badge tone (the
+              container already carries the warning tint — §2's one-tinted-
+              surface law, never a chip inside a chip). */}
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
             <span
-              className="text-[10px] font-mono px-2 py-0.5 rounded-full shrink-0 uppercase tracking-wide"
-              style={{ background: withAlpha(SEMANTIC_COLORS.warning, 0.14), color: SEMANTIC_COLORS.warning }}
+              className="text-[10px] font-mono px-2 py-0.5 rounded-full shrink-0 uppercase tracking-wide bg-badge-neutral text-badge-neutral-fg"
               title={`provider error class: ${retry.errorClass}`}
             >
               {classLabel}
             </span>
-            <span className="text-[12px] leading-[1.5] min-w-0 break-words" style={{ color: styles.textSecondary }}>
+            {/* R126-3d-2: the class message inherits the badge fg (the
+                deep-on-tint pair — TOKENS §11; the inline textSecondary
+                override died with the status grammar). */}
+            <span className="text-[12px] leading-[1.5] min-w-0 break-words">
               {retry.classMessage}
             </span>
           </div>
@@ -1748,7 +1810,6 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
                 className={`font-mono text-[10px] leading-[1.55] min-w-0 break-words ${
                   providerExpanded ? "" : "line-clamp-3"
                 }`}
-                style={{ color: styles.textSecondary }}
               >
                 {providerExpanded ? providerText : providerShort}
               </div>
@@ -1759,8 +1820,8 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
                     onClick={() => setProviderExpanded((v) => !v)}
                     aria-expanded={providerExpanded}
                     data-retry-provider-expand
-                    className="mt-1 h-6 px-2 rounded-lg text-[11px] font-semibold border transition-colors shrink-0"
-                    style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4), color: SEMANTIC_COLORS.warning }}
+                    // R126-3d-2: the outlined warning species (COMPONENTS §4).
+                    className="mt-1 h-6 px-2 rounded-lg text-[11px] font-semibold border border-warning-deep text-warning-deep transition-opacity duration-100 hover:opacity-85 active:scale-[0.98] shrink-0"
                     title={
                       providerExpanded
                         ? "Collapse the provider text"
@@ -1772,12 +1833,9 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
                   {providerExpanded ? (
                     <pre
                       data-retry-provider-error-full
-                      className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10px] leading-[1.55] whitespace-pre-wrap break-words min-w-0"
-                      style={{
-                        borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.3),
-                        background: styles.subtle,
-                        color: styles.textSecondary,
-                      }}
+                      // R126-3d-2: the recessed MONO surface (TOKENS §10 —
+                      // .ac-mono-block paints fill + border + its own ink).
+                      className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border px-2.5 py-2 font-mono text-[10px] leading-[1.55] whitespace-pre-wrap break-words min-w-0 ac-mono-block"
                     >
                       {providerText}
                     </pre>
@@ -1787,31 +1845,33 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
             </div>
           ) : null}
           {/* The countdown — a mono label + a thin fill bar that empties
-              into the next attempt (progress IS the reassurance). */}
+              into the next attempt (progress IS the reassurance).
+              R126-3d-2: the label + Timer ride the warning DEEP pair; the
+              track is the WELL recess; the fill is the deep amber mass
+              (never the flat hue — TOKENS §11's dots-only law). */}
           <div className="mt-2 flex items-center gap-2">
-            <Timer size={11} className="shrink-0" style={{ color: SEMANTIC_COLORS.warning }} aria-hidden />
-            <span className="text-[11px] font-mono shrink-0 tabular-nums" style={{ color: SEMANTIC_COLORS.warning }}>
+            <Timer size={11} className="shrink-0 text-warning-deep" aria-hidden />
+            <span className="text-[11px] font-mono shrink-0 tabular-nums text-warning-deep">
               next attempt in {remainingLabel}
             </span>
             <div
-              className="flex-1 min-w-[48px] h-1 rounded-full overflow-hidden"
-              style={{ background: withAlpha(SEMANTIC_COLORS.warning, 0.16) }}
+              className="flex-1 min-w-[48px] h-1 rounded-full overflow-hidden bg-well"
               aria-hidden
             >
               <div
-                className="h-full rounded-full"
+                className="h-full rounded-full bg-warning-deep"
                 style={{
                   width: `${waitFraction * 100}%`,
-                  background: SEMANTIC_COLORS.warning,
                   transition: "width 1s linear",
                 }}
               />
             </div>
           </div>
-          {/* The reassurance line. */}
+          {/* The reassurance line. R126-3d-2: inherits the badge fg (no
+              inline tertiary on the tinted container — TOKENS §11). */}
           <div className="mt-1.5 flex items-center gap-1.5">
-            <Info size={10} className="shrink-0" style={{ color: styles.textTertiary }} aria-hidden />
-            <span className="text-[10px] min-w-0" style={{ color: styles.textTertiary }}>
+            <Info size={10} className="shrink-0" aria-hidden />
+            <span className="text-[10px] min-w-0">
               the agent keeps working automatically — no action needed
             </span>
           </div>
@@ -1832,21 +1892,24 @@ export function RetryStatusCard({ retry }: { retry: LiveTurnRetry }) {
  * glyph (the Stop control's own visual, muted) — no error-flavored mark.
  */
 export function TurnStoppedCard({ ts }: { ts: string }) {
-  const styles = useThemeStyles();
   return (
     <motion.div variants={msgVariants} initial="initial" animate="animate" className="min-w-0">
       <div
         role="status"
         data-stopped-card
-        className="rounded-xl border px-3.5 py-2.5 flex items-center gap-2.5"
-        style={{ borderColor: styles.borderSubtle, background: styles.subtle }}
+        // R126-3d-2: the NEUTRAL badge tone (TOKENS §11 — a deliberate stop
+        // is quiet metadata, never a warning; the old subtle fill + border
+        // retired with the surface ladder).
+        className="rounded-xl px-3.5 py-2.5 flex items-center gap-2.5 bg-badge-neutral text-badge-neutral-fg"
       >
-        <Square size={12} strokeWidth={2.5} className="mt-0.5 shrink-0" style={{ color: styles.textTertiary }} aria-hidden />
+        {/* R126-3d-2: the glyph + lines inherit the badge fg (the neutral
+            pair IS textSecondary — one spelling, no inline overrides). */}
+        <Square size={12} strokeWidth={2.5} className="mt-0.5 shrink-0" aria-hidden />
         <div className="min-w-0 flex-1 flex items-center gap-2">
-          <span className="text-[12px] font-semibold" style={{ color: styles.textSecondary }}>
+          <span className="text-[12px] font-semibold">
             Stopped by user
           </span>
-          <span className="text-[10px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
+          <span className="text-[10px] font-mono tabular-nums shrink-0">
             {formatTime(ts)}
           </span>
         </div>
@@ -1929,7 +1992,7 @@ export function QueuedUserMessage({
           aria-label="Send the queued message now"
           title="Stop waiting — send this message as a new turn right away"
           data-queued-send-now
-          className="w-6 h-6 rounded-md grid place-items-center shrink-0 transition-colors hover:bg-hover"
+          className="w-6 h-6 rounded-md grid place-items-center shrink-0 transition-colors duration-100 hover:bg-hover"
           style={{ color: styles.textTertiary }}
         >
           {/* The Composer's own send glyph (ArrowUp) — "send this now" reads
@@ -1944,7 +2007,7 @@ export function QueuedUserMessage({
           aria-label="Remove the queued message"
           title="Remove the queued message"
           data-queued-remove
-          className="w-6 h-6 rounded-md grid place-items-center shrink-0 transition-colors hover:bg-hover"
+          className="w-6 h-6 rounded-md grid place-items-center shrink-0 transition-colors duration-100 hover:bg-hover"
           style={{ color: styles.textTertiary }}
         >
           <X size={11} />
@@ -4088,7 +4151,11 @@ export function AgentChatPanel({
                     {agents.length === 0 && !agentsQuery.isPending && !agentsQuery.isError ? (
                       <div className="text-[12px] mt-3" style={{ color: styles.textSecondary }}>
                         Create an agent in{" "}
-                        <Link to="/settings" style={{ color: styles.accent }}>
+                        {/* R126-3d-2: accent-as-TEXT is the DEEP tier (TOKENS
+                            §1d — the tier that holds ~4.5:1 as ink), on the
+                            CLASS leg (rule 4 — a link answers :hover, so its
+                            color belongs on the CSS-var spelling). */}
+                        <Link to="/settings" className="text-accent-deep">
                           Settings
                         </Link>{" "}
                         first
@@ -4112,7 +4179,14 @@ export function AgentChatPanel({
                             setInput(s.prompt);
                             inputRef.current?.focus();
                           }}
-                          className="flex items-center gap-2 h-9 px-3.5 rounded-xl border-[1.5px] border-line bg-bg text-muted text-[12px] font-medium transition-colors duration-150 hover:border-accent hover:bg-accent-soft hover:text-ink active:scale-95"
+                          // R126-3d-2: the chip grammar (the brief's material
+                          // spec): resting bg-well + the clay rim hairline +
+                          // 12px/600 text-secondary; hover border-accent +
+                          // bg-accent-tint — the CSS legs (real buttons; the
+                          // global :focus-visible ring carries keyboard
+                          // parity; the 1.5px bento border retired with
+                          // TOKENS §5).
+                          className="flex items-center gap-2 h-9 px-3.5 rounded-xl border border-clay-rim bg-well text-muted text-[12px] font-semibold transition-colors duration-100 hover:border-accent hover:bg-accent-tint active:scale-95"
                         >
                           <s.icon size={12} className="shrink-0 text-accent" aria-hidden />
                           {s.label}
@@ -4323,15 +4397,16 @@ export function AgentChatPanel({
                         mirror in flight is just as "generating" as an own
                         stream (remoteRunning already implies !stopped). */}
                     {(streamBusy || remoteRunning) && !liveTurn.stopped ? (
-                      /* R99-B: the thin streaming caret — a 2px accent bar,
-                         ~1em tall, breathing 1s ease opacity 1↔0.4
-                         (ac-caret-pulse — the MOTION registry's stream-caret
-                         slot). Removed the moment the stream completes or
+                      /* R99-B: the thin streaming caret. R126-3d-2: the house
+                         live caret (MOTION §4 — the mobile LiveCaret's 8×15
+                         accent bar, radius 2, riding the shared
+                         ac-caret-pulse keyframe; the geometry is the
+                         material, the 550ms live rhythm is the keyframe's
+                         own). Removed the moment the stream completes or
                          stops: the settled answer keeps plain text. */
                       <span
                         data-testid="streaming-caret"
-                        className="inline-block w-[2px] h-[1em] ml-0.5 align-middle ac-caret-pulse"
-                        style={{ background: styles.accent }}
+                        className="inline-block w-2 h-[15px] rounded-[2px] ml-0.5 align-middle ac-caret-pulse bg-accent"
                         aria-hidden
                       />
                     ) : null}
@@ -4384,8 +4459,10 @@ export function AgentChatPanel({
                 ) : null}
                 {liveTurn.note !== null ? (
                   <div
-                    className="mb-1 min-w-0 text-[12px] font-mono px-3 py-1.5 rounded-lg border"
-                    style={{ borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.35), color: styles.textSecondary, background: withAlpha(SEMANTIC_COLORS.warning, 0.05) }}
+                    // R126-3d-2: the badge-tone warning container (TOKENS §11
+                    // — the withAlpha wash + border retired with the status
+                    // grammar).
+                    className="mb-1 min-w-0 text-[12px] font-mono px-3 py-1.5 rounded-lg bg-badge-warning text-badge-warning-fg"
                   >
                     {liveTurn.note}
                   </div>
@@ -4401,13 +4478,11 @@ export function AgentChatPanel({
                 {feedbackEvent !== null && feedbackEvent.phase === "mid-turn" ? (
                   <div
                     data-testid="live-feedback-line"
-                    className="mb-1 min-w-0 flex items-center gap-1.5 text-[11px] font-mono px-3 py-1.5 rounded-lg border"
+                    // R126-3d-2: accentTint + accentDeep ink (TOKENS §10 —
+                    // "hue without loudness"; the withAlpha accent wash +
+                    // border died with the surface ladder).
+                    className="mb-1 min-w-0 flex items-center gap-1.5 text-[11px] font-mono px-3 py-1.5 rounded-lg bg-accent-tint text-accent-deep"
                     title={feedbackEvent.detail ?? undefined}
-                    style={{
-                      borderColor: withAlpha(styles.accent, 0.28),
-                      color: styles.textSecondary,
-                      background: withAlpha(styles.accent, 0.05),
-                    }}
                   >
                     {feedbackEvent.stage === "writing" ? (
                       <span
@@ -4532,14 +4607,13 @@ export function AgentChatPanel({
                 data-testid="queue-kept-notice"
                 // R120-C-PC: live-only notice chrome — a plain row in the
                 // reading column (the rail indent died with the rail).
-                className="mt-2 rounded-xl border px-3 py-2 text-[12px] font-semibold flex items-center gap-2"
-                style={{
-                  borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.35),
-                  background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.08 : 0.05),
-                  color: SEMANTIC_COLORS.warning,
-                }}
+                // R126-3d-2: the badge-tone warning container (TOKENS §11 —
+                // the withAlpha wash + flat-hue amber text died with the
+                // status grammar) + tabular-nums on the count (COMPONENTS
+                // §7's numbers discipline — digits hold width).
+                className="mt-2 rounded-xl px-3 py-2 text-[12px] font-semibold tabular-nums flex items-center gap-2 bg-badge-warning text-badge-warning-fg"
               >
-                <Clock size={13} className="shrink-0" aria-hidden />
+                <Clock size={13} className="shrink-0 text-warning-deep" aria-hidden />
                 {queueKeptNotice} message{queueKeptNotice === 1 ? "" : "s"} stayed queued — they&apos;ll send
                 with your next message
               </div>
@@ -4580,9 +4654,13 @@ export function AgentChatPanel({
             title="Jump to the latest message"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => pinToBottom()}
-            className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-full border-[1.5px] pl-3 pr-2 py-1.5 shadow-md transition-all hover:shadow-lg"
+            // R126-3h (the flagged-debt ledger — 3d-2's caveat): the edge is
+            // the RIM HAIRLINE (border-clay-rim 1px — the border-[1.5px] +
+            // withAlpha(accent, 0.28) edge dies) + the accentTint hover wash
+            // on the CSS leg; the frosted fill (var(--ac-frosted) + the
+            // backdrop blur) stays per the brief.
+            className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-full border border-clay-rim pl-3 pr-2 py-1.5 shadow-md transition-all duration-100 hover:bg-accent-tint hover:shadow-lg"
             style={{
-              borderColor: withAlpha(styles.accent, 0.28),
               // R98-C2: the frosted pill rides the CSS-var leg (--ac-frosted, bridged
         // in themes.ts — one spelling for both chat surfaces).
         background: "var(--ac-frosted)",
@@ -4609,17 +4687,18 @@ export function AgentChatPanel({
               px here (the alert box spans the reading column). */}
           <div
             role="alert"
-            className={`${CONTENT_COL_CLASS} mb-1.5 flex items-start gap-2 rounded-xl border py-2 text-[12px]`}
-            style={{
-              borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4),
-              color: SEMANTIC_COLORS.danger,
-            }}
+            // R126-3d-2: the badge-tone danger container (TOKENS §11 — the
+            // flat-hue danger text + withAlpha border died with the status
+            // grammar; the dashboard/usage banners' exact species).
+            className={`${CONTENT_COL_CLASS} mb-1.5 flex items-start gap-2 rounded-xl py-2 text-[12px] bg-badge-danger text-badge-danger-fg`}
           >
             <span className="min-w-0 flex-1 break-words">{sendError}</span>
             <button
               onClick={() => void runTurn(lastSent)}
-              className="shrink-0 underline font-medium"
-              style={{ color: styles.accent }}
+              // R126-3d-2: the outlined danger species (COMPONENTS §4 — the
+              // accent underline link became the banner's Retry species);
+              // the label inherits the banner's 12px type.
+              className="shrink-0 h-7 px-2.5 rounded-lg font-semibold border border-danger-deep text-danger-deep transition-opacity duration-100 hover:opacity-85 active:scale-[0.98]"
             >
               Retry
             </button>
@@ -4641,8 +4720,10 @@ export function AgentChatPanel({
           reading column (the old p-2/p-2.5 also offset it 10px inward). */}
       {composerDocked ? (
         <div
-          className={`shrink-0 border-t ${compact ? "py-2" : "py-2.5"}`}
-          style={{ borderColor: styles.borderSubtle }}
+          // R126-3d-2: the dock's top hairline rides the clay RIM tier
+          // (TOKENS §5 — the default card edge; the old borderSubtle inline
+          // leg retired).
+          className={`shrink-0 border-t border-clay-rim ${compact ? "py-2" : "py-2.5"}`}
         >
           <div className={CONTENT_COL_CLASS} data-composer-dock>
             {renderComposer(false)}

@@ -1,3 +1,5 @@
+import { DISCLOSURE_SPRING, TAB_SPRING } from "../../lib/motion";
+
 /**
  * ROUND-52 (R52-b): shared formatting for the Usage screen — ported from the
  * DASHBOARD build's fmt helpers (build.mjs) so the in-app numbers read exactly
@@ -5,6 +7,53 @@
  * src/lib/format.ts; these three are usage-screen-specific (duration, money,
  * compact counts for dense rows).
  */
+
+/* ── ROUND-126 (R126-3b, the Clay Companion redesign): the usage screen's
+ * MOTION.md §2 constants that src/lib/motion.ts doesn't export (it owns the
+ * springs; the timed chart legs live here, next to their only consumers).
+ * The values are the registry's, verbatim — never re-roll them locally. */
+
+/** MOTION §2 CHART_BAR_GROW_MS — bars grow from baseline, once per data load. */
+export const CHART_BAR_GROW_MS = 0.35;
+
+/** MOTION §2 CHART_BAR_STAGGER_MS — the per-bar stagger. */
+export const CHART_BAR_STAGGER_MS = 0.012;
+
+/** MOTION §2 DONUT_SWEEP_MS — the donut's arc draw, once per data load. */
+export const DONUT_SWEEP_MS = 0.5;
+
+/** MOTION §2 DISCLOSURE_COLLAPSE_MS — collapse is a TIMING, never a spring
+ * (closing never bounces — the mobile R118-C law). */
+export const DISCLOSURE_COLLAPSE_MS = 0.2;
+
+/** MOTION §2 DISCLOSURE_FADE_MS — the collapse's opacity fade. */
+export const DISCLOSURE_FADE_MS = 0.15;
+
+/** Re-exported so usage files import the spring grammar from ONE place. */
+export { DISCLOSURE_SPRING, TAB_SPRING };
+
+/* ── ROUND-126 (R126-3b): the clay card class spelling for the usage screen
+ * (COMPONENTS §3 species 1, adapted PC densities): `card` surface + the warm
+ * clayRim hairline on all four sides (`border-clay-rim`) + 16px radius
+ * (`rounded-2xl`) + the clay two-leg shadow (`.ac-clay` / `.ac-clay-sm`,
+ * TOKENS §9) + the dark-mode-only matte top edge (`.ac-clay-edge-dark`).
+ * The class legs paint shadow/border/bg from the --ac-* bridge so a theme
+ * switch restyles them with no rebuild; a local spelling because the shared
+ * ui/SectionCard still carries the pre-R126 bento border (its wave will
+ * convert it; adoption is then a one-line swap per call site). */
+
+/** The top-level clay card (charts, leaderboard, project groups, stat row). */
+export const CLAY_CARD =
+  "rounded-2xl border border-clay-rim bg-card ac-clay ac-clay-edge-dark";
+
+/** The compact-tile step (model/key cards, health blocks — shadow `-sm`). */
+export const CLAY_CARD_SM =
+  "rounded-2xl border border-clay-rim bg-card ac-clay-sm ac-clay-edge-dark";
+
+/** The clay tooltip surface (charts' hover popovers): 12px radius step +
+ * the small-surface clay shadow + rim (COMPONENTS §8 pattern classes). */
+export const CLAY_TOOLTIP =
+  "rounded-xl border border-clay-rim bg-card ac-clay-sm";
 
 /** "1h 03m" / "2m 04s" / "45s" / "—" — a session's wall-clock span. */
 export function formatDuration(ms: number): string {

@@ -20,7 +20,6 @@ import {
   type Agent,
 } from "../../../lib/api";
 import { pushLocalToast } from "../../../hooks/use-notifications";
-import { SEMANTIC_COLORS } from "../../../lib/semantics";
 import { prewarmMenuOverlay } from "../../../lib/menu-overlay";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { withAlpha } from "../../dashboard/helpers";
@@ -535,13 +534,17 @@ export function Composer({
       // The transition covers border-color + background (the dragActive
       // inline swaps) AND box-shadow (the R105-B focus halo) — one smooth
       // ease for every leg the CSS/inline styles can flip.
-      className="@container relative flex flex-col rounded-xl border transition-[border-color,background-color,box-shadow] duration-200 composer-shell"
+      // R126-3d-4 (the material spec): the box is a CLAY CARD — bg-card fill
+      // + the 1px clay rim hairline (border-clay-rim; the resting
+      // border-color declaration in .composer-shell was retired so this
+      // class owns the rest, index.css) — while the :focus-within accent
+      // edge + halo stay the CSS pair's alone (unlayered, they still win).
+      // The resting fill moved to the class leg too (bg-card — the old
+      // dark rgba / light bg JS legs are gone); dragActive keeps its inline
+      // accent tint (a REAL state) and now paints BOTH legs inline.
+      className="@container relative flex flex-col rounded-xl border border-clay-rim bg-card transition-[border-color,background-color,box-shadow] duration-200 composer-shell"
       style={{
-        background: dragActive
-          ? withAlpha(styles.accent, styles.isDark ? 0.1 : 0.07)
-          : styles.isDark
-            ? "rgba(255,255,255,0.04)"
-            : styles.bg,
+        background: dragActive ? withAlpha(styles.accent, styles.isDark ? 0.1 : 0.07) : undefined,
         // Only the DRAG state paints the border inline (it must beat the
         // composer-shell class); undefined lets the CSS leg own the resting
         // color AND the R105-B focus-within accent swap.
@@ -712,8 +715,11 @@ export function Composer({
               // full meaning; below that even the horizontal padding
               // shrinks a notch so the actions row never crowds the
               // selectors.
-              className="h-7 px-3 @max-[460px]:px-2 rounded-lg flex items-center gap-1.5 shrink-0 border text-[12px] font-medium transition-colors bg-subtle hover:bg-hover"
-              style={{ borderColor: styles.border, color: styles.textSecondary }}
+              // R126-3d-4: the SECONDARY species, class leg (COMPONENTS §4 —
+              // outlined: transparent fill + 1px border-strong + secondary
+              // ink, hover bg-subtle; the old bg-subtle-resting + JS
+              // border/color legs are gone).
+              className="h-7 px-3 @max-[460px]:px-2 rounded-lg flex items-center gap-1.5 shrink-0 border border-line-strong bg-transparent text-muted text-[12px] font-semibold transition-colors duration-100 hover:bg-subtle"
             >
               <Play size={11} className="shrink-0" />
               <span className="max-w-[120px] @max-[460px]:max-w-0 @max-[460px]:opacity-0 @max-[460px]:-ml-0.5 overflow-hidden whitespace-nowrap transition-all duration-200">
@@ -727,15 +733,17 @@ export function Composer({
                 type="button"
                 // Stop routes through the stream store (works regardless of
                 // which panel is mounted — ROUND-39 semantics preserved).
-                // R100-D (§C4.6): Stop = the 28px CIRCLE (rounded-full),
-                // danger fill kept; NO hover-scale (the press stays).
+                // R126-3d-4: Stop = the OUTLINED DANGER circle (COMPONENTS
+                // §4's co-primary danger — 1px danger-deep border + the
+                // danger-deep stop glyph on a transparent fill; the old
+                // danger FILL + white glyph retired) — pressed scale 0.96,
+                // NO hover-scale (the press stays).
                 onClick={onStop}
                 aria-label="Stop generation"
                 title="Stop generation"
-                className="w-7 h-7 rounded-full grid place-items-center shrink-0 transition-transform active:scale-95"
-                style={{ backgroundColor: SEMANTIC_COLORS.danger, color: "#fff" }}
+                className="w-7 h-7 rounded-full grid place-items-center shrink-0 border border-danger-deep bg-transparent text-danger-deep transition-transform active:scale-[0.96]"
               >
-                <span className="w-3 h-3 rounded-sm bg-white/90" />
+                <span className="w-3 h-3 rounded-sm bg-danger-deep" />
               </button>
               {/* ROUND-78 (R78-D, owner: "工作中发送消息（排队）" — while the
                   agent works the user can still send): the QUEUE-SEND button
@@ -759,24 +767,14 @@ export function Composer({
                   aria-label="Queue message"
                   title="Queues right after the agent finishes the current step"
                   data-queue-send-button
-                  // R100-D (§C4.6): the queue-send pill snaps to 28px/8px
-                  // radius, 500 weight; the hover-scale AND the box-shadow
-                  // GLOW are gone (resting UI never fidgets, working chrome
-                  // never glows).
-                  className="h-7 px-2.5 rounded-lg flex items-center gap-1 shrink-0 border text-[12px] font-medium transition-all active:scale-95 disabled:cursor-not-allowed"
-                  style={
-                    input.trim() !== ""
-                      ? {
-                          backgroundColor: styles.accent,
-                          color: styles.accentText,
-                          borderColor: withAlpha(styles.accent, 0.5),
-                        }
-                      : {
-                          backgroundColor: styles.inputBg,
-                          color: styles.textTertiary,
-                          borderColor: styles.border,
-                        }
-                  }
+                  // R126-3d-4: Queue = the OUTLINED SECONDARY circle (the
+                  // brief's material spec — COMPONENTS §4's secondary species
+                  // on the 28px circle: 1px border-strong + secondary ink on
+                  // a transparent fill; the old accent fill + withAlpha
+                  // accent borders retired), pressed scale 0.96. The TWO
+                  // GLYPHS stay (ArrowUp + ListPlus — the queue reads "your
+                  // message goes OUT").
+                  className="w-7 h-7 rounded-full grid place-items-center shrink-0 border border-line-strong bg-transparent text-muted transition-[background-color,color,transform] active:scale-[0.96] disabled:cursor-not-allowed"
                 >
                   <ArrowUp size={12} strokeWidth={2.5} />
                   <ListPlus size={11} aria-hidden />
@@ -790,19 +788,15 @@ export function Composer({
               disabled={input.trim() === ""}
               aria-label="Send message"
               title="Send (Enter · Shift+Enter for a new line)"
-              // R100-D (research §C4.6): Send = the 28px CIRCLE, solid accent,
-              // NO box-shadow glow, NO hover-scale — hover is a border-
-              // strengthen only (the crisp accent-faded ring; no blur, no
-              // halo). The press contract (active:scale) stays.
-              className="w-7 h-7 rounded-full grid place-items-center shrink-0 transition-all hover:ring-2 hover:ring-accent-faded active:scale-95 disabled:hover:scale-100"
-              style={
-                input.trim() !== ""
-                  ? {
-                      backgroundColor: styles.accent,
-                      color: styles.accentText,
-                    }
-                  : { backgroundColor: styles.inputBg, color: styles.textTertiary }
-              }
+              // R126-3d-4 (the mobile recipe, the brief's material spec):
+              // Send = the 28px CIRCLE, bg-accent-deep fill (the class leg —
+              // TOKENS §1d's CTA tier) + the accentText INK on the JS leg
+              // (text-accent-text is a PHANTOM utility — no @theme mapping,
+              // it would silently paint no ink); pressed = scale 0.96, no
+              // hover ring, no glow (resting UI never fidgets). Disabled =
+              // bg-subtle + text-tertiary, opacity intact (COMPONENTS §4).
+              className="w-7 h-7 rounded-full grid place-items-center shrink-0 bg-accent-deep disabled:bg-subtle transition-[background-color,color,transform] active:scale-[0.96] disabled:cursor-not-allowed"
+              style={{ color: input.trim() !== "" ? styles.accentText : styles.textTertiary }}
             >
               <ArrowUp size={14} strokeWidth={2.5} />
             </button>

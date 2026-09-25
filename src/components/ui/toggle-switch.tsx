@@ -1,5 +1,4 @@
 import { useThemeStyles } from "../../lib/use-theme-styles";
-import { withAlpha } from "../dashboard/helpers";
 
 /**
  * R93-A4 — the ONE shared toggle switch (the owner's theming verdict:
@@ -12,11 +11,20 @@ import { withAlpha } from "../dashboard/helpers";
  * mode paints the checked track #E0E0E0 (near-white), and a white knob on a
  * near-white track vanishes. The knob is now CONTRAST-AWARE:
  *
- *  · CHECKED  → `styles.accentText` = getContrastText(accent) — black on
- *    light accents (Mono Stone dark's #E0E0E0 → #111111), white on dark ones.
+ *  · CHECKED  → `styles.accentText` — the explicit accent pair (white on
+ *    the ember light, warm ink on the salmon dark) — R126 re-tiered from
+ *    getContrastText(accent) onto the §1d pair.
  *  · UNCHECKED → `styles.toggleActive` (the pre-existing theme token:
  *    dark-mode white / light-mode black) against the neutral translucent
  *    track.
+ *
+ * ROUND-126 (R126-3f-1): the track re-tiered onto the clay ladder (TOKENS
+ * §1d/§10) — the ON state is the quiet-solid pair (`styles.accentDeep`
+ * fill + the accentText knob ink); the RESTING track is THE WELL
+ * (`styles.surfaceWell` fill + the 1px `styles.clayRim` hairline) — the
+ * recess the whole app sinks inactive controls into, replacing the old
+ * withAlpha(text, 0.18) wash. The 1.5px border is retired with the bento
+ * grammar (TOKENS §5).
  *
  * The track, borders, sizes, and aria contract are byte-identical to the
  * copies it replaces (h-6 w-11, or h-7 w-[52px] with `big`; knob 18px, 21px
@@ -62,8 +70,10 @@ export function ToggleSwitch({
         big ? "h-7 w-[52px]" : "h-6 w-11"
       } relative shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60`}
       style={{
-        background: checked ? styles.accent : withAlpha(styles.text, 0.18),
-        border: `1.5px solid ${checked ? styles.accent : styles.border}`,
+        // R126: ON = the quiet-solid pair (accentDeep fill + accentText
+        // knob); REST = the well (surfaceWell + the 1px clay rim).
+        background: checked ? styles.accentDeep : styles.surfaceWell,
+        border: `1px solid ${checked ? styles.accentDeep : styles.clayRim}`,
       }}
     >
       <span

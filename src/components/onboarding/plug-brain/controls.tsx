@@ -3,10 +3,15 @@ import { useThemeStyles } from "../../../lib/use-theme-styles";
 
 /**
  * Themed form controls for PlugBrain. The browser's native number spinners
- * and range slider clash with the app's bento design language, so both are
+ * and range slider clash with the app's design language, so both are
  * replaced: NumberField hides the native spinners and renders themed ▲/▼
  * steppers, ThemedSlider draws its own track/fill and styles only the thumb
  * natively (see .ac-slider in index.css).
+ *
+ * R126-3g (the clay palette pass): both controls re-derive from the deep
+ * tier of the ONE accent family — the stepper hover chips and the slider
+ * fill ride accentDeep (the accent→accent2 second-hue gradient retired),
+ * per TOKENS §1d.
  */
 
 function decimalsOf(step: number): number {
@@ -43,8 +48,8 @@ export function NumberField({
   };
 
   const btnStyle = (dir: "up" | "down", active: boolean) => ({
-    background: hoverBtn === dir ? s.accent : s.subtle,
-    borderColor: hoverBtn === dir ? s.accent : s.border,
+    background: hoverBtn === dir ? s.accentDeep : s.subtle,
+    borderColor: hoverBtn === dir ? s.accentDeep : s.border,
     color: hoverBtn === dir ? s.accentText : s.textSecondary,
     opacity: active ? 1 : undefined,
   });
@@ -83,7 +88,7 @@ export function NumberField({
           type="button"
           tabIndex={-1}
           aria-label="Increase"
-          className="flex-1 w-7 rounded-[7px] border text-[8px] leading-none grid place-items-center cursor-pointer transition-colors"
+          className="flex-1 w-7 rounded-[7px] border text-[10px] leading-none grid place-items-center cursor-pointer transition-colors"
           style={btnStyle("up", true)}
           onMouseEnter={() => setHoverBtn("up")}
           onMouseLeave={() => setHoverBtn(null)}
@@ -95,7 +100,7 @@ export function NumberField({
           type="button"
           tabIndex={-1}
           aria-label="Decrease"
-          className="flex-1 w-7 rounded-[7px] border text-[8px] leading-none grid place-items-center cursor-pointer transition-colors"
+          className="flex-1 w-7 rounded-[7px] border text-[10px] leading-none grid place-items-center cursor-pointer transition-colors"
           style={btnStyle("down", true)}
           onMouseEnter={() => setHoverBtn("down")}
           onMouseLeave={() => setHoverBtn(null)}
@@ -129,13 +134,14 @@ export function ThemedSlider({
 
   return (
     <div className="relative flex-1 h-5 flex items-center min-w-0">
-      {/* Track + fill behind the transparent native control */}
-      <div className="absolute inset-x-0 h-[7px] rounded-full" style={{ background: s.border }} />
+      {/* Track + fill behind the transparent native control — R126-3g: the
+          fill rides accentDeep (the accent→accent2 gradient retired). */}
+      <div className="absolute inset-x-0 h-[7px] rounded-full bg-well" />
       <div
         className="absolute left-0 h-[7px] rounded-full"
         style={{
           width: `${pct}%`,
-          background: `linear-gradient(to right, ${s.accent}, ${s.theme.accent2})`,
+          background: s.accentDeep,
         }}
       />
       <input

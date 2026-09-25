@@ -4,12 +4,9 @@ import { Check, Monitor, ScanEye, ShieldAlert } from "lucide-react";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { isTauri } from "../../lib/sidecar";
-import { withAlpha } from "../dashboard/helpers";
-// R100-E2: the round-100 primitives + the semantic status home (USAGE.md §3,
-// TOKENS.md §7 — the tab's local AMBER const and inline status hexes retired).
+// R100-E2: the round-100 primitives (USAGE.md §3).
 import { Kicker } from "../ui/Kicker";
 import { SectionCard } from "../ui/SectionCard";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { ToggleSwitch } from "../ui/toggle-switch"; // R93-A4: the shared contrast-aware switch
 import {
   fetchComputerUseConfig,
@@ -70,12 +67,12 @@ function RadioRow({
       role="radio"
       aria-checked={selected}
       aria-label={ariaLabel}
-      className="w-full flex items-center gap-2 px-3 py-2 border-b last:border-b-0 text-left disabled:cursor-not-allowed"
-      style={{
-        borderColor: styles.borderSubtle,
-        background: selected ? withAlpha(styles.accent, 0.07) : "transparent",
-        opacity: disabled ? 0.55 : 1,
-      }}
+      /* R126-3f-3: the selected radio row = the selection grammar
+       * (bg-accent-tint, TOKENS §10); the hairline on the class leg. */
+      className={`w-full flex items-center gap-2 px-3 py-2 border-b border-line last:border-b-0 text-left disabled:cursor-not-allowed ${
+        selected ? "bg-accent-tint" : ""
+      }`}
+      style={{ opacity: disabled ? 0.55 : 1 }}
     >
       <span className="min-w-0 flex-1 flex flex-col gap-0.5">
         <span className="flex items-center gap-1.5 flex-wrap">
@@ -87,8 +84,7 @@ function RadioRow({
           </span>
           {badge && (
             <span
-              className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5"
-              style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent }}
+              className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 bg-badge-accent text-badge-accent-fg"
             >
               {badge}
             </span>
@@ -98,7 +94,7 @@ function RadioRow({
           {description}
         </span>
       </span>
-      {selected && <Check size={12} className="shrink-0" style={{ color: styles.accent }} />}
+      {selected && <Check size={12} className="shrink-0 text-accent-deep" />}
     </button>
   );
 }
@@ -194,7 +190,7 @@ function ComputerUseMasterCard() {
   if (configQuery.isError) {
     return (
       <SectionCard className="p-4" ariaLabel="Computer use">
-        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+        <p className="text-[11px] text-danger-deep" role="alert">
           {coreUnreachableHint} to configure computer use.
         </p>
       </SectionCard>
@@ -218,15 +214,16 @@ function ComputerUseMasterCard() {
     /* R100-E2: the SectionCard primitive (aria-label passthrough). */
     <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Computer use">
       <div className="flex items-center gap-2 flex-wrap">
-        <Monitor size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <Monitor size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Computer use
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-medium"
-            style={{ color: msgIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+            className={`text-[11px] font-medium ${
+              msgIsError ? "text-danger-deep" : "text-success-deep"
+            }`}
           >
             {msg}
           </span>
@@ -259,8 +256,8 @@ function ComputerUseMasterCard() {
         <div
           role="radiogroup"
           aria-label="Computer use posture"
-          className="rounded-lg border-[1.5px] overflow-hidden"
-          style={{ borderColor: styles.border }}
+          /* R126-3f-3: the rim hairline container (TOKENS §5). */
+          className="rounded-lg border border-clay-rim overflow-hidden"
         >
           {POSTURES.map((p) => (
             <RadioRow
@@ -289,12 +286,10 @@ function ComputerUseMasterCard() {
         {Object.entries(config.capabilities ?? {}).map(([key, ok]) => (
           <span
             key={key}
-            className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5"
+            className={`text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 ${
+              ok ? "bg-badge-success text-badge-success-fg" : "bg-badge-neutral text-badge-neutral-fg"
+            }`}
             title={ok ? "available on this backend" : "not available on this backend"}
-            style={{
-              background: ok ? withAlpha(SEMANTIC_COLORS.success, 0.12) : styles.subtle,
-              color: ok ? SEMANTIC_COLORS.success : styles.textTertiary,
-            }}
           >
             {key}
           </span>
@@ -307,8 +302,8 @@ function ComputerUseMasterCard() {
           onClick={() => testReadiness.mutate()}
           disabled={testReadiness.isPending}
           aria-label="Test computer use readiness"
-          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 disabled:opacity-50"
-          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          /* R126-3f-3: the accent-tint action spelling. */
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-50"
         >
           {testReadiness.isPending ? "Testing…" : "Test readiness"}
         </button>
@@ -318,20 +313,18 @@ function ComputerUseMasterCard() {
       </div>
       {testReport && (
         <div
-          className="rounded-lg border-[1.5px] px-3 py-2.5 flex flex-col gap-1.5"
-          style={{
-            borderColor: testReport.ok ? withAlpha(SEMANTIC_COLORS.success, 0.4) : withAlpha(SEMANTIC_COLORS.warning, 0.4),
-            background: testReport.ok ? withAlpha(SEMANTIC_COLORS.success, 0.04) : withAlpha(SEMANTIC_COLORS.warning, 0.04),
-          }}
+          /* R126-3f-3: the test states = the §11 badge tones (the withAlpha
+           * wash + border spellings are retired — like 3f-2's test bands). */
+          className={`rounded-lg px-3 py-2.5 flex flex-col gap-1.5 ${
+            testReport.ok ? "bg-badge-success" : "bg-badge-warning"
+          }`}
           data-testid="readiness-result"
         >
           <div className="flex items-center gap-2">
             <span
-              className="text-[11px] font-medium uppercase tracking-wider rounded-full px-2 py-0.5"
-              style={{
-                background: testReport.ok ? withAlpha(SEMANTIC_COLORS.success, 0.14) : withAlpha(SEMANTIC_COLORS.warning, 0.14),
-                color: testReport.ok ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.warning,
-              }}
+              className={`text-[11px] font-medium uppercase tracking-wider rounded-full px-2 py-0.5 ${
+                testReport.ok ? "bg-badge-success text-badge-success-fg" : "bg-badge-warning text-badge-warning-fg"
+              }`}
             >
               {testReport.ok ? "Ready" : "Issues"}
             </span>
@@ -373,8 +366,9 @@ function ImageAnalysisPointerCard() {
   const styles = useThemeStyles();
   return (
     <section
-      className="rounded-2xl border-[1.5px] p-4 flex items-start gap-2.5"
-      style={{ background: withAlpha(styles.text, 0.02), borderColor: styles.borderSubtle }}
+      /* R126-3f-3: the quiet pointer card = the well recess + rim
+       * (TOKENS §10 — the preview/pointer card). */
+      className="rounded-2xl border border-clay-rim bg-well p-4 flex items-start gap-2.5"
       aria-label="Image analysis moved"
       data-testid="image-analysis-pointer"
     >
@@ -395,8 +389,8 @@ function SafetyCard() {
   const styles = useThemeStyles();
   return (
     <section
-      className="rounded-2xl border-[1.5px] p-4 flex items-start gap-2.5"
-      style={{ background: withAlpha(styles.text, 0.02), borderColor: styles.borderSubtle }}
+      /* R126-3f-3: the quiet safety card = the well recess + rim. */
+      className="rounded-2xl border border-clay-rim bg-well p-4 flex items-start gap-2.5"
       aria-label="Computer use safety"
     >
       <ShieldAlert size={13} className="shrink-0 mt-0.5" style={{ color: styles.textTertiary }} />

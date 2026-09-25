@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -79,6 +79,11 @@ import { extractStringArg } from "./streaming-args";
 // the surfaces not migrated this round (SubAgentPanel — the full PC
 // redesign session owns those).
 import { SEMANTIC_COLORS } from "../../lib/semantics";
+// R126-3d-3: the disclosure grammar joins from the ONE motion palace
+// (MOTION.md §2 — expand rides DISCLOSURE_SPRING {180,24}, collapse is a
+// 200ms TIMING never a spring; the header chevron rotates on the house
+// SPRING). Never hand-roll a spring in a component.
+import { DISCLOSURE_SPRING, SPRING } from "../../lib/motion";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 // ROUND-38 (owner: "outright remove that option completely"): the
@@ -324,7 +329,11 @@ function useDelegateChildren(parentSessionId: string | null, enabled: boolean) {
 }
 
 /** The monospace 4-char code badge — the owner's quick-identify mark for a
- * sub-agent (picker rows, Delegated rows, panel header, approval cards). */
+ * sub-agent (picker rows, Delegated rows, panel header, approval cards).
+ * R126-3d-3: the accent chip rides the CLASS leg — bg-accent-tint (TOKENS
+ * §10's 12% accent container) + text-accent-deep (§1d's accent-as-text
+ * tier); the pre-R126 withAlpha(accent, 0.12) + flat accent ink died with
+ * the status grammar. */
 export function SubAgentCodeChip({
   code,
   title,
@@ -332,11 +341,9 @@ export function SubAgentCodeChip({
   code: string;
   title?: string;
 }) {
-  const styles = useThemeStyles();
   return (
     <span
-      className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md tracking-[0.08em]"
-      style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+      className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md tracking-[0.08em] bg-accent-tint text-accent-deep"
       title={title ?? `Sub-agent code ${code}`}
       data-testid="subagent-code-chip"
     >
@@ -372,12 +379,25 @@ function LiveDelegateRow({
   const todosTotal = live?.todosTotal ?? child.todosTotal;
   const title = child.title ?? live?.task ?? "sub-agent task";
   const watch = live?.watch;
+  // R126-3d-3: the row's EDGE + role ink ride the deep pairs (TOKENS §11 —
+  // flat hues stay for DOTS ONLY): successDeep / dangerDeep, accentDeep for
+  // the live family (§1d's accent-as-text tier).
   const tone =
     status === "completed"
-      ? SEMANTIC_COLORS.success
+      ? styles.successDeep
       : status === "failed"
-        ? SEMANTIC_COLORS.danger
-        : styles.accent;
+        ? styles.dangerDeep
+        : styles.accentDeep;
+  // R126-3d-3: the status pill is a STATUS CHIP — the badge tone containers
+  // (TOKENS §11): running/queued/stopping = the WARNING tone (mono 10px,
+  // the mobile's tool-row law), completed = success, failed = danger —
+  // never the pre-R126 withAlpha(accent) running fill.
+  const statusToneClass =
+    status === "completed"
+      ? "bg-badge-success text-badge-success-fg"
+      : status === "failed"
+        ? "bg-badge-danger text-badge-danger-fg"
+        : "bg-badge-warning text-badge-warning-fg";
 
   const open = () => {
     useRightSidebarStore
@@ -424,8 +444,7 @@ function LiveDelegateRow({
           {title}
         </span>
         <span
-          className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded-full"
-          style={{ background: withAlpha(tone, 0.12), color: tone }}
+          className={`shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-full ${statusToneClass}`}
         >
           {stopping ? "stopping…" : status}
         </span>
@@ -447,7 +466,7 @@ function LiveDelegateRow({
             aria-label={`Stop sub-agent ${code}`}
             title="Stop this sub-agent (the parent keeps running)"
             className="shrink-0 w-6 h-6 grid place-items-center rounded-lg transition-colors hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ color: SEMANTIC_COLORS.danger }}
+            style={{ color: styles.dangerDeep }}
             data-testid="stop-subagent-btn"
           >
             <Square size={11} fill="currentColor" strokeWidth={0} />
@@ -457,12 +476,12 @@ function LiveDelegateRow({
       {live?.lastActivity !== undefined ? (
         <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
           {status === "running" ? (
-            <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: tone }} aria-hidden />
+            <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: styles.accent }} aria-hidden />
           ) : null}
           <span
             className="min-w-0 flex-1 truncate font-mono text-[10px]"
             style={{
-              color: watch?.stalled === true ? AMBER : styles.textTertiary,
+              color: watch?.stalled === true ? styles.warningDeep : styles.textTertiary,
             }}
             title={live.lastActivity}
           >
@@ -473,7 +492,7 @@ function LiveDelegateRow({
           {watch !== undefined && status === "running" ? (
             <span
               className="shrink-0 font-mono text-[10px] tabular-nums"
-              style={{ color: watch.stalled ? AMBER : styles.textTertiary }}
+              style={{ color: watch.stalled ? styles.warningDeep : styles.textTertiary }}
               title={
                 watch.stalled
                   ? `No activity for ${Math.round(watch.lastEventAgeMs / 1000)}s — the supervisor is watching`
@@ -711,9 +730,16 @@ export function ThoughtRow({
           <motion.div
             key="body"
             initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
+            // R126-3d-3: the disclosure grammar (MOTION.md §2) — expand rides
+            // DISCLOSURE_SPRING {180,24} (one soft settle), collapse is a
+            // TIMING never a spring: 200ms ease-out height + 150ms fade
+            // (closing never bounces — the mobile R118-C law).
+            animate={{ height: "auto", opacity: 1, transition: DISCLOSURE_SPRING }}
+            exit={{
+              height: 0,
+              opacity: 0,
+              transition: { height: { duration: 0.2, ease: "easeOut" }, opacity: { duration: 0.15, ease: "easeOut" } },
+            }}
             className="overflow-hidden"
           >
             {/* ROUND-58 (R58-cf, owner: "On the thought section… on the left
@@ -737,7 +763,7 @@ export function ThoughtRow({
                 className={`chat-thinking rounded-lg px-3 py-1.5 font-mono text-[11px] leading-[1.6] whitespace-pre-wrap break-words overflow-y-auto auto-scroll ${
                   overClamp && !showAll ? "max-h-64" : ""
                 }`}
-                style={{ background: styles.subtle, color: styles.textSecondary, ["--chat-base-size" as string]: "11px" } as React.CSSProperties}
+                style={{ background: styles.subtle, color: styles.textTertiary, ["--chat-base-size" as string]: "11px" } as React.CSSProperties}
               >
                 {/* The single content wrapper: the stick hook's
                     ResizeObserver observes it (growth past the max-h-64 cap
@@ -814,7 +840,9 @@ export function ThoughtRow({
                   onClick={() => setShowAll((v) => !v)}
                   aria-expanded={showAll}
                   className="mt-1 ml-1 text-[10px] font-medium underline"
-                  style={{ color: styles.accent }}
+                  // R126-3d-3: accent-as-TEXT rides the DEEP tier (TOKENS §1d)
+                  // — the flat accent ink died with the two-tier accent law.
+                  style={{ color: styles.accentDeep }}
                 >
                   {showAll ? "Show less" : "Show all"}
                 </button>
@@ -982,11 +1010,10 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
     if (restoreState === "restored") {
       return (
         <span
-          className="shrink-0 h-5 px-2 rounded-full text-[10px] font-medium flex items-center gap-1"
-          style={{
-            background: withAlpha(SEMANTIC_COLORS.success, 0.12),
-            color: SEMANTIC_COLORS.success,
-          }}
+          // R126-3d-3: the Restored pill rides the SUCCESS badge tone (TOKENS
+          // §11's tinted container + deep-on-tint ink; the withAlpha pair
+          // died with the status grammar).
+          className="shrink-0 h-5 px-2 rounded-full text-[10px] font-medium flex items-center gap-1 bg-badge-success text-badge-success-fg"
         >
           <RotateCcw size={10} /> Restored
         </span>
@@ -999,11 +1026,9 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
           <button
             onClick={() => void onRestore()}
             title="Overwrite the file on disk with its recorded content from before this change"
-            className="shrink-0 h-5 px-2 rounded-full text-[10px] font-medium border-[1.5px] transition-colors flex items-center gap-1"
-            style={{
-              borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
-              color: SEMANTIC_COLORS.danger,
-            }}
+            // R126-3d-3: the outlined DANGER species (COMPONENTS §4 — the
+            // 3d-2 one-spelling border-danger-deep + text-danger-deep).
+            className="shrink-0 h-5 px-2 rounded-full text-[10px] font-semibold border transition-opacity duration-100 hover:opacity-85 active:scale-[0.98] flex items-center gap-1 border-danger-deep text-danger-deep"
           >
             <RotateCcw size={10} /> Confirm restore?
           </button>
@@ -1048,8 +1073,9 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
             edits (the numbers come from the real before/after snapshot). */}
         {kind === "create" ? (
           <span
-            className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
-            style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
+            // R126-3d-3: the diff chips ride the badge tone containers
+            // (TOKENS §11 — success fill + its fg ink).
+            className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-badge-success text-badge-success-fg"
             data-diff-kind="create"
           >
             NEW FILE
@@ -1057,8 +1083,7 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
         ) : null}
         {kind === "delete" ? (
           <span
-            className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
-            style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.1), color: SEMANTIC_COLORS.danger }}
+            className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-badge-danger text-badge-danger-fg"
             data-diff-kind="delete"
           >
             DELETED FILE
@@ -1066,10 +1091,10 @@ function DiffDetail({ tool, sessionId }: { tool: ToolUseEntry; sessionId: string
         ) : null}
         {diff !== null && added !== undefined && removed !== undefined ? (
           <span className="shrink-0 flex items-center gap-1 font-mono text-[10px] tabular-nums">
-            <span className="px-1.5 py-0.5 rounded-full" style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}>
+            <span className="px-1.5 py-0.5 rounded-full bg-badge-success text-badge-success-fg">
               +{added}
             </span>
-            <span className="px-1.5 py-0.5 rounded-full" style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.1), color: SEMANTIC_COLORS.danger }}>
+            <span className="px-1.5 py-0.5 rounded-full bg-badge-danger text-badge-danger-fg">
               −{removed}
             </span>
           </span>
@@ -1236,23 +1261,22 @@ export function LiveOutputTail({ output }: { output: string }) {
     <div className="mt-0.5 mb-1 pl-4 min-w-0" data-testid="live-command-output">
       <div className="flex items-center gap-1.5 h-4 px-0.5">
         {/* R125: the running accent replaces the retired RUNNING_BLUE — the
-            live tail speaks the theme's own accent voice, not a blue slab. */}
+            live tail speaks the theme's own accent voice, not a blue slab.
+            R126-3d-3: the dot keeps the accent MARKER tier; the label is
+            accent-as-TEXT → the DEEP tier (TOKENS §1d), still one family. */}
         <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: styles.accent }} aria-hidden />
         <span
-          className="text-[10px] font-mono font-medium uppercase tracking-[0.08em]"
-          style={{ color: styles.accent }}
+          className="text-[10px] font-mono font-medium uppercase tracking-[0.08em] text-accent-deep"
         >
           live
         </span>
       </div>
       <div
         ref={ref}
-        className="rounded-lg border px-2.5 py-1.5 max-h-32 overflow-y-auto auto-scroll font-mono text-[10px] leading-[1.5] break-words"
-        style={{
-          borderColor: withAlpha(styles.accent, 0.28),
-          background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)",
-          color: styles.textSecondary,
-        }}
+        // R126-3d-3: the terminal tail rides THE RECESSED MONO SURFACE
+        // (TOKENS §10 — .ac-mono-block paints fill + border + its own ink;
+        // the old inline rgba fill + accent border died with the ladder).
+        className="rounded-lg border px-2.5 py-1.5 max-h-32 overflow-y-auto auto-scroll font-mono text-[10px] leading-[1.5] break-words ac-mono-block"
       >
         {shown.map((line, i) => (
           <div key={i} className="whitespace-pre-wrap break-words">
@@ -1326,11 +1350,12 @@ export function LiveWritePreview({ raw }: { raw: string }) {
         {/* Subtle animated shimmer — CSS-only pulse on the small dot
             (ac-pulse: the app's shared live-dot animation, reduced-motion
             aware — same as LiveOutputTail). R125: the theme accent owns the
-            running voice (the retired RUNNING_BLUE's job). */}
+            running voice (the retired RUNNING_BLUE's job). R126-3d-3: the dot
+            keeps the accent MARKER tier; the label is accent-as-TEXT → the
+            DEEP tier (TOKENS §1d), still one family. */}
         <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: styles.accent }} aria-hidden />
         <span
-          className="text-[10px] font-mono font-medium uppercase tracking-[0.08em] truncate"
-          style={{ color: styles.accent }}
+          className="text-[10px] font-mono font-medium uppercase tracking-[0.08em] truncate text-accent-deep"
           title={path.found ? path.value : undefined}
         >
           {label}
@@ -1338,12 +1363,10 @@ export function LiveWritePreview({ raw }: { raw: string }) {
       </div>
       <div
         ref={ref}
-        className="rounded-lg border px-2.5 py-1.5 max-h-40 overflow-y-auto auto-scroll font-mono text-[11px] leading-[1.5] break-words whitespace-pre-wrap"
-        style={{
-          borderColor: withAlpha(styles.accent, 0.28),
-          background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)",
-          color: styles.textSecondary,
-        }}
+        // R126-3d-3: the streaming write tail rides THE RECESSED MONO SURFACE
+        // (TOKENS §10 — .ac-mono-block: fill + border + own ink, one spelling
+        // with the terminal tail; the inline rgba fill + accent border died).
+        className="rounded-lg border px-2.5 py-1.5 max-h-40 overflow-y-auto auto-scroll font-mono text-[11px] leading-[1.5] break-words whitespace-pre-wrap ac-mono-block"
       >
         {shown === "" ? " " : shown}
       </div>
@@ -1382,13 +1405,16 @@ function LiveWritePendingRow({ toolName, raw }: { toolName: string; raw: string 
         style={{ color: styles.textTertiary }}
       >
         <ToolIconChip Icon={Icon} background={withAlpha(styles.accent, 0.12)} color={styles.accent} />
-        <span className="shrink-0 text-[11px] font-medium" style={{ color: styles.textSecondary }}>
+        {/* R126-3d-3: the row title rides the tool-row mono 12px tier (one
+            spelling with ToolLine's verb + target — the mobile's
+            mono-medium head line, PC densities). */}
+        <span className="shrink-0 font-mono text-[12px] font-medium" style={{ color: styles.textSecondary }}>
           Writing
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px]" style={{ color: styles.textTertiary }} title={path.found ? path.value : undefined}>
+        <span className="min-w-0 flex-1 truncate font-mono text-[12px]" style={{ color: styles.textTertiary }} title={path.found ? path.value : undefined}>
           {argsSummary}
         </span>
-        <span className="shrink-0 w-4 text-center text-[11px]" style={{ color: styles.textTertiary }}>
+        <span className="shrink-0 w-4 text-center font-mono text-[12px]" style={{ color: styles.textTertiary }}>
           …
         </span>
         <span className="w-2.5 shrink-0" />
@@ -1440,13 +1466,16 @@ function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
     <div
       // R100-D (research §C4.5): expanded terminal card = 8px radius + 1px
       // border; 10.5→10px mono per the type floor snap.
-      className="rounded-lg border overflow-hidden"
-      style={{ borderColor: styles.border }}
+      // R126-3d-3: the card rides THE RECESSED MONO SURFACE (TOKENS §10 —
+      // .ac-mono-block paints fill + border + its own ink; the inline
+      // borderColor leg died with the ladder — one spelling with the live
+      // tails and the OutputDetail body).
+      className="rounded-lg border overflow-hidden ac-mono-block"
       data-testid="terminal-detail"
     >
       <div
-        className="flex items-center justify-between gap-2 px-2.5 py-1.5 border-b"
-        style={{ background: styles.subtle, borderColor: styles.border }}
+        className="flex items-center justify-between gap-2 px-2.5 py-1.5 border-b bg-well"
+        style={{ borderColor: styles.border }}
       >
         <span className="flex items-center gap-1.5 min-w-0">
           {exitDetail !== null ? (
@@ -1465,14 +1494,14 @@ function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
           className="shrink-0 flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-semibold transition-colors hover:bg-hover"
           style={{ color: styles.textTertiary }}
         >
-          {copied ? <Check size={10} style={{ color: SEMANTIC_COLORS.success }} /> : <Copy size={10} />}
+          {/* R126-3d-3: the copied-check ink is the SUCCESS deep pair
+              (TOKENS §11 — status text/icons ride the deep pairs; the flat
+              semantic hue died with the status grammar). */}
+          {copied ? <Check size={10} style={{ color: styles.successDeep }} /> : <Copy size={10} />}
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <div
-        className="px-3 py-2 font-mono text-[10px] leading-[1.55] max-h-56 overflow-y-auto auto-scroll"
-        style={{ background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.03)", color: styles.textSecondary }}
-      >
+      <div className="px-3 py-2 font-mono text-[10px] leading-[1.55] max-h-56 overflow-y-auto auto-scroll">
         {preview.map((line, i) => (
           <div key={i} className="whitespace-pre-wrap break-words">{line}</div>
         ))}
@@ -1484,7 +1513,8 @@ function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
             <button
               onClick={() => setExpanded((v) => !v)}
               className="mt-1 text-[10px] font-medium underline"
-              style={{ color: styles.accent }}
+              // R126-3d-3: accent-as-TEXT rides the DEEP tier (TOKENS §1d).
+              style={{ color: styles.accentDeep }}
             >
               {expanded ? "Show less" : `+${rest.length} more line${rest.length === 1 ? "" : "s"}`}
             </button>
@@ -1508,8 +1538,10 @@ function OutputDetail({ tool }: { tool: ToolUseEntry }) {
   }
   return (
     <div
-      className="rounded-lg border px-3 py-2 font-mono text-[10px] leading-[1.55] max-h-48 overflow-y-auto auto-scroll whitespace-pre-wrap break-words"
-      style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.22)" : "rgba(0,0,0,0.02)", color: styles.textSecondary }}
+      // R126-3d-3: the generic output body rides THE RECESSED MONO SURFACE
+      // (TOKENS §10 — .ac-mono-block: fill + border + own ink, one spelling
+      // with the terminal family; the inline rgba fill died with the ladder).
+      className="rounded-lg border px-3 py-2 font-mono text-[10px] leading-[1.55] max-h-48 overflow-y-auto auto-scroll whitespace-pre-wrap break-words ac-mono-block"
     >
       {tool.outputSummary}
     </div>
@@ -1567,17 +1599,17 @@ function ApprovalRow({
         : entry.status === "denied"
           ? "Denied"
           : "Expired";
+    // R126-3d-3: status TEXT rides the DEEP pairs (TOKENS §11) — the flat
+    // semantic hues died with the status grammar.
     const tone =
-      entry.status === "approved" ? SEMANTIC_COLORS.success : SEMANTIC_COLORS.danger;
+      entry.status === "approved" ? styles.successDeep : styles.dangerDeep;
     return (
       <div className="flex items-center gap-2 h-7 px-1 -ml-1 font-mono text-[11px] min-w-0">
         <span className="shrink-0 font-medium" style={{ color: tone }}>
           {decisionText}
         </span>
         {attributedCode !== undefined ? (
-          <span className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md" style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}>
-            {attributedCode}
-          </span>
+          <SubAgentCodeChip code={attributedCode} />
         ) : null}
         <span className="min-w-0 flex-1 truncate" style={{ color: styles.textTertiary }}>
           {entry.argsSummary || entry.toolName}
@@ -1591,15 +1623,17 @@ function ApprovalRow({
       // R100-D: the approval card keeps its semantic anatomy (§C4.5) — the
       // radius snaps 12px via the scale utility; the amber literals ride
       // SEMANTIC_COLORS.warning (the ONE documented spelling).
-      className="rounded-xl border-[1.5px] px-3 py-2.5 my-1"
-      style={{
-        borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.55),
-        background: withAlpha(SEMANTIC_COLORS.warning, styles.isDark ? 0.08 : 0.05),
-      }}
+      // R126-3d-3 (the brief's material spec): pending = the WARNING BORDER
+      // treatment (the mobile approval card's own law — a 1.5px warning-deep
+      // edge on the card fill; the flat-amber withAlpha wash died with the
+      // status grammar), the args block rides the recessed MONO surface, and
+      // the category chip is the NEUTRAL badge tone.
+      className="rounded-xl border-[1.5px] px-3 py-2.5 my-1 bg-card border-warning-deep"
       role="alert"
     >
       <div className="flex items-center gap-2 mb-1.5">
-        <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: SEMANTIC_COLORS.warning }} aria-hidden />
+        {/* The attention dot: flat hues stay legal for DOTS ONLY (TOKENS §11). */}
+        <span className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0" style={{ background: AMBER }} aria-hidden />
         {needsLookup ? (
           <span
             className="flex items-center gap-1 text-[12px] font-semibold min-w-0"
@@ -1609,12 +1643,7 @@ function ApprovalRow({
             <span className="truncate">Sub-agent</span>
             {attributedCode !== undefined && attributedRole !== undefined ? (
               <>
-                <span
-                  className="shrink-0 font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md tracking-[0.08em]"
-                  style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
-                >
-                  {attributedCode}
-                </span>
+                <SubAgentCodeChip code={attributedCode} />
                 <span className="truncate">· {attributedRole} —</span>
               </>
             ) : (
@@ -1625,13 +1654,15 @@ function ApprovalRow({
         <span className="text-[12px] font-semibold shrink-0" style={{ color: styles.text }}>
           Permission needed
         </span>
-        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full shrink-0" style={{ background: styles.subtle, color: styles.textTertiary }}>
+        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full shrink-0 bg-badge-neutral text-badge-neutral-fg">
           {entry.category}
         </span>
       </div>
       <div
-        className="rounded-lg px-2.5 py-1.5 font-mono text-[12px] break-all mb-2"
-        style={{ background: styles.isDark ? "rgba(0,0,0,0.3)" : "rgba(0,0,0,0.04)", color: styles.text }}
+        // R126-3d-3: the args display rides THE RECESSED MONO SURFACE
+        // (TOKENS §10 — .ac-mono-block: fill + border + own ink; the inline
+        // rgba fill died with the ladder).
+        className="rounded-lg border px-2.5 py-1.5 font-mono text-[12px] break-all mb-2 ac-mono-block"
       >
         {entry.argsSummary || entry.toolName}
       </div>
@@ -1641,22 +1672,25 @@ function ApprovalRow({
             onClick={() => onDecision(entry.approvalId, "approved", "once")}
             // R100-D (TOKENS §6 press law): the hover:scale is gone — resting
             // UI never fidgets; the active:scale press stays.
-            className="h-7 px-3 rounded-full text-[11px] font-semibold transition-transform active:scale-95"
-            style={{ background: styles.accent, color: styles.accentText }}
+            // R126-3d-3: the quiet-solid clay PRIMARY (COMPONENTS §4 —
+            // bg-accent-deep + text-accent-text, press 0.98; the flat accent
+            // fill died with the two-tier accent law).
+            className="h-7 px-3 rounded-full text-[11px] font-semibold transition-transform active:scale-[0.98] bg-accent-deep text-accent-text"
           >
             Allow once
           </button>
           <button
             onClick={() => onDecision(entry.approvalId, "approved", "always")}
-            className="h-7 px-3 rounded-full text-[11px] font-semibold border-[1.5px] transition-colors"
-            style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
+            // R126-3d-3: the outlined ACCENT species (COMPONENTS §4's
+            // one-spelling border-accent-deep + text-accent-deep).
+            className="h-7 px-3 rounded-full text-[11px] font-semibold border border-accent-deep text-accent-deep transition-opacity duration-100 hover:opacity-85 active:scale-[0.98]"
           >
             Always allow
           </button>
           <button
             onClick={() => onDecision(entry.approvalId, "denied", "once")}
-            className="h-7 px-3 rounded-full text-[11px] font-semibold border-[1.5px] transition-colors"
-            style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+            // R126-3d-3: the outlined DANGER species (COMPONENTS §4).
+            className="h-7 px-3 rounded-full text-[11px] font-semibold border border-danger-deep text-danger-deep transition-opacity duration-100 hover:opacity-85 active:scale-[0.98]"
           >
             Deny
           </button>
@@ -1760,41 +1794,42 @@ export function toolStatusDetail(
 /** The rendered status-detail chip (toolStatusDetail's tone → styling).
  * R99-B: tabular-nums — the counts hold their width as they land.
  * R117-f: the tone ladder grew a SUCCESS rung — exit 0 reads the quiet
- * success tint, the danger tone gets its own chip background (the exit-code
- * chip is COLORED now, not just red text on a neutral pill). */
+ *   success tint, the danger tone gets its own chip background (the exit-code
+ *   chip is COLORED now, not just red text on a neutral pill).
+ * R126-3d-3 (the brief's material spec — TOKENS §11): every chip rides the
+ * BADGE TONE CONTAINERS on the CLASS leg — diff (+A/−B) = the success/danger
+ * pair, exit codes = success/danger, the muted counts = the NEUTRAL tone;
+ * deep-on-tint ink pairs, never withAlpha fills, never flat-hue text, never
+ * a running-blue fill. Mono 10px (the mobile's chip law). The SUCCESS rung
+ * here is the RESULT-DATA chip ("exit 0" — the R96-H honesty contract: only
+ * what the tool's own output carries, pinned by the tests); the STATUS-WORD
+ * law ("success = NOTHING", the mobile ToolStatusChip family) stays obeyed —
+ * a completed row never renders a success word chip, the ✓ glyph alone
+ * carries it. */
 function ToolStatusChip({ detail }: { detail: NonNullable<ReturnType<typeof toolStatusDetail>> }) {
-  const styles = useThemeStyles();
   if (detail.tone === "diff") {
     // The +/- pair — the diff card's own chip language (green/red).
     const [plus, minus] = detail.label.split(" ");
     return (
       <span className="shrink-0 flex items-center gap-0.5 font-mono text-[10px] tabular-nums" data-tool-status={detail.label}>
-        <span className="px-1.5 py-0.5 rounded-full" style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}>
+        <span className="px-1.5 py-0.5 rounded-full bg-badge-success text-badge-success-fg">
           {plus}
         </span>
-        <span className="px-1.5 py-0.5 rounded-full" style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.1), color: SEMANTIC_COLORS.danger }}>
+        <span className="px-1.5 py-0.5 rounded-full bg-badge-danger text-badge-danger-fg">
           {minus}
         </span>
       </span>
     );
   }
+  const toneClass =
+    detail.tone === "success"
+      ? "bg-badge-success text-badge-success-fg"
+      : detail.tone === "danger"
+        ? "bg-badge-danger text-badge-danger-fg"
+        : "bg-badge-neutral text-badge-neutral-fg";
   return (
     <span
-      className="shrink-0 font-mono text-[10px] tabular-nums px-1.5 py-0.5 rounded-full"
-      style={{
-        background:
-          detail.tone === "success"
-            ? withAlpha(SEMANTIC_COLORS.success, 0.12)
-            : detail.tone === "danger"
-              ? withAlpha(SEMANTIC_COLORS.danger, 0.1)
-              : styles.subtle,
-        color:
-          detail.tone === "success"
-            ? SEMANTIC_COLORS.success
-            : detail.tone === "danger"
-              ? SEMANTIC_COLORS.danger
-              : styles.textTertiary,
-      }}
+      className={`shrink-0 font-mono text-[10px] tabular-nums px-1.5 py-0.5 rounded-full ${toneClass}`}
       data-tool-status={detail.label}
     >
       {detail.label}
@@ -2010,8 +2045,11 @@ function ToolLine({
       style={
         failedRow
           ? {
-              borderColor: withAlpha(SEMANTIC_COLORS.danger, styles.isDark ? 0.55 : 0.45),
-              background: withAlpha(SEMANTIC_COLORS.danger, 0.05),
+              // R126-3d-3: the failed row's quiet danger wash rides the DEEP
+              // pair (TOKENS §11 — theme-aware dangerDeep, not the flat
+              // semantic hue; the mobile's danger-tinted row inside the well).
+              borderColor: withAlpha(styles.dangerDeep, styles.isDark ? 0.55 : 0.45),
+              background: withAlpha(styles.dangerDeep, 0.05),
             }
           : undefined
       }
@@ -2078,7 +2116,11 @@ function ToolLine({
         ) : (
           <Icon size={11} className="shrink-0" style={{ color: styles.textTertiary }} />
         )}
-        <span className="shrink-0 text-[11px] font-medium" style={{ color: styles.textSecondary }}>
+        {/* R126-3d-3: the row TITLE rides the mono 12px tier (the brief's
+            material spec — the mobile's mono-medium head line at PC
+            densities): verb + target read as ONE mono line, the inks keep
+            their secondary/tertiary hierarchy. */}
+        <span className="shrink-0 font-mono text-[12px] font-medium" style={{ color: styles.textSecondary }}>
           {label}
         </span>
         {/* R117-f: the humanized target (deliverable 5) — the path PILL for
@@ -2092,7 +2134,7 @@ function ToolLine({
           </span>
         ) : (
           <span
-            className="min-w-0 flex-1 truncate font-mono text-[11px]"
+            className="min-w-0 flex-1 truncate font-mono text-[12px]"
             style={{ color: styles.textTertiary }}
             title={tool.argsSummary}
           >
@@ -2102,8 +2144,7 @@ function ToolLine({
         {statusDetail !== null ? <ToolStatusChip detail={statusDetail} /> : null}
         {rowAction === "open-subagent" ? (
           <span
-            className="shrink-0 flex items-center gap-1 text-[10px] font-medium"
-            style={{ color: styles.accent }}
+            className="shrink-0 flex items-center gap-1 text-[10px] font-medium text-accent-deep"
           >
             live
             <PanelRightOpen size={11} />
@@ -2121,12 +2162,13 @@ function ToolLine({
       </div>
       {/* R117-f (deliverable 1c): the one-line error excerpt under a failed
           row's head — the tool's own first output line, mono, danger,
-          truncated; expanding swaps it for the full dump. */}
+          truncated; expanding swaps it for the full dump.
+          R126-3d-3: status TEXT rides the DEEP danger pair (TOKENS §11). */}
       {errorExcerpt !== null ? (
         <div className="mt-0.5 mb-1 pl-1 pr-2 min-w-0" data-testid="tool-error-excerpt">
           <span
             className="block truncate font-mono text-[10px]"
-            style={{ color: SEMANTIC_COLORS.danger }}
+            style={{ color: styles.dangerDeep }}
             title={errorExcerpt}
           >
             {errorExcerpt}
@@ -2374,6 +2416,16 @@ export function WorkingSection({
     [hasDelegateRow, entries, delegateChildrenQuery.data],
   );
 
+  // ── R126-3d-3 (the brief's material spec — TOKENS §10's activity well):
+  //    the WELL's strong HAIRLINE between the thinking zone and the work
+  //    rows (the mobile TurnBlock's own R118 divider law). ONE divider —
+  //    rendered before the FIRST work row (tool/approval/screenshot/
+  //    question/todo) whenever thinking/narration entries precede it, the
+  //    bg-line-strong spelling (borderStrong — the visible clay divider).
+  //    Purely presentational: it adds no behavior, keys, or data. ──
+  const firstWorkRowIndex = entries.findIndex((e) => e.type !== "thinking" && e.type !== "text");
+  const wellDividerIndex = firstWorkRowIndex > 0 ? firstWorkRowIndex : null;
+
   // ── R99-B: the header grammar (the COMPRESSED/FULL matrix in the file
   // docblock). FOLDED: ✓ success glyph + "Completed N steps" + "· N tools".
   // LIVE: ● pulsing accent dot + "Working" (+ the amber waiting note) with
@@ -2465,18 +2517,27 @@ export function WorkingSection({
         ) : null}
         {/* R117-f: the failure count — mono tabular-nums like the tool count,
           but in the danger color so the compressed row tells the truth at a
-          glance (only on a folded section with failures). */}
+          glance (only on a folded section with failures).
+          R126-3d-3: status TEXT rides the DEEP danger pair (TOKENS §11 —
+          the brief's spec: "the failure count '· N failed' rides
+          text-danger-deep"). */}
         {!live && failedToolCount > 0 ? (
           <span
             data-testid="work-failed-count"
             className="shrink-0 text-[10px] font-mono tabular-nums font-medium"
-            style={{ color: SEMANTIC_COLORS.danger }}
+            style={{ color: styles.dangerDeep }}
           >
             · {failedToolCount} failed
           </span>
         ) : null}
         {pendingApproval ? (
-          <span className="shrink-0 text-[10px] font-medium" style={{ color: AMBER }}>
+          <span
+            className="shrink-0 text-[10px] font-medium"
+            // R126-3d-3: the wait note rides the DEEP warning pair (TOKENS
+            // §11 — approval-waiting IS the warning tone; the flat amber text
+            // died with the status grammar).
+            style={{ color: styles.warningDeep }}
+          >
             · waiting for approval
           </span>
         ) : null}
@@ -2493,7 +2554,14 @@ export function WorkingSection({
             {liveClock}
           </span>
         ) : null}
-        <motion.span animate={{ rotate: expanded ? 0 : -90 }} transition={{ duration: 0.18, ease: [0.25, 0.1, 0.25, 1] }} className="shrink-0">
+        <motion.span
+          animate={{ rotate: expanded ? 0 : -90 }}
+          // R126-3d-3: the disclosure chevron rotates on the house SPRING
+          // (MOTION.md §4 — "chevron rotates 180° on its own spring"), never
+          // the pre-R126 timed cubic.
+          transition={SPRING}
+          className="shrink-0"
+        >
           <ChevronDown size={12} style={{ color: styles.textTertiary }} />
         </motion.span>
       </div>
@@ -2511,7 +2579,16 @@ export function WorkingSection({
           ride here too (the honest live center: a file being written is
           never hidden by a fold). ── */}
       {!expanded && showFoldFileRows ? (
-        <div className="py-0.5 flex flex-col gap-0.5" data-testid="fold-file-rows">
+        <div
+          // R126-3d-3 (the brief's material spec): the fold's file-mutation
+          // rows read as "the project's mutations" — the SAME tool-row
+          // vocabulary as the live section's rows, on a SLIGHTLY RAISED tile
+          // (bg-card + the clay rim hairline — one rung up from the activity
+          // well, TOKENS §10's ladder; the chat route's no-shadow law keeps
+          // it rim-only).
+          className="mt-0.5 p-2 flex flex-col gap-1 rounded-xl border border-clay-rim bg-card"
+          data-testid="fold-file-rows"
+        >
           {fileMutationRows.map((entry) =>
             entry.type === "tool" ? (
               <ToolLine
@@ -2535,18 +2612,43 @@ export function WorkingSection({
           <motion.div
             key="work-body"
             initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.26, ease: [0.25, 0.1, 0.25, 1] }}
+            // R126-3d-3: the disclosure grammar (MOTION.md §2) — expand rides
+            // DISCLOSURE_SPRING {180,24} (one soft settle), collapse is a
+            // TIMING never a spring: 200ms ease-out height + 150ms fade
+            // (closing never bounces — the mobile R118-C law).
+            animate={{ height: "auto", opacity: 1, transition: DISCLOSURE_SPRING }}
+            exit={{
+              height: 0,
+              opacity: 0,
+              transition: { height: { duration: 0.2, ease: "easeOut" }, opacity: { duration: 0.15, ease: "easeOut" } },
+            }}
             className="overflow-hidden"
           >
             {/* ROUND-58 (R58-cf, owner: the left rail looked like "a weird AI
                 kind of highlighting"): the accent border-l-2 rail is GONE —
                 the rows sit in a plain column; each row keeps its own
                 self-contained shape (ThoughtRow's subtle notes block, the
-                tool pills, the approval cards). */}
-            <div className="py-1 flex flex-col gap-0.5">
+                tool pills, the approval cards).
+                R126-3d-3 (the brief's material spec — TOKENS §10): the
+                expanded body is THE ACTIVITY WELL — bg-well + the clay-rim
+                hairline (rounded-xl), THE recess for the activity: the
+                thinking text (mono tertiary), the strong hairline between
+                thinking and work rows, then the tool rows. The chat route's
+                borderless law governs the ROUTE's panels — its inner
+                recesses ride the ladder like everywhere else (COMPONENTS §3). */}
+            <div
+              data-testid="work-section-well"
+              className="mt-0.5 p-2 flex flex-col gap-1 rounded-xl border border-clay-rim bg-well"
+            >
               {entries.map((entry, i) => {
+                // R126-3d-3: the well's strong hairline (see
+                // wellDividerIndex above) — spliced in before the first work
+                // row as a Fragment sibling, never touching the entry's own
+                // component or key.
+                const wellDivider =
+                  i === wellDividerIndex ? (
+                    <div className="h-px bg-line-strong shrink-0" aria-hidden />
+                  ) : null;
                 if (entry.type === "thinking") {
                   return (
                     <ThoughtRow
@@ -2565,18 +2667,20 @@ export function WorkingSection({
                   // tool's seq could equal a sibling row's list index and the
                   // shared `t-` prefix produced duplicate React keys.
                   return (
-                    <ToolLine
-                      key={`tool-${entry.tool.seq}`}
-                      tool={entry.tool}
-                      sessionId={sessionId}
-                      live={live}
-                      projectId={projectId}
-                      claimedChildId={
-                        entry.tool.toolName === "delegate_task"
-                          ? delegateClaims?.get(entry.tool.seq)
-                          : undefined
-                      }
-                    />
+                    <Fragment key={`tool-${entry.tool.seq}`}>
+                      {wellDivider}
+                      <ToolLine
+                        tool={entry.tool}
+                        sessionId={sessionId}
+                        live={live}
+                        projectId={projectId}
+                        claimedChildId={
+                          entry.tool.toolName === "delegate_task"
+                            ? delegateClaims?.get(entry.tool.seq)
+                            : undefined
+                        }
+                      />
+                    </Fragment>
                   );
                 }
                 // ROUND-68 (R68-A, owner: "When the screenshots were taken
@@ -2589,10 +2693,12 @@ export function WorkingSection({
                 // type === "tool" only — unaffected).
                 if (entry.type === "screenshot") {
                   return (
-                    <ScreenshotRow
-                      key={`shot-${entry.frameId}-${entry.ts}`}
-                      shot={{ frameId: entry.frameId, tool: entry.tool, ts: entry.ts }}
-                    />
+                    <Fragment key={`shot-${entry.frameId}-${entry.ts}`}>
+                      {wellDivider}
+                      <ScreenshotRow
+                        shot={{ frameId: entry.frameId, tool: entry.tool, ts: entry.ts }}
+                      />
+                    </Fragment>
                   );
                 }
                 // ROUND-87 (R87): the ask_user card (option pills + custom
@@ -2600,17 +2706,26 @@ export function WorkingSection({
                 // honestly) and the turn's todo-list card.
                 if (entry.type === "question") {
                   return (
-                    <QuestionCard
-                      key={`q-${entry.questionId}-${entry.ts}`}
-                      entry={entry}
-                      onAnswer={live ? onQuestionAnswer : undefined}
-                    />
+                    <Fragment key={`q-${entry.questionId}-${entry.ts}`}>
+                      {wellDivider}
+                      <QuestionCard entry={entry} onAnswer={live ? onQuestionAnswer : undefined} />
+                    </Fragment>
                   );
                 }
                 if (entry.type === "todo") {
-                  return <TodoCard key={`todo-${entry.ts}`} entry={entry} />;
+                  return (
+                    <Fragment key={`todo-${entry.ts}`}>
+                      {wellDivider}
+                      <TodoCard entry={entry} />
+                    </Fragment>
+                  );
                 }
-                return <ApprovalRow key={`t-${i}`} entry={entry} sessionId={sessionId} onDecision={onApprovalDecision} />;
+                return (
+                  <Fragment key={`t-${i}`}>
+                    {wellDivider}
+                    <ApprovalRow entry={entry} sessionId={sessionId} onDecision={onApprovalDecision} />
+                  </Fragment>
+                );
               })}
               {live && entries.length === 0 && pendingWriteInputs.length === 0 ? (
                 <div className="flex items-center gap-2 h-7">

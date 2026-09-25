@@ -48,11 +48,13 @@ import {
   updateFeedbackSettings,
 } from "../../lib/api";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
-import { bdr, withAlpha } from "../dashboard/helpers";
 import { Kicker } from "../ui/Kicker";
 import { SectionCard } from "../ui/SectionCard";
 import { SettingsRow } from "../ui/SettingsRow";
+// R126-3f-3: the toggle rides the shared contrast-aware switch primitive
+// (the R93-A4 one — geometry/aria byte-identical to the hand-rolled copy it
+// replaces, per the 3f-1 SettingsPage precedent).
+import { ToggleSwitch } from "../ui/toggle-switch";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 /** Bytes → the honest human line ("4.1 KB", "1.2 MB") — one decimal,
@@ -266,7 +268,7 @@ function FeedbackStatusStrip() {
           style={{ color: styles.textSecondary }}
           title={status.sessionId ?? undefined}
         >
-          <Loader2 size={11} className="animate-spin" style={{ color: styles.accent }} aria-hidden />
+          <Loader2 size={11} className="animate-spin text-accent-deep" aria-hidden />
           <span>
             Writing the ledger entry — {status.phase === "mid-turn" ? "mid-turn checkpoint" : "turn summary"}…
             {status.sessionId !== null ? ` · ${shortSessionId(status.sessionId)}` : ""}
@@ -286,8 +288,7 @@ function FeedbackStatusStrip() {
           )}
           {status.lastError !== null && (
             <p
-              className="text-[11px]"
-              style={{ color: SEMANTIC_COLORS.danger }}
+              className="text-[11px] text-danger-deep"
               role="alert"
               data-testid="feedback-status-error"
               title={status.lastError}
@@ -333,13 +334,11 @@ function SelfFeedbackToggleCard() {
         <div
           role="alert"
           data-settings-load-error
-          className="rounded-2xl border px-4 py-3.5"
-          style={{
-            borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
-            background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-          }}
+          /* R126-3f-3: the §11 danger badge-tone container + the
+           * outlined-danger Retry. */
+          className="rounded-2xl bg-badge-danger px-4 py-3.5"
         >
-          <div className="text-[13px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+          <div className="text-[13px] font-semibold text-badge-danger-fg">
             Could not load self-feedback settings
           </div>
           <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
@@ -351,8 +350,7 @@ function SelfFeedbackToggleCard() {
             type="button"
             onClick={() => void settingsQuery.refetch()}
             aria-label="Retry loading self-feedback settings"
-            className="mt-3 h-8 cursor-pointer rounded-lg border px-3.5 text-[12px] font-semibold transition-opacity hover:opacity-85"
-            style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+            className="mt-3 h-8 cursor-pointer rounded-lg border border-danger-deep px-3.5 text-[12px] font-semibold text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
           >
             Retry
           </button>
@@ -375,7 +373,7 @@ function SelfFeedbackToggleCard() {
   return (
     <SectionCard ariaLabel="Self-feedback generation" testId="self-feedback-toggle-card">
       <div className="mb-3 flex items-center gap-2">
-        <NotebookPen size={13} style={{ color: styles.accent, opacity: 0.7 }} />
+        <NotebookPen size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold text-ink">Self-feedback generation</span>
       </div>
       <SettingsRow
@@ -383,7 +381,7 @@ function SelfFeedbackToggleCard() {
           <>
             Write the feedback ledger after each completed turn
             {error ? (
-              <div className="mt-1.5 text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+              <div className="mt-1.5 text-[11px] text-danger-deep" role="alert">
                 {error}
               </div>
             ) : null}
@@ -391,29 +389,16 @@ function SelfFeedbackToggleCard() {
         }
         description="While ON, the agent answers normally — then a separate, context-free reviewer reads the whole conversation and appends one structured entry to the shared ledger file below: what it was trying to do, what actually happened, every issue and glitch it ran into (tools, browser, approvals), where reality fell short, and the improvements it would suggest. The entry never feeds back into the conversation, so follow-up messages stay clean. Applies to the next message you send, and costs one extra model call per completed turn."
       >
-        <button
-          type="button"
-          role="switch"
-          aria-checked={current.enabled}
-          aria-label="Toggle self-feedback generation"
+        {/* R126-3f-3: the hand-rolled switch rides the shared ToggleSwitch
+            primitive — geometry + the aria switch surface byte-identical; the
+            ON track is the quiet-solid pair (accentDeep + accentText), the
+            REST track is the well (TOKENS §1d/§10). */}
+        <ToggleSwitch
+          checked={current.enabled}
+          onToggle={() => toggle.mutate(!current.enabled)}
+          label="Toggle self-feedback generation"
           disabled={busy}
-          onClick={() => toggle.mutate(!current.enabled)}
-          className="relative h-6 w-11 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-wait disabled:opacity-60"
-          style={{
-            background: current.enabled ? styles.accent : withAlpha(styles.text, 0.18),
-            border: bdr("1.5px", current.enabled ? styles.accent : styles.border),
-          }}
-        >
-          <span
-            className="absolute top-1/2 block -translate-y-1/2 rounded-full shadow transition-all"
-            style={{
-              left: current.enabled ? "calc(100% - 21px)" : "3px",
-              height: 18,
-              width: 18,
-              background: current.enabled ? styles.accentText : styles.toggleActive,
-            }}
-          />
-        </button>
+        />
       </SettingsRow>
     </SectionCard>
   );
@@ -494,15 +479,16 @@ function FeedbackLedgerCard() {
   return (
     <SectionCard ariaLabel="Feedback ledger" testId="self-feedback-ledger-card">
       <div className="mb-3 flex items-center gap-2">
-        <NotebookPen size={13} style={{ color: styles.accent, opacity: 0.7 }} />
+        <NotebookPen size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold text-ink">Feedback ledger</span>
         {/* R123: the VIEW TOGGLE — the parsed cards (the default) / the raw
             file. Two quiet segmented buttons; the raw view keeps the owner's
             R122 "see the raw file" contract one click away. */}
         {ledger !== undefined && ledger.exists && ledger.entries > 0 ? (
           <div
-            className="ml-auto flex items-center rounded-full border p-0.5"
-            style={{ borderColor: bdr("1.5px", styles.border) }}
+            /* R126-3f-3: the segmented view toggle — the chip grammar on the
+             * well track (selected = bg-accent-tint + text-accent-deep). */
+            className="ml-auto flex items-center rounded-full border border-clay-rim bg-well p-0.5"
             role="tablist"
             aria-label="Ledger view"
           >
@@ -511,11 +497,9 @@ function FeedbackLedgerCard() {
               role="tab"
               aria-selected={view === "parsed"}
               onClick={() => setView("parsed")}
-              className="flex h-6 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium transition-colors"
-              style={{
-                background: view === "parsed" ? withAlpha(styles.accent, 0.14) : "transparent",
-                color: view === "parsed" ? styles.accent : styles.textTertiary,
-              }}
+              className={`flex h-6 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium transition-colors duration-100 ${
+                view === "parsed" ? "bg-accent-tint text-accent-deep" : "text-muted"
+              }`}
               data-testid="feedback-view-parsed"
             >
               <ListCollapse size={11} /> Parsed
@@ -525,11 +509,9 @@ function FeedbackLedgerCard() {
               role="tab"
               aria-selected={view === "raw"}
               onClick={() => setView("raw")}
-              className="flex h-6 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium transition-colors"
-              style={{
-                background: view === "raw" ? withAlpha(styles.accent, 0.14) : "transparent",
-                color: view === "raw" ? styles.accent : styles.textTertiary,
-              }}
+              className={`flex h-6 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium transition-colors duration-100 ${
+                view === "raw" ? "bg-accent-tint text-accent-deep" : "text-muted"
+              }`}
               data-testid="feedback-view-raw"
             >
               <FileText size={11} /> Raw
@@ -547,13 +529,11 @@ function FeedbackLedgerCard() {
         <div
           role="alert"
           data-settings-load-error
-          className="rounded-2xl border px-4 py-3.5"
-          style={{
-            borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
-            background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-          }}
+          /* R126-3f-3: the §11 danger badge-tone container + the
+           * outlined-danger Retry. */
+          className="rounded-2xl bg-badge-danger px-4 py-3.5"
         >
-          <div className="text-[13px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+          <div className="text-[13px] font-semibold text-badge-danger-fg">
             Could not load the feedback ledger
           </div>
           <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
@@ -564,8 +544,7 @@ function FeedbackLedgerCard() {
             type="button"
             onClick={() => void ledgerQuery.refetch()}
             aria-label="Retry loading the feedback ledger"
-            className="mt-3 h-8 cursor-pointer rounded-lg border px-3.5 text-[12px] font-semibold transition-opacity hover:opacity-85"
-            style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+            className="mt-3 h-8 cursor-pointer rounded-lg border border-danger-deep px-3.5 text-[12px] font-semibold text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
           >
             Retry
           </button>
@@ -579,8 +558,7 @@ function FeedbackLedgerCard() {
             with no entries yet) says so instead of faking content. */
         <div
           data-testid="feedback-empty-state"
-          className="rounded-xl border border-dashed px-4 py-6 text-center"
-          style={{ borderColor: withAlpha(styles.text, 0.16) }}
+          className="rounded-xl border border-dashed border-clay-rim px-4 py-6 text-center"
         >
           <div className="text-[12px] font-medium" style={{ color: styles.textSecondary }}>
             No feedback yet
@@ -620,12 +598,9 @@ function FeedbackLedgerCard() {
             aria-label="The raw feedback ledger file"
             aria-read-only="true"
             tabIndex={0}
-            className="feedback-ledger-pre max-h-96 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border p-3.5 font-mono text-[12px] leading-relaxed"
-            style={{
-              borderColor: withAlpha(styles.text, 0.14),
-              background: withAlpha(styles.text, 0.03),
-              color: styles.text,
-            }}
+            /* R126-3f-3: the mono surface — .ac-mono-block + text-mono-ink
+             * (TOKENS §10; the withAlpha text-wash legs are retired). */
+            className="feedback-ledger-pre ac-mono-block text-mono-ink max-h-96 overflow-y-auto whitespace-pre-wrap break-words rounded-xl p-3.5 font-mono text-[12px] leading-relaxed"
           >
             {ledger.content}
           </pre>
@@ -660,11 +635,10 @@ function FeedbackLedgerCard() {
                   key={`entry-${entry.index}`}
                   data-testid="feedback-entry-card"
                   data-entry-index={entry.index}
-                  className="rounded-xl border p-3"
-                  style={{
-                    borderColor: withAlpha(styles.text, 0.12),
-                    background: withAlpha(styles.text, 0.02),
-                  }}
+                  /* R126-3f-3: the entry card = the recessed well + the rim
+                   * hairline (TOKENS §10 — the withAlpha text-wash border/bg
+                   * legs are retired). */
+                  className="rounded-xl border border-clay-rim bg-well p-3"
                 >
                   {/* The entry header — the machine-written placement line. */}
                   <div className="flex items-center gap-2 flex-wrap">
@@ -676,21 +650,16 @@ function FeedbackLedgerCard() {
                     </span>
                     {entry.outcome !== null ? (
                       <span
-                        className="rounded-full px-2 py-0.5 text-[10px] font-medium"
-                        style={{
-                          background:
-                            tone === "success"
-                              ? withAlpha(SEMANTIC_COLORS.success, 0.12)
-                              : tone === "danger"
-                                ? withAlpha(SEMANTIC_COLORS.danger, 0.12)
-                                : withAlpha(styles.text, 0.08),
-                          color:
-                            tone === "success"
-                              ? SEMANTIC_COLORS.success
-                              : tone === "danger"
-                                ? SEMANTIC_COLORS.danger
-                                : styles.textSecondary,
-                        }}
+                        /* R126-3f-3: the outcome chip = the §11 badge tones
+                         * (success/danger/neutral pairs; the flat-hue
+                         * withAlpha washes are retired). */
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                          tone === "success"
+                            ? "bg-badge-success text-badge-success-fg"
+                            : tone === "danger"
+                              ? "bg-badge-danger text-badge-danger-fg"
+                              : "bg-badge-neutral text-badge-neutral-fg"
+                        }`}
                         data-testid="feedback-entry-outcome"
                       >
                         {entry.outcome}
@@ -705,8 +674,10 @@ function FeedbackLedgerCard() {
                       disabled={deleteEntry.isPending}
                       aria-label={`Delete entry ${entry.index + 1}`}
                       title="Deletes this one entry from the ledger — the others stay"
-                      className="ml-auto flex h-6 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium transition-opacity hover:opacity-85 disabled:cursor-wait disabled:opacity-60"
-                      style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.4), color: SEMANTIC_COLORS.danger }}
+                      /* R126-3f-3: the outlined-danger spelling (1px
+                       * border-danger-deep + text-danger-deep, hover = the
+                       * CSS bg wash — the withAlpha legs are retired). */
+                      className="ml-auto flex h-6 items-center gap-1 rounded-lg border border-danger-deep px-2 text-[10px] font-medium text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:cursor-wait disabled:opacity-60"
                     >
                       <Trash2 size={11} />
                     </button>
@@ -768,12 +739,12 @@ function FeedbackLedgerCard() {
       {ledger !== undefined && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {clearError ? (
-            <span className="w-full text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+            <span className="w-full text-[11px] text-danger-deep" role="alert">
               {clearError}
             </span>
           ) : null}
           {entryDeleteError ? (
-            <span className="w-full text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert" data-testid="feedback-entry-delete-error">
+            <span className="w-full text-[11px] text-danger-deep" role="alert" data-testid="feedback-entry-delete-error">
               {entryDeleteError}
             </span>
           ) : null}
@@ -783,8 +754,7 @@ function FeedbackLedgerCard() {
             onClick={() => void ledgerQuery.refetch()}
             disabled={ledgerQuery.isFetching}
             aria-label="Refresh the feedback ledger"
-            className="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-3 text-[12px] font-medium transition-opacity hover:opacity-85 disabled:cursor-wait disabled:opacity-60"
-            style={{ borderColor: styles.border, color: styles.textSecondary }}
+            className="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-clay-rim px-3 text-[12px] font-medium text-muted transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:cursor-wait disabled:opacity-60"
           >
             <RefreshCw size={12} className={ledgerQuery.isFetching ? "animate-spin" : undefined} />
             Refresh
@@ -795,10 +765,9 @@ function FeedbackLedgerCard() {
             onClick={onCopy}
             disabled={ledger.exists !== true || ledger.content === ""}
             aria-label="Copy the feedback ledger to the clipboard"
-            className="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-3 text-[12px] font-medium transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
-            style={{ borderColor: styles.border, color: styles.textSecondary }}
+            className="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-clay-rim px-3 text-[12px] font-medium text-muted transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {copyState === "copied" ? <Check size={12} style={{ color: styles.accent }} /> : <Copy size={12} />}
+            {copyState === "copied" ? <Check size={12} className="text-accent-deep" /> : <Copy size={12} />}
             {copyState === "copied" ? "Copied" : "Copy"}
           </button>
           <button
@@ -812,8 +781,9 @@ function FeedbackLedgerCard() {
                 ? "Nothing to clear yet — entries appear after completed turns while self-feedback generation is on"
                 : "Deletes the whole ledger file and every entry in it"
             }
-            className="ml-auto flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-3 text-[12px] font-medium transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
-            style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+            /* R126-3f-3: the outlined-danger Clear (border-danger-deep +
+             * text-danger-deep; the withAlpha legs are retired). */
+            className="ml-auto flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-danger-deep px-3 text-[12px] font-medium text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Trash2 size={12} />
             Clear

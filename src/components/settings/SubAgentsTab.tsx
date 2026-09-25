@@ -4,12 +4,11 @@ import { Link } from "react-router";
 import { Activity, Check, Cpu, KeyRound, Workflow } from "lucide-react";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-// R100-E2: the inline status hexes retired — SEMANTIC_COLORS is the one
-// sanctioned fixed-hue source (TOKENS §1 rule 2).
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 // R100-E2: the label-tier heading primitive (TOKENS §2 — THE one kicker).
 import { Kicker } from "../ui/Kicker";
-import { withAlpha } from "../dashboard/helpers";
+// R126-3f-3: the card grid rides the SectionCard clay primitive (the local
+// rounded-2xl border-[1.5px] card spellings are retired).
+import { SectionCard } from "../ui/SectionCard";
 import { isTauri } from "../../lib/sidecar";
 import { isFreeModelEntry } from "../../lib/settings-store";
 import {
@@ -96,15 +95,16 @@ async function saveSubagentSettings(patch: {
 function SubAgentKeysNote() {
   const styles = useThemeStyles();
   return (
-    <section
-      className="rounded-2xl border-[1.5px] p-4 flex items-center gap-3 flex-wrap"
-      style={{ background: styles.card, borderColor: styles.border }}
-      aria-label="Sub-agent API keys"
-      data-testid="subagent-keys-note"
+    /* R126-3f-3: the note card = the SectionCard clay card. */
+    <SectionCard
+      className="p-4 flex items-center gap-3 flex-wrap"
+      ariaLabel="Sub-agent API keys"
+      testId="subagent-keys-note"
     >
       <span
-        className="w-9 h-9 shrink-0 rounded-lg grid place-items-center"
-        style={{ background: withAlpha(styles.accent, 0.1), color: styles.accent }}
+        /* R126-3f-3: the ClayIconChip recipe (bg-accent-tint + the
+         * text-accent-deep glyph). */
+        className="w-9 h-9 shrink-0 rounded-lg grid place-items-center bg-accent-tint text-accent-deep"
         aria-hidden
       >
         <KeyRound size={15} />
@@ -116,12 +116,11 @@ function SubAgentKeysNote() {
       <Link
         to="/settings?tab=api"
         aria-label="Open Models and Providers to manage API keys"
-        className="h-8 px-3 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 shrink-0"
-        style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+        className="h-8 px-3 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 shrink-0 bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
       >
         <KeyRound size={11} /> Manage keys
       </Link>
-    </section>
+    </SectionCard>
   );
 }
 
@@ -185,15 +184,11 @@ function SubAgentModelCard() {
   const settingsPending = settingsQuery.isLoading || settingsQuery.data === undefined;
   if (settingsQuery.isError) {
     return (
-      <section
-        className="rounded-2xl border-[1.5px] p-4"
-        style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Sub-agent model"
-      >
-        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+      <SectionCard className="p-4" ariaLabel="Sub-agent model">
+        <p className="text-[11px] text-danger-deep" role="alert">
           {coreUnreachableHint} to pick a sub-agent model.
         </p>
-      </section>
+      </SectionCard>
     );
   }
   // R93-A9: honest configured-rows failure — NO hidden fallback (the old
@@ -202,31 +197,30 @@ function SubAgentModelCard() {
   // simply doesn't render until the truth is available.
   if (configuredQuery.isError) {
     return (
-      <section
-        className="rounded-2xl border-[1.5px] p-4 flex flex-col gap-2.5"
-        style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Sub-agent model"
-      >
+      <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Sub-agent model">
         <div className="flex items-center gap-2">
-          <Cpu size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+          <Cpu size={13} className="text-accent-deep" />
           <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
             Sub-agent model
           </span>
         </div>
-        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+        <p className="text-[11px] text-danger-deep" role="alert">
           Configured models unavailable — {configuredQuery.error instanceof Error ? configuredQuery.error.message : String(configuredQuery.error)}
         </p>
         <div>
           <button
             onClick={() => void configuredQuery.refetch()}
             aria-label="Retry loading the configured models"
-            className="h-8 px-3 rounded-lg text-[11px] font-semibold"
-            style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+            /* R126-3f-3: the family's error-card Retry spelling (the
+             * outlined-danger leg — the SkillsTab/PromptsTab/3f-1
+             * SettingsLoadErrorCard contract; the accent-tint action tier
+             * never rides an error path). */
+            className="h-8 px-3 rounded-lg text-[11px] font-semibold border border-danger-deep text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
           >
             Retry
           </button>
         </div>
-      </section>
+      </SectionCard>
     );
   }
 
@@ -234,15 +228,11 @@ function SubAgentModelCard() {
   const configured = configuredQuery.data;
   if (settingsPending || settings === undefined || configured === undefined) {
     return (
-      <section
-        className="rounded-2xl border-[1.5px] p-4"
-        style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Sub-agent model"
-      >
+      <SectionCard className="p-4" ariaLabel="Sub-agent model">
         <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
           {settingsPending || settings === undefined ? "loading sub-agent model settings…" : "loading your configured models…"}
         </span>
-      </section>
+      </SectionCard>
     );
   }
 
@@ -265,21 +255,18 @@ function SubAgentModelCard() {
     providersQuery.data?.find((p) => p.id === id)?.name ?? id;
 
   return (
-    <section
-      className="rounded-2xl border-[1.5px] p-4 flex flex-col gap-2.5"
-      style={{ background: styles.card, borderColor: styles.border }}
-      aria-label="Sub-agent model"
-    >
+    <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Sub-agent model">
       <div className="flex items-center gap-2 flex-wrap">
-        <Cpu size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <Cpu size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Sub-agent model
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-medium"
-            style={{ color: saveModel.isError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+            className={`text-[11px] font-medium ${
+              saveModel.isError ? "text-danger-deep" : "text-success-deep"
+            }`}
           >
             {msg}
           </span>
@@ -288,8 +275,11 @@ function SubAgentModelCard() {
 
       {/* Current override state */}
       <div
-        className="flex items-center gap-2 rounded-lg border-[1.5px] px-3 py-2"
-        style={{ borderColor: selected ? withAlpha(styles.accent, 0.45) : styles.border, background: withAlpha(styles.accent, 0.04) }}
+        /* R126-3f-3: the RUNNING-ON strip = the well (resting) or the
+         * accent-tint + accentDeep rim (an override is set). */
+        className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${
+          selected ? "border-accent-deep bg-accent-tint" : "border-clay-rim bg-well"
+        }`}
       >
         <span className="text-[11px] font-medium shrink-0" style={{ color: styles.textTertiary }}>
           RUNNING ON
@@ -314,22 +304,25 @@ function SubAgentModelCard() {
         )}
       </div>
 
-      <div className="rounded-lg border-[1.5px] overflow-hidden" style={{ borderColor: styles.border }}>
+      <div
+        /* R126-3f-3: the rim hairline container (TOKENS §5). */
+        className="rounded-lg border border-clay-rim overflow-hidden"
+      >
         {/* Inherit row */}
         <button
           onClick={() => saveModel.mutate(null)}
           aria-label="Inherit the main model for sub-agents"
-          className="w-full flex items-center gap-2 px-3 py-2 border-b text-left"
-          style={{
-            borderColor: styles.borderSubtle,
-            background: selected === null ? withAlpha(styles.accent, 0.07) : "transparent",
-          }}
+          /* R126-3f-3: the selected row = the selection grammar
+           * (bg-accent-tint, TOKENS §10); the hairline on the class leg. */
+          className={`w-full flex items-center gap-2 px-3 py-2 border-b border-line text-left ${
+            selected === null ? "bg-accent-tint" : ""
+          }`}
         >
           <span className="text-[12px] font-medium" style={{ color: styles.text }}>
             Inherits main model <span style={{ color: styles.textTertiary, fontWeight: 400 }}>(default)</span>
           </span>
           <span className="flex-1" />
-          {selected === null && <Check size={12} style={{ color: styles.accent }} />}
+          {selected === null && <Check size={12} className="text-accent-deep" />}
         </button>
 
         {rows.length === 0 ? (
@@ -342,8 +335,7 @@ function SubAgentModelCard() {
             <Link
               to="/settings?tab=api"
               aria-label="Open Models and Providers to add models"
-              className="h-8 px-3 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 shrink-0"
-              style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+              className="h-8 px-3 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 shrink-0 bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
             >
               Add models
             </Link>
@@ -374,12 +366,10 @@ function SubAgentModelCard() {
                       : `Use ${m.modelId} on ${m.providerId} for sub-agents`
                   }
                   title={disabled ? "marked as not tool-capable" : `${m.providerId} · ${m.modelId}`}
-                  className="w-full flex items-center gap-2 px-3 py-2 border-b last:border-b-0 text-left disabled:cursor-not-allowed"
-                  style={{
-                    borderColor: styles.borderSubtle,
-                    background: isSelected ? withAlpha(styles.accent, 0.07) : "transparent",
-                    opacity: disabled ? 0.55 : 1,
-                  }}
+                  className={`w-full flex items-center gap-2 px-3 py-2 border-b border-line last:border-b-0 text-left disabled:cursor-not-allowed ${
+                    isSelected ? "bg-accent-tint" : ""
+                  }`}
+                  style={{ opacity: disabled ? 0.55 : 1 }}
                 >
                   <span className="min-w-0 flex-1 flex items-center gap-1.5 flex-wrap">
                     <span
@@ -389,16 +379,14 @@ function SubAgentModelCard() {
                       {m.displayName || m.modelId}
                     </span>
                     <span
-                      className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px] font-medium"
-                      style={{ background: styles.subtle, color: styles.textTertiary }}
+                      className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px] font-medium bg-badge-neutral text-badge-neutral-fg"
                       title="The provider the child turns route to"
                     >
                       {providerChip(m.providerId)}
                     </span>
                     {isFreeModelEntry(m) && (
                       <span
-                        className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5"
-                        style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.14), color: SEMANTIC_COLORS.success }}
+                        className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 bg-badge-success text-badge-success-fg"
                       >
                         free
                       </span>
@@ -413,11 +401,11 @@ function SubAgentModelCard() {
                     </span>
                   )}
                   {disabled ? (
-                    <span className="text-[10px] font-medium shrink-0" style={{ color: SEMANTIC_COLORS.danger }}>
+                    <span className="text-[10px] font-medium shrink-0 text-danger-deep">
                       no tool calling
                     </span>
                   ) : isSelected ? (
-                    <Check size={12} style={{ color: styles.accent }} />
+                    <Check size={12} className="text-accent-deep" />
                   ) : null}
                 </button>
               );
@@ -431,7 +419,7 @@ function SubAgentModelCard() {
         route to the row&apos;s provider. Applies to every delegated sub-agent turn (delegate_task + retries);
         parallelism and supervision live in the cards below.
       </p>
-    </section>
+    </SectionCard>
   );
 }
 
@@ -468,29 +456,21 @@ function SubAgentParallelismCard() {
 
   if (settingsQuery.isError) {
     return (
-      <section
-        className="rounded-2xl border-[1.5px] p-4"
-        style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Sub-agent parallelism"
-      >
-        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+      <SectionCard className="p-4" ariaLabel="Sub-agent parallelism">
+        <p className="text-[11px] text-danger-deep" role="alert">
           {coreUnreachableHint} to tune sub-agent parallelism.
         </p>
-      </section>
+      </SectionCard>
     );
   }
   const current = settingsQuery.data;
   if (settingsQuery.isLoading || current === undefined) {
     return (
-      <section
-        className="rounded-2xl border-[1.5px] p-4"
-        style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Sub-agent parallelism"
-      >
+      <SectionCard className="p-4" ariaLabel="Sub-agent parallelism">
         <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
           loading parallelism settings…
         </span>
-      </section>
+      </SectionCard>
     );
   }
 
@@ -510,15 +490,14 @@ function SubAgentParallelismCard() {
               setDraft((d) => ({ ...d, [field]: Math.min(max, Math.max(min, base + delta)) }));
             }}
             aria-label={`${delta > 0 ? "Increase" : "Decrease"} ${label}`}
-            className="w-8 h-8 rounded-lg grid place-items-center border-[1.5px] text-[13px] font-semibold shrink-0"
-            style={{ borderColor: styles.border, color: styles.textSecondary, background: styles.bg }}
+            /* R126-3f-3: the stepper buttons = the well + rim (TOKENS §10). */
+            className="w-8 h-8 rounded-lg grid place-items-center border border-clay-rim bg-well text-[13px] font-semibold text-muted shrink-0 transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
           >
             {delta > 0 ? "+" : "−"}
           </button>
         ))}
         <span
-          className="w-14 text-center text-[13px] font-semibold tabular-nums rounded-lg py-1"
-          style={{ background: withAlpha(styles.accent, 0.09), color: styles.accent }}
+          className="w-14 text-center text-[13px] font-semibold tabular-nums rounded-lg py-1 bg-accent-tint text-accent-deep"
           aria-label={inputLabel}
         >
           {draft[field] ?? current[field]}
@@ -530,21 +509,18 @@ function SubAgentParallelismCard() {
   const dirty = draft.maxParallel !== undefined || draft.perKeyLimit !== undefined;
 
   return (
-    <section
-      className="rounded-2xl border-[1.5px] p-4 flex flex-col gap-4"
-      style={{ background: styles.card, borderColor: styles.border }}
-      aria-label="Sub-agent parallelism"
-    >
+    <SectionCard className="p-4 flex flex-col gap-4" ariaLabel="Sub-agent parallelism">
       <div className="flex items-center gap-2 flex-wrap">
-        <Workflow size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <Workflow size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Sub-agent parallelism
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-medium"
-            style={{ color: update.isError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+            className={`text-[11px] font-medium ${
+              update.isError ? "text-danger-deep" : "text-success-deep"
+            }`}
           >
             {msg}
           </span>
@@ -582,13 +558,12 @@ function SubAgentParallelismCard() {
           onClick={() => update.mutate(draft)}
           disabled={!dirty || update.isPending}
           aria-label="Save sub-agent parallelism settings"
-          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 disabled:opacity-50"
-          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-50"
         >
           {update.isPending ? "Saving…" : "Save"}
         </button>
       </div>
-    </section>
+    </SectionCard>
   );
 }
 
@@ -649,29 +624,21 @@ function SubAgentSupervisionCard() {
 
   if (settingsQuery.isError) {
     return (
-      <section
-        className="rounded-2xl border-[1.5px] p-4"
-        style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Sub-agent supervision"
-      >
-        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+      <SectionCard className="p-4" ariaLabel="Sub-agent supervision">
+        <p className="text-[11px] text-danger-deep" role="alert">
           {coreUnreachableHint} to tune sub-agent supervision.
         </p>
-      </section>
+      </SectionCard>
     );
   }
   const current = settingsQuery.data;
   if (settingsQuery.isLoading || current === undefined) {
     return (
-      <section
-        className="rounded-2xl border-[1.5px] p-4"
-        style={{ background: styles.card, borderColor: styles.border }}
-        aria-label="Sub-agent supervision"
-      >
+      <SectionCard className="p-4" ariaLabel="Sub-agent supervision">
         <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
           loading supervision settings…
         </span>
-      </section>
+      </SectionCard>
     );
   }
 
@@ -725,8 +692,7 @@ function SubAgentSupervisionCard() {
         </div>
         {!valid ? (
           <div
-            className="text-[11px] font-medium"
-            style={{ color: SEMANTIC_COLORS.danger }}
+            className="text-[11px] font-medium text-danger-deep"
             role="alert"
             data-testid={`${testId}-error`}
           >
@@ -744,12 +710,11 @@ function SubAgentSupervisionCard() {
           value={value}
           onChange={(e) => onChange(e.target.value)}
           aria-label={inputLabel}
-          className="w-20 h-8 rounded-lg border-[1.5px] px-2.5 font-mono text-[11px] outline-none text-right"
-          style={{
-            background: styles.bg,
-            borderColor: !valid ? SEMANTIC_COLORS.danger : styles.border,
-            color: styles.text,
-          }}
+          /* R126-3f-3: THE WELL + rim; the invalid state swaps the rim for
+           * the danger outline (§11). */
+          className={`w-20 h-8 rounded-lg border px-2.5 font-mono text-[11px] outline-none text-right bg-well text-ink ${
+            !valid ? "border-danger-deep" : "border-clay-rim"
+          }`}
         />
         <span className="text-[11px] font-mono shrink-0" style={{ color: styles.textTertiary }}>
           {suffix}
@@ -759,21 +724,18 @@ function SubAgentSupervisionCard() {
   );
 
   return (
-    <section
-      className="rounded-2xl border-[1.5px] p-4 flex flex-col gap-2.5"
-      style={{ background: styles.card, borderColor: styles.border }}
-      aria-label="Sub-agent supervision"
-    >
+    <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Sub-agent supervision">
       <div className="flex items-center gap-2 flex-wrap">
-        <Activity size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <Activity size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Sub-agent supervision
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-medium"
-            style={{ color: msgIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+            className={`text-[11px] font-medium ${
+              msgIsError ? "text-danger-deep" : "text-success-deep"
+            }`}
           >
             {msg}
           </span>
@@ -820,13 +782,12 @@ function SubAgentSupervisionCard() {
           onClick={onSave}
           disabled={!dirty || !heartbeatValid || !stallValid || save.isPending}
           aria-label="Save sub-agent supervision settings"
-          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 disabled:opacity-50"
-          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-50"
         >
           {save.isPending ? "Saving…" : "Save"}
         </button>
       </div>
-    </section>
+    </SectionCard>
   );
 }
 

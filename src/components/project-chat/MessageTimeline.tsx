@@ -66,8 +66,9 @@ import { useReducedMotion } from "framer-motion";
 // Motion vocabulary: the height + width growth are CSS transitions (quick
 // tier, 200ms, the app's one ease — MOTION.md §2/§1), collapsed to 0s jumps
 // under prefers-reduced-motion (framer-motion's useReducedMotion — MOTION.md
-// rule 4). Colors ride the CSS-var leg (bg-muted / bg-ink / bg-accent) per
-// TOKENS §1 rule 4.
+// rule 4). Colors ride the CSS-var leg (bg-muted / bg-ink / bg-accent-deep
+// — R126-3d-2: the active bar's DEEP accent marker fill) per TOKENS §1
+// rule 4.
 
 /** One user exchange in the transcript — the row's data. */
 export interface TimelineExchange {
@@ -450,13 +451,14 @@ export function MessageTimeline({
                   pill on hover, never a circle): height follows the
                   button's animated box (6→9), width animates on the same
                   quick-tier tween (10→28, the dominant leg), kind-colored
-                  on the CSS-var leg — accent for the ACTIVE exchange (the
-                  scroll-owned highlight), ink while previewed, muted at
-                  rest (TOKENS §1a's quiet neutrals). */}
+                  on the CSS-var leg — the DEEP accent tier for the ACTIVE
+                  exchange (R126-3d-2: bg-accent-deep, TOKENS §1d's marker
+                  fill — the scroll-owned highlight), ink while previewed,
+                  muted at rest (TOKENS §1a's quiet neutrals). */}
               <span
                 aria-hidden="true"
                 className={`h-full rounded-full ${
-                  isActive ? "bg-accent" : isPreviewed ? "bg-ink" : "bg-muted"
+                  isActive ? "bg-accent-deep" : isPreviewed ? "bg-ink" : "bg-muted"
                 }`}
                 style={{
                   width: targets[i].width,

@@ -8,6 +8,7 @@ import { Search } from "lucide-react";
 import {
   ArrowLeft,
   BarChart3,
+  ChevronDown,
   CircleAlert,
   FolderOpen,
   LayoutDashboard,
@@ -22,6 +23,8 @@ import {
   X,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+// R126 (MOTION.md §2): the disclosure spring — imported, never hand-rolled.
+import { DISCLOSURE_SPRING } from "../../lib/motion";
 import { ApiError, pickFolderViaBackend, type Project, type Session } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { SEMANTIC_COLORS } from "../../lib/semantics";
@@ -85,10 +88,15 @@ function ProjectTile({
       style={{
         width: size,
         height: size,
+        // R126 (mobile letter-avatar law): the rounded-square identity mark —
+        // radius ≈ 33% of size (the mobile 38% read at PC's 24px tier), the
+        // FLAT project color (the pre-R126 1px black rim is retired — the
+        // tile rides the clay small shadow for its edge, exactly like the
+        // mobile's neutral avatar tile).
         borderRadius: radius,
         fontSize,
         background: color,
-        border: "1px solid rgba(0, 0, 0, 0.14)",
+        boxShadow: "var(--ac-clay-shadow-sm)",
       }}
       aria-hidden
     >
@@ -98,22 +106,27 @@ function ProjectTile({
 }
 
 /**
- * AcuteLogo (round-33; ROUND-49 redesign): the custom app mark — a rounded
- * orange tile with a WHITE CAT-FACE SILHOUETTE (owner round-49: "the logo of
- * our application should be a silhouette of the face of a cat… a proper SVG
- * icon… detailed enough"). The mark: two pointed ears, a gently dipping
- * crown, rounded cheeks tapering to a soft chin, two slanted almond eyes and
- * a small triangular nose punched out of the silhouette (evenodd holes, the
- * tile's gradient shows through) — detailed enough to read as a cat face
- * from 16px (favicon) to 52px (chat empty state) without turning to mud.
- * R60-C: a mark WITH a click handler renders a real <button> (hover morphs
- * the mark into a panel-left icon, click toggles); a DECORATIVE mark renders
- * a <span> — the TitleBar's identity control is a <button> that WRAPS the
- * logo, and interactive content may never nest, so the logo inside it is
+ * AcuteLogo (round-33; ROUND-49 redesign; R126 clay identity): the custom app
+ * mark — a rounded clay tile with a WHITE CAT-FACE SILHOUETTE (owner round-49:
+ * "the logo of our application should be a silhouette of the face of a cat…
+ * a proper SVG icon… detailed enough"). The mark: two pointed ears, a gently
+ * dipping crown, rounded cheeks tapering to a soft chin, two slanted almond
+ * eyes and a small triangular nose punched out of the silhouette (evenodd
+ * holes, the tile's gradient shows through) — detailed enough to read as a
+ * cat face from 16px (favicon) to 52px (chat empty state) without turning to
+ * mud. R60-C: a mark WITH a click handler renders a real <button> (hover
+ * morphs the mark into a panel-left icon, click toggles); a DECORATIVE mark
+ * renders a <span> — the TitleBar's identity control is a <button> that WRAPS
+ * the logo, and interactive content may never nest, so the logo inside it is
  * the non-interactive variant. Used by the title-bar identity control, the
  * mobile drawer trigger, the floating show-sidebar button, the chat empty
  * state, and the connection splash — all through the same `size` prop. The
  * mark mirrors public/favicon.svg 1:1.
+ * R126 (the Clay Companion redesign): the tile's identity is the CLAY accent
+ * family now — the gradient rides the live --ac-* vars (accent → accentDeep,
+ * 155°; the pre-R126 hardcoded orange stops are retired along with their
+ * orange-only glow — the shadow is the clay small-step recipe). Theme-aware,
+ * audit-clean (zero hardcoded hexes — the count only goes down).
  */
 export function AcuteLogo({
   size = 32,
@@ -144,8 +157,14 @@ export function AcuteLogo({
       width: size,
       height: size,
       borderRadius: radius ?? Math.round(size * 0.28),
-      background: "linear-gradient(155deg, #FF8147 0%, #FF6B2C 52%, #ED5A17 100%)",
-      boxShadow: "inset 0 1px 0 rgba(255,255,255,0.32), 0 2px 10px rgba(255,107,44,0.35)",
+      // R126: the clay accent family, 155° — light mode runs terracotta →
+      // ember (#C4653F → #B45330); dark mode's collapsed tiers read as a
+      // soft salmon tile (the white cat holds 4.5:1 on every stop). CSS
+      // vars resolve at paint, so the mark follows the live theme.
+      background:
+        "linear-gradient(155deg, var(--ac-accent) 0%, var(--ac-accent) 55%, var(--ac-accent-deep) 100%)",
+      // R126: the clay small-step shadow (warm ink, never the orange glow).
+      boxShadow: "var(--ac-clay-shadow-sm)",
     },
   };
   const mark = (
@@ -317,7 +336,13 @@ export function Sidebar() {
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
       className={cn(
-        "shrink-0 flex flex-col rounded-2xl border-[1.5px] transition-[width] duration-200",
+        // R126 (the Clay Companion redesign): the panel is a RAISED CLAY CARD
+        // — the warm rim hairline (1px, all four sides — the 1.5px bento
+        // border is retired) + the layered clay shadow (.ac-clay, TOKENS
+        // §5/§9). The sidebarBg fill stays (the owner's distinct-surface
+        // verdict, R30) — the rim derives from the theme, so every flavor
+        // keeps its harmonious tint.
+        "ac-clay shrink-0 flex flex-col rounded-2xl border transition-[width] duration-200",
         // R101-C (owner v0.98.0: the minimized rail "was not looking
         // pro-good"): minimized, the panel opens its HORIZONTAL clip so the
         // rail's hover/focus label chips (RailLabel below) can paint past
@@ -333,19 +358,18 @@ export function Sidebar() {
         // bit squished when it is minimized"): the rail widens 48→56px
         // (w-12→w-14) with 40px buttons + px-2 side insets — the 48px rail's
         // 36px buttons left only 4.5px of breathing room per side (the
-        // 1.5px borders + 16px panel corners ate into it) and read as
-        // cramped. 56/40/8/8 is the roomy activity-bar geometry (VS Code's
-        // own ratio) — same expanded 240px, same 200ms width transition.
+        // corners ate into it) and read as cramped. 56/40/8/8 is the roomy
+        // activity-bar geometry (VS Code's own ratio).
         minimized ? "w-14 overflow-x-visible overflow-y-clip" : "w-60 overflow-hidden",
         // ROUND-45: below md this is an overlay drawer, not a flex column.
-        "max-md:fixed max-md:inset-y-3 max-md:left-3 max-md:z-50 max-md:shadow-2xl",
+        "max-md:fixed max-md:inset-y-3 max-md:left-3 max-md:z-50",
         mobileOpen ? "max-md:translate-x-0" : "max-md:-translate-x-[120%] max-md:pointer-events-none",
         "max-md:transition-transform max-md:duration-200",
       )}
       aria-label="Main sidebar"
       style={{
         backgroundColor: styles.sidebarBg,
-        borderColor: styles.sidebarBorder,
+        borderColor: styles.clayRim,
       }}
     >
       {/* R60-C: NO header row — the nav starts at the panel's top (the
@@ -413,7 +437,9 @@ export function Sidebar() {
           {/* Divider — generous spacing around it (owner round-33).
               R100-F: 1.5→1px hairline (TOKENS §5 — 1.5px is top-level
               bento only; this is an inside-panel line). */}
-          <div className="shrink-0 mx-3 my-4 border-t" style={{ borderColor: styles.sidebarBorder }} />
+          {/* R126: the interior divider is the hairline tier (borderSubtle —
+              TOKENS §1a); the panel's own rim carries the visible edge. */}
+          <div className="shrink-0 mx-3 my-4 border-t" style={{ borderColor: styles.borderSubtle }} />
 
           {/* PROJECTS SECTION — expandable tree */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -426,7 +452,7 @@ export function Sidebar() {
               "header actions" in this app's chrome. */}
           <div
             className="shrink-0 border-t px-2.5 pb-3 pt-2.5"
-            style={{ borderColor: styles.sidebarBorder }}
+            style={{ borderColor: styles.borderSubtle }}
           >
             {/* ROUND-40: small icon row above the prominent Settings button —
                 the bell icon aligned to the right (the footer's right-aligned
@@ -503,8 +529,11 @@ function RailLabel({
     <span
       aria-hidden
       data-testid="rail-label"
-      className="pointer-events-none absolute left-full top-1/2 z-50 ml-2.5 -translate-y-1/2 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-[12px] font-medium opacity-0 shadow-sm transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 group-focus-within:opacity-100"
-      style={{ background: styles.sidebarBg, borderColor: styles.sidebarBorder, color: styles.text }}
+      // R126: the label chip is a rising clay surface — card fill + the
+      // warm rim + the UPWARD shadow leg (.ac-clay-sheet, MOTION §4: docks
+      // and anything that rises cast their shadow up).
+      className="ac-clay-sheet pointer-events-none absolute left-full top-1/2 z-50 ml-2.5 -translate-y-1/2 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-[12px] font-medium opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 group-focus-within:opacity-100"
+      style={{ background: styles.card, borderColor: styles.clayRim, color: styles.text }}
     >
       {text}
     </span>
@@ -618,14 +647,14 @@ function SettingsSidebarBody({
                 className={cn(
                   "relative flex h-8 items-center gap-2.5 rounded-lg px-3 text-[13px] transition-colors",
                   active
-                    ? "bg-accent-soft font-medium text-accent"
+                    ? "bg-accent-tint font-medium text-accent-deep"
                     : "font-normal text-muted hover:bg-hover",
                 )}
               >
-                {/* Selection grammar (TOKENS §6): accent text + soft bg + the
-                    2px accent bar on the leading edge. */}
+                {/* Selection grammar (R126, TOKENS §1d/§10): the accent TINT
+                    container + deep accent ink + the 2px accentDeep bar. */}
                 {active ? (
-                  <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />
+                  <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent-deep" />
                 ) : null}
                 <Icon size={16} strokeWidth={2} className="shrink-0" aria-hidden />
                 <span className="truncate">{label}</span>
@@ -701,11 +730,11 @@ function MinimizedRail({
       // geometry change that answers the squish (see the aside's comment).
       className={cn(
         "group relative w-10 h-10 shrink-0 grid place-items-center rounded-lg transition-colors",
-        active ? "bg-accent-soft text-accent" : "text-muted hover:bg-hover",
+        active ? "bg-accent-tint text-accent-deep" : "text-muted hover:bg-hover",
       )}
     >
       {active ? (
-        <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />
+        <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent-deep" />
       ) : null}
       {icon}
       <RailLabel text={label} styles={styles} />
@@ -761,7 +790,7 @@ function MinimizedRail({
             () => navigate("/"),
             "rail-back-dashboard",
           )}
-          <div className="w-9 shrink-0 border-t my-1" style={{ borderColor: styles.sidebarBorder }} />
+          <div className="w-9 shrink-0 border-t my-1" style={{ borderColor: styles.borderSubtle }} />
           {SETTINGS_SECTIONS.map(({ id, label, icon: Icon }) =>
             railBtn(
               label,
@@ -788,7 +817,7 @@ function MinimizedRail({
           {/* Hairline divider (the full sidebar's section divider, rail-sized).
               R100-F: 1.5→1px hairline. R102-B: w-8→w-9 (the 56px rail's
               proportion). */}
-          <div className="w-9 shrink-0 border-t my-1" style={{ borderColor: styles.sidebarBorder }} />
+          <div className="w-9 shrink-0 border-t my-1" style={{ borderColor: styles.borderSubtle }} />
 
       {/* PROJECT TILES — click opens the project's chat; the tile is the
           project's own color mark (ProjectTile), so color identity
@@ -900,10 +929,12 @@ function NavButton({
   icon: typeof LayoutDashboard; label: string; active: boolean; onClick: () => void;
 }) {
   // R100-F (research §C2 P2): 40→32px row (the row table), 13px/400 label
-  // (500 + accent when active) — the E1 settings-nav selection grammar
-  // (TOKENS §6): accent text + bg-accent-soft + the 2px accent bar on the
-  // leading edge. The ROUND-42 solid-accent fill + accent glow is retired;
-  // hover is the CSS wash (the JS handlers are gone).
+  // (500 + accent when active). R126 (the Clay Companion selection
+  // grammar — TOKENS §1d/§10, mobile "2px when selected, ALWAYS"): the
+  // active row carries the accent TINT container (bg-accent-tint) + the
+  // DEEP accent ink (text-accent-deep — the tier that holds AA as text) +
+  // the 2px accentDeep marker bar. Hover stays the CSS wash; the JS
+  // handlers stay gone.
   return (
     <button
       onClick={onClick}
@@ -911,12 +942,12 @@ function NavButton({
       className={cn(
         "relative flex h-8 items-center gap-2.5 rounded-lg px-3 text-[13px] transition-colors",
         active
-          ? "bg-accent-soft font-medium text-accent"
+          ? "bg-accent-tint font-medium text-accent-deep"
           : "font-normal text-muted hover:bg-hover",
       )}
     >
       {active ? (
-        <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />
+        <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent-deep" />
       ) : null}
       <Icon size={16} strokeWidth={2} className="shrink-0" aria-hidden />
       <span>{label}</span>
@@ -959,22 +990,25 @@ function SettingsButton() {
       onClick={() => navigate("/settings")}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "relative w-full h-8 flex items-center gap-2.5 px-2.5 rounded-lg border-[1.5px] border-line transition-colors",
+        // R126 (the Clay Companion redesign): the prominent Settings card —
+        // the clay card treatment (warm rim hairline, the 1.5px bento border
+        // retired) + the clay small shadow; the icon tile rides the accent
+        // TINT (the ClayIconChip recipe — hue without loudness).
+        "relative w-full h-8 flex items-center gap-2.5 px-2.5 rounded-lg border transition-colors",
         active
-          ? "bg-accent-soft"
+          ? "bg-accent-tint"
           : "bg-card hover:bg-hover hover:border-[color:var(--ac-border-strong)]",
       )}
-      style={active ? { borderColor: withAlpha(styles.accent, 0.4) } : undefined}
+      style={{ borderColor: active ? withAlpha(styles.accent, 0.4) : styles.clayRim, boxShadow: "var(--ac-clay-shadow-sm)" }}
     >
-      {/* R100-F: the icon tile drops to the CSS-var leg (bg-accent-soft +
-          text-accent utilities, rounded-lg) and the label to the weight law
-          (400, 500 + accent when active). */}
+      {/* R126: the icon tile = the mobile ClayIconChip recipe — accentTint
+          fill + the deep accent glyph. */}
       <span
-        className="w-7 h-7 rounded-lg grid place-items-center shrink-0 bg-accent-soft text-accent"
+        className="w-7 h-7 rounded-lg grid place-items-center shrink-0 bg-accent-tint text-accent-deep"
       >
         <Settings size={14} />
       </span>
-      <span className={cn("text-[13px] font-normal text-ink", active && "font-medium text-accent")}>
+      <span className={cn("text-[13px] font-normal text-ink", active && "font-medium text-accent-deep")}>
         Settings
       </span>
       {/* R99-C: the update-pending dot (see UpdatePendingDot above). */}
@@ -1071,9 +1105,11 @@ function ProjectSection() {
         <div className="flex items-center gap-1.5 min-w-0">
           <Kicker>Projects</Kicker>
           {projects.length > 0 ? (
+            // R126: the count chip = the neutral badge tone (TOKENS §11 —
+            // the well fill + the clay rim hairline + the secondary ink).
             <span
-              className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full tabular-nums"
-              style={{ color: styles.textTertiary, background: styles.subtle }}
+              className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full tabular-nums border"
+              style={{ color: styles.textSecondary, background: styles.surfaceWell, borderColor: styles.clayRim }}
             >
               {projects.length}
             </span>
@@ -1083,9 +1119,10 @@ function ProjectSection() {
           onClick={() => setShowAddDialog(true)}
           title="Add project"
           aria-label="Add project"
-          // R100-F: a ≥28px target on the CSS-var leg (bg-accent-soft →
-          // bg-accent-faded hover; the scale-110 fidget is retired).
-          className="w-7 h-7 grid place-items-center rounded-lg bg-accent-soft text-accent transition-colors hover:bg-accent-faded"
+          // R100-F: a ≥28px target on the CSS-var leg. R126: the accent TINT
+          // container + the DEEP glyph (the ClayIconChip recipe) — hover
+          // deepens the tint, never a fidget.
+          className="w-7 h-7 grid place-items-center rounded-lg bg-accent-tint text-accent-deep transition-colors hover:bg-accent-faded"
         >
           <Plus size={14} strokeWidth={2.5} />
         </button>
@@ -1159,42 +1196,76 @@ function ProjectSection() {
 
           return (
             <div key={project.id}>
-              {/* Project row — click toggles sessions; the + button starts a
-                  new session directly (owner round-33). ROUND-42: the running
-                  animation lives HERE when collapsed. */}
+              {/* Project row — R126 (SCREENS.md §2 law #2, the navigation
+                  decision): the row body NAVIGATES into the project's chat
+                  (the pre-R126 body only toggled expansion — entering a
+                  project required hunting a session row), and a dedicated
+                  chevron hit area toggles the session tree. The + button
+                  starts a new session directly (owner round-33). ROUND-42:
+                  the running animation lives HERE when collapsed. */}
               <ProjectRow
                 project={project}
                 active={isActive}
                 expanded={isExpanded}
                 running={runningProjects.has(project.id)}
                 onToggle={() => toggleProject(project.id)}
+                onOpen={() => navigate(`/project/${project.id}/chat`)}
                 onNewSession={() => void createSessionFor(project.id, project.name)}
               />
               {/* Sessions underneath */}
               <AnimatePresence initial={false}>
                 {isExpanded && (
                   <motion.div
+                    // R126 (MOTION §4, the disclosure grammar): expand rides
+                    // the DISCLOSURE spring (one soft settle, {180, 24} —
+                    // imported, never hand-rolled); collapse is a TIMING
+                    // (200ms) so closing never bounces (the mobile R118-C
+                    // law). The opacity fade rides both legs.
                     initial={{ height: 0, opacity: 0 }}
                     animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
+                    exit={{ height: 0, opacity: 0, transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] } }}
+                    transition={DISCLOSURE_SPRING}
                     className="overflow-hidden"
                   >
-                    {/* ROUND-43: the tree rail is softened to a hairline so the
-                        bordered session rows (below) carry the depth. */}
-                    <div className="ml-[19px] pl-2.5 border-l space-y-1 py-1" style={{ borderColor: withAlpha(styles.textTertiary, 0.14) }}>
-                      {projSessions.slice(0, 8).map((session) => (
-                        <SessionRow
-                          key={session.id}
-                          session={session}
-                          projectId={project.id}
-                          active={session.id === activeSessionId}
-                        />
+                    {/* R126 (the Clay Companion redesign, mobile session-list
+                        law): the sessions render in ONE RECESSED WELL — the
+                        tree rail + per-row bordered cards (the R43 spelling)
+                        retire in favor of bg-well + hairline dividers between
+                        rows (the differentiation the owner's R43 verdict
+                        asked for, one spelling calmer). The well nests under
+                        the project row's tile column; rows are flat, the
+                        ACTIVE row pops with the accent tint + the 2px
+                        accentDeep bar. */}
+                    <div
+                      data-session-well
+                      className="ml-[13px] mr-1 my-1 rounded-lg border bg-well py-1"
+                      style={{ borderColor: styles.clayRim }}
+                    >
+                      {projSessions.slice(0, 8).map((session, i) => (
+                        <Fragment key={session.id}>
+                          {i > 0 && (
+                            <div
+                              aria-hidden
+                              className="mx-2 border-t"
+                              style={{ borderColor: styles.borderSubtle }}
+                            />
+                          )}
+                          <SessionRow
+                            session={session}
+                            projectId={project.id}
+                            active={session.id === activeSessionId}
+                          />
+                        </Fragment>
                       ))}
                       {projSessions.length > 8 && (
-                        <span className="block px-2 py-1 text-[10px] tabular-nums" style={{ color: styles.textTertiary }}>
+                        <button
+                          onClick={() => navigate(`/project/${project.id}`)}
+                          className="block w-full px-2 py-1 text-left text-[10px] tabular-nums transition-colors hover:bg-hover"
+                          style={{ color: styles.textTertiary }}
+                          aria-label={`Show all ${projSessions.length} sessions of ${project.name}`}
+                        >
                           +{projSessions.length - 8} more
-                        </span>
+                        </button>
                       )}
                     </div>
                   </motion.div>
@@ -1231,7 +1302,7 @@ function ProjectSection() {
 }
 
 function ProjectRow({
-  project, active, expanded, running, onToggle, onNewSession,
+  project, active, expanded, running, onToggle, onOpen, onNewSession,
 }: {
   project: Project;
   active: boolean;
@@ -1241,7 +1312,10 @@ function ProjectRow({
    * session is going on and I collapse the project, the animation should
    * move on to the project itself"). */
   running: boolean;
+  /** R126 (SCREENS.md §2 law #2): the row body's destination — the
+   * project's chat. The chevron owns the tree toggle. */
   onToggle: () => void;
+  onOpen: () => void;
   onNewSession: () => void;
 }) {
   const styles = useThemeStyles();
@@ -1252,6 +1326,13 @@ function ProjectRow({
       // flat 24px tile, a 12px/400 label (500 + ink when active). Hover =
       // the CSS wash + group-hover action reveal — the JS hovered state is
       // retired (TOKENS §6); the border drops 1.5→1px.
+      // R126: the row is a NAVIGATION row (SCREENS.md §2 law #2) — the
+      // body opens the project's chat; the CHEVRON button toggles the
+      // session tree (hover-revealed, rotating with the expand state). The
+      // round-33 "no chevron" verdict was about RESTING noise — a
+      // hover-revealed affordance keeps the clean rest while making the
+      // toggle explicit (the explorer-class row/chevron split every modern
+      // file navigator uses).
       className="group relative h-[30px] flex items-center gap-2 rounded-lg px-2 cursor-pointer transition-colors hover:bg-hover"
       style={{
         // ROUND-48 (R48-a): the active highlight follows the PROJECT'S OWN
@@ -1261,13 +1342,27 @@ function ProjectRow({
         border: active ? `1px solid ${withAlpha(project.color, 0.4)}` : "1px solid transparent",
         background: active ? withAlpha(project.color, 0.1) : undefined,
       }}
-      onClick={onToggle}
+      onClick={onOpen}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === "Enter") onToggle(); }}
-      aria-expanded={expanded}
-      aria-label={`Project ${project.name} — click to ${expanded ? "collapse" : "expand"} sessions${running ? " (working)" : ""}`}
+      onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}
+      aria-label={`Open ${project.name}${running ? " (working)" : ""}`}
     >
+      {/* R126: the tree toggle — its own button with its own aria-expanded,
+          hover-revealed exactly like the + new-session action beside it. */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onToggle(); }}
+        aria-label={`${expanded ? "Collapse" : "Expand"} ${project.name} sessions`}
+        title={`${expanded ? "Collapse" : "Expand"} sessions`}
+        aria-expanded={expanded}
+        data-testid={`project-toggle-${project.id}`}
+        className="relative z-20 w-6 h-6 grid place-items-center rounded-lg transition-opacity duration-150 hover:bg-hover"
+        style={{ color: styles.textTertiary }}
+      >
+        <span className="grid place-items-center transition-transform duration-200" style={{ transform: expanded ? "rotate(0deg)" : "rotate(-90deg)" }}>
+          <ChevronDown size={12} />
+        </span>
+      </button>
       {/* R100-F: the flat tile (see ProjectTile) — the ROUND-42 gradient
           decoration is retired. */}
       <ProjectTile color={project.color} name={project.name} />
@@ -1300,7 +1395,7 @@ function ProjectRow({
         onClick={(e) => { e.stopPropagation(); onNewSession(); }}
         aria-label={`Start new session in ${project.name}`}
         title="New session"
-        className="relative z-20 w-7 h-7 grid place-items-center rounded-lg bg-accent-soft text-accent opacity-0 transition-opacity group-hover:opacity-100"
+        className="relative z-20 w-7 h-7 grid place-items-center rounded-lg bg-accent-tint text-accent-deep opacity-0 transition-opacity group-hover:opacity-100"
       >
         <Plus size={14} strokeWidth={2.5} />
       </button>
@@ -1421,31 +1516,34 @@ function SessionRow({
       data-session-row
       data-state={state}
       data-active={active ? "true" : "false"}
-      // R100-F: the dedicated border (the owner's R43 ask) on the utility
-      // leg — borderSubtle at rest, border on hover — with the dynamic
-      // ACTIVE/FAILED tints overriding via the JS inline leg; backgrounds:
-      // subtle at rest, the hover wash, accent-soft when active, the danger
-      // tints when failed (all CSS classes — zero JS hover state).
+      // R126 (the Clay Companion redesign): the row is a FLAT row inside the
+      // session WELL (the tree container owns the recess + the dividers —
+      // the per-row border/boxShadow of the R43 spelling retired with it;
+      // the differentiation contract moves to the well's dividers). ACTIVE
+      // = the accent TINT container + the 2px accentDeep marker (the
+      // selection grammar); FAILED = the danger wash; hover = the CSS wash.
+      // The `border` class stays (transparent at rest) so the geometry of
+      // the pinned selection tints never shifts.
       className={cn(
-        "group relative flex items-center gap-0.5 rounded-lg pl-0.5 pr-1 border transition-colors border-[color:var(--ac-border-subtle)]",
+        "group relative flex items-center gap-0.5 rounded-lg pl-0.5 pr-1 border transition-colors",
         active
-          ? "bg-accent-soft"
+          ? "bg-accent-tint"
           : state === "failed"
-            ? "bg-[color-mix(in_srgb,var(--ac-danger)_5%,transparent)] hover:bg-[color-mix(in_srgb,var(--ac-danger)_8%,transparent)]"
-            : "bg-subtle hover:bg-hover hover:border-line",
+            ? "border-transparent bg-[color-mix(in_srgb,var(--ac-danger)_5%,transparent)] hover:bg-[color-mix(in_srgb,var(--ac-danger)_8%,transparent)]"
+            : "border-transparent hover:bg-hover",
       )}
       style={{
         borderColor: active
           ? withAlpha(styles.accent, 0.45)
           : state === "failed"
             ? withAlpha(SEMANTIC_COLORS.danger, 0.35)
-            : undefined,
+            : "transparent",
       }}
     >
-      {/* Active indicator bar — the clear "currently selected" signal,
-          sitting just inside the row's border (the E1 selection grammar). */}
+      {/* Active indicator bar — the 2px accentDeep marker (R126 selection
+          grammar — "2px when selected, ALWAYS", the mobile law). */}
       <span
-        className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-accent transition-opacity"
+        className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-accent-deep transition-opacity"
         style={{ opacity: active ? 1 : 0 }}
         aria-hidden
       />
@@ -1456,6 +1554,7 @@ function SessionRow({
           "flex-1 min-w-0 h-[26px] flex items-center gap-2 px-2 text-[11px] font-normal text-muted truncate",
           active && "font-medium text-ink",
         )}
+        // R126: the label weight law stands; the ACTIVE tint rides the row.
         title={session.title ?? "Untitled"}
       >
         {/* ROUND-43 state-aware icon: running → spinner, failed → alert,
@@ -1476,7 +1575,9 @@ function SessionRow({
           <MessageSquare
             size={12}
             className="shrink-0"
-            style={{ color: active ? styles.accent : styles.textTertiary }}
+            // R126: the active glyph rides the DEEP accent (accent-as-text
+            // tier — TOKENS §1d), never the marker hue.
+            style={{ color: active ? styles.accentDeep : styles.textTertiary }}
           />
         )}
         <span className="truncate">{session.title ?? "Untitled"}</span>
@@ -1643,14 +1744,16 @@ function AddProjectDialog({
     <div className="fixed inset-0 z-50 grid place-items-center" style={{ background: "rgba(0,0,0,0.55)" }} onClick={onClose}>
       <div
         // R100-F: the ladder sweep — dialog radius 24→12px (rounded-xl, the
-        // dialogs tier of TOKENS §4), the floating softShadow (bentoShadow is
-        // wizard + primary CTA only), the section-tier heading (13px/600 —
+        // dialogs tier of TOKENS §4), the section-tier heading (13px/600 —
         // the 15px font-black is retired), the kicker-tier form label, the
-        // rounded-lg 40px input + Browse (1px hairlines), and the CTA at
-        // 13px/600 with NO glow and NO hover-scale (the chat Send precedent,
-        // §C4.6) — hover = opacity only, the universal press stays.
-        className="w-[min(440px,90vw)] rounded-xl border-[1.5px] p-5"
-        style={{ background: styles.card, borderColor: styles.borderStrong, boxShadow: styles.softShadow }}
+        // rounded-lg 40px input + Browse (1px hairlines). R126 (the Clay
+        // Companion redesign): the card rides the clay material — the warm
+        // rim hairline (the 1.5px bento border retired) + the layered clay
+        // shadow; the CTA is the QUIET-SOLID clay primary (accentDeep fill +
+        // accentText ink — COMPONENTS §4) with NO glow and NO hover-scale;
+        // hover = opacity only, the universal press stays.
+        className="ac-clay w-[min(440px,90vw)] rounded-xl border p-5"
+        style={{ background: styles.card, borderColor: styles.clayRim }}
         onClick={(e) => e.stopPropagation()}
         role="dialog" aria-modal="true" aria-label="Add a new project"
       >
@@ -1667,7 +1770,7 @@ function AddProjectDialog({
               {isTauri() || !demoData ? (
                 <button onClick={() => void handleBrowse()} disabled={picking}
                   className="h-10 shrink-0 flex items-center gap-1.5 rounded-lg border px-3.5 text-[12px] font-semibold disabled:opacity-60"
-                  style={{ background: styles.subtle, borderColor: styles.border, color: styles.textSecondary }}>
+                  style={{ background: styles.surfaceWell, borderColor: styles.clayRim, color: styles.textSecondary }}>
                   <FolderOpen size={13} /> Browse
                 </button>
               ) : null}
@@ -1682,8 +1785,13 @@ function AddProjectDialog({
           )}
           <button onClick={() => void submit()}
             disabled={rootPath.trim().length === 0 || createProject.isPending}
-            className="h-10 w-full rounded-full font-semibold text-[13px] transition-[opacity,transform] hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
-            style={{ background: styles.accent, color: styles.accentText, border: `1px solid ${styles.accent}` }}>
+            // R126 (COMPONENTS §4): the quiet-solid clay primary — the DEEP
+            // accent fill + contrast ink, rounded-lg (the input tier), the
+            // press collapse via the shadow swap. The pill radius + the
+            // self-border are retired (the solid-accent pill was the nova
+            // dialect).
+            className="ac-clay-pressed h-10 w-full rounded-lg font-semibold text-[13px] transition-[opacity,transform] hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
+            style={{ background: styles.accentDeep, color: styles.accentText }}>
             {createProject.isPending ? "Creating…" : "Create Project"}
           </button>
         </div>

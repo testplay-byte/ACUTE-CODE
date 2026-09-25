@@ -10,7 +10,11 @@ afterEach(cleanup);
 
 beforeEach(() => {
   resetTestState();
-  useProjectChatStore.setState({ chatFocusMode: true, appSidebarVisible: true });
+  // R126-3d-1 (the dead-layouts retirement): `chatFocusMode` left the store
+  // with the retired 3-panel/experimental gates — ChatFocusLayout is the ONE
+  // chat layout now, so there is no flag left to force; only the transient
+  // app-sidebar flag needs a deterministic reset here.
+  useProjectChatStore.setState({ appSidebarVisible: true });
 });
 
 describe("ChatFocusLayout (Round 33 — headerless chat panel)", () => {
@@ -114,6 +118,33 @@ describe("ChatFocusLayout geometry math (Round 43 + R87-A1 240px floor)", () => 
       // 13px chrome (chat floor 160 + 13 + 36).
       expect(chatMinWidthFor(w) + 13 + 36).toBeLessThanOrEqual(Math.max(w, 209));
     }
+  });
+});
+
+describe("ChatFocusLayout clay card material (R126-3d-1)", () => {
+  it("the chat window card rides the clay card species — 1px clay rim + .ac-clay + bg-card (the 1.5px bento border + softShadow retired)", async () => {
+    const projects = await getFixtureProjects().list();
+    renderWithProviders(<ChatFocusLayout project={projects[0]} />);
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: /message composer/i })).toBeTruthy(),
+    );
+
+    // The window card (same lookup the geometry tests pin — the first
+    // rounded-2xl div carries the inline minWidth).
+    const card = Array.from(document.querySelectorAll("div")).find((el) =>
+      el.className.includes("rounded-2xl"),
+    );
+    // R126-3d-1: the clay card species on the CLASS leg (COMPONENTS §3):
+    // 1px border-clay-rim rim + .ac-clay two-leg shadow + bg-card fill +
+    // the dark-mode-only matte top edge.
+    expect(card?.className).toContain("border-clay-rim");
+    expect(card?.className).toContain("ac-clay");
+    expect(card?.className).toContain("bg-card");
+    expect(card?.className).toContain("ac-clay-edge-dark");
+    // The pre-R126 inline material legs are gone — the card paints via the
+    // pattern classes, not inline borderColor/boxShadow.
+    expect(card?.style.borderColor).toBe("");
+    expect(card?.style.boxShadow).toBe("");
   });
 });
 

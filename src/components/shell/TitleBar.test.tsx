@@ -310,7 +310,10 @@ describe("TitleBar — Tauri chrome", () => {
     // R100-F re-pin: the radius snapped to the 5-step scale — rounded-2xl
     // (16px) for the top-level bar card (was the arbitrary 14px).
     expect(bar.className).toContain("rounded-2xl");
-    expect(bar.className).toContain("border-[1.5px]");
+    // R126 re-pin: the bar's edge is the 1px clay rim (TOKENS §5 — the
+    // 1.5px bento border retired with the Clay Companion redesign).
+    expect(bar.className).toContain("border");
+    expect(bar.className).not.toContain("border-[1.5px]");
     // The old full-bleed bottom-strip chrome is gone.
     expect(bar.className).not.toContain("border-b");
     expect(bar.className).toContain("backdrop-blur");

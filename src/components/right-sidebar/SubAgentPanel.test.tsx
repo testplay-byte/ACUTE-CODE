@@ -283,21 +283,29 @@ describe("SubAgentPanel (R48-e2 chat transcript)", () => {
 
     // ROUND-51 (R51-b): NO accent left rail on the final report (the owner's
     // "AI slope" complaint) — the report bubble's border is IDENTICAL to a
-    // plain assistant bubble: no borderLeft, the same borderColor, and the
-    // quiet "Final report" mini-label wears the same tertiary color as the
-    // bot glyph (NOT the accent — the header's code chip is the accent
+    // plain assistant bubble: no borderLeft, the same border spelling, and
+    // the quiet "Final report" mini-label wears the same tertiary color as
+    // the bot glyph (NOT the accent — the header's code chip is the accent
     // reference).
+    // R126-3e re-pin: the bubbles ride the WELL on the CLASS leg (ac-well
+    // paints the fill + the rim hairline) — the inline borderColor legs are
+    // empty, so the identity contract pins the shared class + the absence of
+    // any accent class instead. The code chip's accent reference moved to
+    // its own class pair (bg-accent-tint + text-accent-deep).
     const [plainBubble, reportBubble] = screen.getAllByTestId("subagent-assistant-bubble");
     expect(reportBubble.style.borderLeft).toBe("");
     expect(reportBubble.style.borderLeftWidth).toBe("");
-    expect(reportBubble.style.borderColor).not.toBe("");
-    expect(reportBubble.style.borderColor).toBe(plainBubble.style.borderColor);
-    const accentColor = screen.getByTestId("subagent-code-chip").style.color;
-    expect(reportBubble.style.borderColor).not.toBe(accentColor);
+    expect(reportBubble.className).toContain("ac-well");
+    expect(reportBubble.className).toBe(plainBubble.className);
+    expect(reportBubble.className).not.toContain("bg-accent-tint");
+    const codeChip = screen.getByTestId("subagent-code-chip");
+    expect(codeChip.className).toContain("bg-accent-tint");
+    expect(codeChip.className).toContain("text-accent-deep");
+    expect(codeChip.style.color).toBe("");
     const label = screen.getByTestId("subagent-final-report-label");
     const botGlyph = reportBubble.previousElementSibling as HTMLElement;
     expect(label.style.color).toBe(botGlyph.style.color);
-    expect(label.style.color).not.toBe(accentColor);
+    expect(label.style.color).not.toBe("");
 
     // Terminal run: no live tail, no clock; the chip reads done.
     expect(screen.queryByText("working…")).toBeNull();

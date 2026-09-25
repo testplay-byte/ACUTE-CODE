@@ -36,7 +36,8 @@
  *    R95-F inline readout — "It should not show that value alongside it";
  *    every number is hover/popover-only now); the popover has a
  *    hover-bridge (grace-period close, cancellable from the popover) and the
- *    ring color grades accent → amber → danger;
+ *    ring color grades the theme's deep pairs (accentDeep → warningDeep
+ *    → dangerDeep — R126-3d-4);
  *  - the Session section splits Main agent / Sub-agents / Combined (with a
  *    pre-R51 no-`usage` report falling back to zeros);
  *  - the toolbar never overlaps: shrink-0 clusters + flex spacer + wrap.
@@ -103,7 +104,11 @@ import {
   type ProviderView,
   type AgentsBackend,
 } from "../../../lib/api";
-import { SEMANTIC_COLORS } from "../../../lib/semantics";
+// R126-3d-4: the ring's tones are THEME-RESOLVED now (accentDeep primary +
+// warningDeep/dangerDeep tiers) — the expected arcs derive from the same
+// style source the component paints with, not raw-hex constants.
+import { deriveThemeStyles } from "../../../lib/themes";
+import { useThemeStore } from "../../../lib/theme-store";
 import { useConfigStore } from "../../../lib/config-store";
 import { useNotificationStreamStore } from "../../../hooks/use-notifications";
 import { useSettingsStore } from "../../../lib/settings-store";
@@ -121,7 +126,7 @@ import {
   CONTEXT_DONUT_DANGER,
   CONTEXT_DONUT_WARN,
   contextDonutColor,
-  DONUT_WARN_COLOR,
+  type DonutTones,
   POPOVER_OPEN_INTENT_MS,
 } from "./ContextDonut";
 
@@ -473,6 +478,16 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     // rounded-xl, the scale utility (same pixels as the old arbitrary value
     // only at the sanctioned step; no rounded-[18px] spelling anymore).
     expect(box.className).toContain("rounded-xl");
+    // R126-3d-4 re-pin: the box is a CLAY CARD — bg-card fill + the 1px clay
+    // rim hairline (border-clay-rim; the resting border-color declaration
+    // in .composer-shell retired with it — index.css — so the class owns the
+    // rest while :focus-within keeps the accent edge + halo).
+    expect(box.className).toContain("border-clay-rim");
+    expect(box.className).toContain("bg-card");
+    expect(box.className).not.toContain("border-[1.5px]");
+    // The resting fill is the CLASS leg too — no inline background at rest
+    // (dragActive — a REAL state — is the only inline painter left).
+    expect(box.style.background).toBe("");
     expect(box.contains(textarea())).toBe(true);
 
     const toolbar = box.querySelector("[data-composer-toolbar]") as HTMLElement;
@@ -2202,25 +2217,52 @@ describe("Composer: context donut (owner spec G)", () => {
     vi.useRealTimers();
   });
 
-  it("the ring color grades by pressure: amber at 70%, danger at 90% (R51-c)", async () => {
+  it("the ring color grades by pressure: the warn tone at 70%, danger at 90% (R51-c; R126-3d-4 re-pinned — the tones are the theme's DEEP pairs)", async () => {
+    // The theme the live component resolved with (the real store — clay/dark
+    // by default): the arc must paint EXACTLY these deep-tier values.
+    const themeState = useThemeStore.getState();
+    const tones = deriveThemeStyles(themeState.themeId, themeState.mode === "dark");
     vi.mocked(fetchSessionContext).mockResolvedValue({ ...CONTEXT_REPORT, usedTokens: 700_000 });
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
     const donut = await screen.findByRole("button", { name: /~70% of context window projected/ });
-    // circles[0] = track, circles[1] = the arc — amber in the 60–85% band.
-    expect(donut.querySelectorAll("circle")[1].getAttribute("stroke")).toBe(DONUT_WARN_COLOR);
+    // circles[0] = track, circles[1] = the arc — warningDeep in the 60–85% band.
+    expect(donut.querySelectorAll("circle")[1].getAttribute("stroke")).toBe(tones.warningDeep);
 
     cleanup();
     vi.mocked(fetchSessionContext).mockResolvedValue({ ...CONTEXT_REPORT, usedTokens: 900_000 });
     await renderPanelWithConversation();
     expect(await screen.findByText("first question", {}, { timeout: 5000 })).toBeTruthy();
     const hot = await screen.findByRole("button", { name: /~90% of context window projected/ });
-    expect(hot.querySelectorAll("circle")[1].getAttribute("stroke")).toBe(SEMANTIC_COLORS.danger);
+    expect(hot.querySelectorAll("circle")[1].getAttribute("stroke")).toBe(tones.dangerDeep);
   });
 });
 
 // ── H. Send button ───────────────────────────────────────────────────────────
 describe("Composer: send button states (owner spec H)", () => {
+  it("the mobile recipe's material (R126-3d-4): the 28px accentDeep circle + accentText ink + pressed 0.96; disabled = bg-subtle + tertiary ink", async () => {
+    await renderEmptyPanel();
+    const send = screen.getByRole("button", { name: "Send message" });
+    // The class legs: the CTA fill (TOKENS §1d's accentDeep tier) with the
+    // disabled swap to bg-subtle; the press contract is scale 0.96 (the
+    // mobile recipe); opacity is NEVER halved (COMPONENTS §4).
+    expect(send.className).toContain("rounded-full");
+    expect(send.className).toContain("bg-accent-deep");
+    expect(send.className).toContain("disabled:bg-subtle");
+    expect(send.className).toContain("active:scale-[0.96]");
+    expect(send.className).not.toContain("opacity");
+    // The INK rides the JS leg — text-accent-text is a PHANTOM utility (no
+    // @theme mapping); the disabled leg is the tertiary ink.
+    expect(send.style.color).not.toBe("");
+    expect((send as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(textarea(), { target: { value: "hello" } });
+    expect((screen.getByRole("button", { name: "Send message" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(screen.getByRole("button", { name: "Send message" }).style.color).not.toBe("");
+  });
+
   it("disabled when the input is empty, enabled once text exists", async () => {
     await renderEmptyPanel();
     const send = screen.getByRole("button", { name: "Send message" });
@@ -2362,22 +2404,24 @@ describe("flyoutRetargetIntent (R87-A1) — pure unit tests", () => {
 
 // ── ROUND-51 (R51-c): contextDonutColor — pure grading thresholds ────────────
 describe("contextDonutColor grading (ROUND-51 R51-c) — pure unit tests", () => {
-  const ACCENT = "#7c5cff";
-  it("exports the thresholds the UI grades by (accent < 60 ≤ amber ≤ 85 < danger)", () => {
+  // R126-3d-4: the tones arrive as a THEME triplet (DonutTones) — the pure
+  // grading THRESHOLDS are the contract, the colors are the caller's.
+  const TONES: DonutTones = { accent: "#7c5cff", warn: "#b45309", danger: "#dc2626" };
+  it("exports the thresholds the UI grades by (accent < 60 ≤ warn ≤ 85 < danger)", () => {
     expect(CONTEXT_DONUT_WARN).toBe(0.6);
     expect(CONTEXT_DONUT_DANGER).toBe(0.85);
   });
 
-  it("accent below 60%, amber in the 60–85% band, danger above 85%", () => {
-    expect(contextDonutColor(59, 100, ACCENT)).toBe(ACCENT);
-    expect(contextDonutColor(60, 100, ACCENT)).toBe(DONUT_WARN_COLOR); // boundary inclusive
-    expect(contextDonutColor(85, 100, ACCENT)).toBe(DONUT_WARN_COLOR); // boundary inclusive
-    expect(contextDonutColor(86, 100, ACCENT)).toBe(SEMANTIC_COLORS.danger);
+  it("accent below 60%, warn in the 60–85% band, danger above 85%", () => {
+    expect(contextDonutColor(59, 100, TONES)).toBe(TONES.accent);
+    expect(contextDonutColor(60, 100, TONES)).toBe(TONES.warn); // boundary inclusive
+    expect(contextDonutColor(85, 100, TONES)).toBe(TONES.warn); // boundary inclusive
+    expect(contextDonutColor(86, 100, TONES)).toBe(TONES.danger);
   });
 
   it("no window (or zero usage) never looks scary — accent", () => {
-    expect(contextDonutColor(1, 0, ACCENT)).toBe(ACCENT);
-    expect(contextDonutColor(0, 100, ACCENT)).toBe(ACCENT);
+    expect(contextDonutColor(1, 0, TONES)).toBe(TONES.accent);
+    expect(contextDonutColor(0, 100, TONES)).toBe(TONES.accent);
   });
 });
 

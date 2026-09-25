@@ -3,10 +3,11 @@ import { KeyRound } from "lucide-react";
 import type { DetailedUsageKey, KeyPoolSlot, ProviderView } from "../../lib/api";
 import type { ThemeStyles } from "../../lib/themes";
 import { formatWhen } from "../../lib/format";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { staggerContainer, staggerItem } from "../../lib/motion";
-import { withAlpha } from "../dashboard/helpers";
-import { formatCompactTokens, formatCost } from "./usage-helpers";
+import { Kicker } from "../ui/Kicker";
+import { UsageMiniStat } from "./UsageStatRow";
+import { CLAY_CARD_SM, formatCompactTokens, formatCost } from "./usage-helpers";
+import { cn } from "../../lib/utils";
 
 /**
  * ROUND-64 (R64-e, owner: "I want the ability to track each individual API
@@ -24,12 +25,12 @@ import { formatCompactTokens, formatCost } from "./usage-helpers";
  *   · usage on an unknown PROVIDER renders the raw id with a "removed
  *     provider" note (tombstoned rows, migration 0010).
  *
- * Design: the neighboring cards' DNA (ModelCards/ProjectsDrilldown) —
- * useThemeStyles colors, rounded-xl cards with subtle borders, mono
- * masked previews, tabular-nums numerics, a share-of-total bar relative to
- * the priciest key, and the semantic danger color only for removals.
- * (R100-G: radii/weights snapped to the round-100 ladder — the label tier
- * is 11px/500/0.08em, values carry 600, cards ride the 16px step.)
+ * ROUND-126 (R126-3b, the Clay Companion redesign): the card is the compact
+ * clay tile (rim + `.ac-clay-sm`); removal/absence states ride the STATUS
+ * GRAMMAR's badge tone containers (TOKENS §11 — `bg-badge-danger` +
+ * `text-badge-danger-fg`, never flat red text); the share bar fills the DEEP
+ * accent leg over the recessed well track; the stats render as the ONE mini
+ * stat row with hairline dividers.
  */
 
 /** One rendered card: the join of a pool slot with its usage rollup. */
@@ -135,7 +136,7 @@ function KeyCard({
   totalCost: number;
   styles: ThemeStyles;
 }) {
-  const { card: bg, border, text, textSecondary, textTertiary, accent, softShadow } = styles;
+  const { text, textSecondary, textTertiary, accentDeep, dangerDeep } = styles;
   const usage = card.usage;
   const share = maxCost > 0 && usage ? Math.max(4, Math.round((usage.costUsd / maxCost) * 100)) : 4;
   const shareOfTotal = totalCost > 0 && usage ? (usage.costUsd / totalCost) * 100 : 0;
@@ -143,8 +144,7 @@ function KeyCard({
   return (
     <motion.article
       variants={staggerItem}
-      className="rounded-2xl border-[1.5px] p-4"
-      style={{ backgroundColor: bg, borderColor: border, boxShadow: softShadow }}
+      className={cn(CLAY_CARD_SM, "p-4")}
       aria-label={`API key ${card.providerName} ${card.slotLabel}`}
     >
       <div className="flex items-baseline justify-between gap-2">
@@ -153,28 +153,31 @@ function KeyCard({
             {card.providerName}
           </span>
           <span
-            className="shrink-0 font-mono text-[10px] font-medium uppercase tracking-[0.08em]"
-            style={{ color: card.slot === 0 ? accent : textSecondary }}
+            className={cn(
+              "shrink-0 font-mono text-[10px] font-medium uppercase tracking-[0.08em]",
+              card.slot === 0 ? "text-accent-deep" : "",
+            )}
+            style={card.slot === 0 ? undefined : { color: textSecondary }}
           >
             {card.slotLabel}
           </span>
         </div>
-        <span
-          className="shrink-0 font-mono text-[10px] font-semibold tracking-wide"
-          style={{ color: card.removedKey ? SEMANTIC_COLORS.danger : textTertiary }}
-        >
-          {card.removedKey
-            ? "removed key"
-            : card.removedProvider
-              ? "removed provider"
-              : (card.masked ?? "—")}
-        </span>
+        {/* R126-3b: removal states ride the badge TONE containers (TOKENS
+            §11) — tinted container + deep-on-tint ink, never flat red. */}
+        {card.removedKey || card.removedProvider ? (
+          <span className="shrink-0 rounded-full bg-badge-danger px-2 py-0.5 text-[10px] font-medium text-badge-danger-fg">
+            {card.removedKey ? "removed key" : "removed provider"}
+          </span>
+        ) : (
+          <span className="shrink-0 font-mono text-[10px] font-semibold tracking-wide" style={{ color: textTertiary }}>
+            {card.masked ?? "—"}
+          </span>
+        )}
       </div>
 
       {/* Share-of-total: cost relative to the priciest key in the section. */}
       <div
-        className="mt-2 h-[5px] overflow-hidden rounded-full"
-        style={{ backgroundColor: withAlpha(accent, 0.12) }}
+        className="mt-2 h-[5px] overflow-hidden rounded-full bg-well"
         role="progressbar"
         aria-valuenow={usage ? usage.costUsd : 0}
         aria-valuemin={0}
@@ -186,60 +189,44 @@ function KeyCard({
           className="h-full rounded-full"
           style={{
             width: `${share}%`,
-            backgroundColor: card.removedKey ? withAlpha(SEMANTIC_COLORS.danger, 0.7) : accent,
+            backgroundColor: card.removedKey ? dangerDeep : accentDeep,
           }}
         />
       </div>
 
-      <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <div className="min-w-0">
-          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
-            Turns
-          </dt>
-          <dd
-            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
-            style={{ color: text }}
-            title={`${(usage?.requests ?? 0).toLocaleString()} turns on this key (one usage row per turn — the ROUND-83 honest relabel)`}
-          >
-            {(usage?.requests ?? 0).toLocaleString()}
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
-            Sent / Recv
-          </dt>
-          <dd
-            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
-            style={{ color: text }}
-            title={`${(usage?.inputTokens ?? 0).toLocaleString()} sent · ${(usage?.outputTokens ?? 0).toLocaleString()} received`}
-          >
-            ↑ {formatCompactTokens(usage?.inputTokens ?? 0)} ↓ {formatCompactTokens(usage?.outputTokens ?? 0)}
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
-            Cost
-          </dt>
-          <dd
-            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
-            style={{ color: text }}
-            title={`${formatCost(usage?.costUsd ?? 0)} on this key`}
-          >
-            {formatCost(usage?.costUsd ?? 0)}
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
-            Last used
-          </dt>
-          <dd className="mt-0.5 truncate text-[12px] font-semibold tabular-nums" style={{ color: text }}>
-            {usage ? formatWhen(usage.lastUsedAt) : <span style={{ color: textTertiary }}>—</span>}
-          </dd>
-        </div>
-      </dl>
+      {/* R126-3b: the mini stat row — hairline dividers, tabular values. */}
+      <div className="mt-3 grid grid-cols-2 gap-y-2 sm:grid-cols-4 sm:gap-y-0">
+        <UsageMiniStat
+          divider="none"
+          label="Turns"
+          value={(usage?.requests ?? 0).toLocaleString()}
+          title={`${(usage?.requests ?? 0).toLocaleString()} turns on this key (one usage row per turn — the ROUND-83 honest relabel)`}
+          styles={styles}
+        />
+        <UsageMiniStat
+          divider="always"
+          label="Sent / Recv"
+          value={`↑ ${formatCompactTokens(usage?.inputTokens ?? 0)} ↓ ${formatCompactTokens(usage?.outputTokens ?? 0)}`}
+          title={`${(usage?.inputTokens ?? 0).toLocaleString()} sent · ${(usage?.outputTokens ?? 0).toLocaleString()} received`}
+          styles={styles}
+        />
+        <UsageMiniStat
+          divider="sm"
+          label="Cost"
+          value={formatCost(usage?.costUsd ?? 0)}
+          title={`${formatCost(usage?.costUsd ?? 0)} on this key`}
+          styles={styles}
+        />
+        <UsageMiniStat
+          divider="always"
+          label="Last used"
+          value={usage ? formatWhen(usage.lastUsedAt) : "—"}
+          styles={styles}
+        />
+      </div>
 
       {usage === null && (
-        <p className="mt-2 text-[11px]" style={{ color: textTertiary }}>
+        <p className="mt-2 truncate text-[11px]" style={{ color: textTertiary }}>
           Not used yet — requests, tokens and cost land here the moment a turn runs on this key.
         </p>
       )}
@@ -267,7 +254,7 @@ export function KeyCards({
   isPending: boolean;
   styles: ThemeStyles;
 }) {
-  const { textSecondary, textTertiary, accent } = styles;
+  const { textSecondary } = styles;
   const cards = buildCards(usageKeys, providers, poolsById, settledPoolIds, providersSettled);
   const maxCost = Math.max(0, ...cards.map((c) => c.usage?.costUsd ?? 0));
   const totalCost = cards.reduce((sum, c) => sum + (c.usage?.costUsd ?? 0), 0);
@@ -282,13 +269,10 @@ export function KeyCards({
   return (
     <section aria-label="API keys" className="mb-4 md:mb-6">
       <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <KeyRound size={13} style={{ color: accent, opacity: 0.7 }} />
-          <h2 className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
-            API keys
-          </h2>
-        </div>
-        <span className="text-[11px] tabular-nums" style={{ color: textSecondary }}>
+        <Kicker as="h2" icon={KeyRound}>
+          API keys
+        </Kicker>
+        <span className="text-[11px] font-medium leading-none tabular-nums" style={{ color: textSecondary }}>
           {cards.length === 1 ? "1 key" : `${cards.length} keys`} · {formatCost(totalCost)} all-time
         </span>
       </div>

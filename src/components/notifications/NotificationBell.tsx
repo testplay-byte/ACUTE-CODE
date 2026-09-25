@@ -39,8 +39,9 @@ import {
 import { useThemeStyles } from "../../lib/use-theme-styles";
 // R101-C: the badge's colors ride the sanctioned semantic token + the
 // pipeline's contrast helper instead of inline hex (TOKENS §1 rules 1–2).
-import { SEMANTIC_COLORS } from "../../lib/semantics";
-import { getContrastText } from "../../lib/themes";
+// R126-3h: the badge now rides the §11 badge-danger tone pair instead (the
+// tinted container + its own fg ink — the flat SEMANTIC fill + contrast
+// helper leg is retired).
 import { withAlpha } from "../dashboard/helpers";
 import { cn } from "../../lib/utils";
 import {
@@ -49,19 +50,27 @@ import {
 } from "../../hooks/use-notifications";
 import type { NotificationKind, NotificationRecord } from "../../lib/notifications-api";
 
-/** Per-kind accent color (status tones — independent of the theme palette). */
-function toneForKind(kind: NotificationKind): string {
+/** Per-kind status tone (R126-3h, TOKENS §11 — the status grammar): the
+ * row's icon circle is a CHIP CONTAINER riding the tinted badge tone pair +
+ * the deep-tier glyph; the hardcoded semantic hexes (#10B981/#EF4444/
+ * #F59E0B/#6366F1) are retired (flat hues are dots-only). */
+const TONE_SUCCESS = "bg-badge-success text-success-deep";
+const TONE_DANGER = "bg-badge-danger text-danger-deep";
+const TONE_WARNING = "bg-badge-warning text-warning-deep";
+const TONE_RUNNING = "bg-badge-running text-running-deep";
+
+function toneClassesForKind(kind: NotificationKind): string {
   switch (kind) {
     case "task_complete":
     case "subagent_complete":
-      return "#10B981";
+      return TONE_SUCCESS;
     case "task_failed":
     case "subagent_failed":
-      return "#EF4444";
+      return TONE_DANGER;
     case "permission_request":
-      return "#F59E0B";
+      return TONE_WARNING;
     default:
-      return "#6366F1";
+      return TONE_RUNNING;
   }
 }
 
@@ -277,10 +286,11 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
         <span
           // R101-C: the badge snaps to the scale utilities (min-w-4/h-4) and
           // the weight law (500 — font-bold is wizard + StatCard only).
-          className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 grid place-items-center rounded-full text-[10px] font-medium leading-none"
+          // R126-3h: the §11 badge-danger tone pair (TOKENS §11 — the tinted
+          // danger container + its own fg ink; the SEMANTIC_COLORS.danger
+          // solid fill + getContrastText leg is retired).
+          className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 grid place-items-center rounded-full text-[10px] font-medium leading-none bg-badge-danger text-badge-danger-fg"
           style={{
-            background: SEMANTIC_COLORS.danger,
-            color: getContrastText(SEMANTIC_COLORS.danger),
             boxShadow: `0 0 0 2px ${styles.sidebarBg}`,
           }}
         >
@@ -306,20 +316,19 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -6, scale: 0.96 }}
                   transition={{ duration: 0.16, ease: [0.25, 0.1, 0.25, 1] }}
-                  className="fixed z-[80] w-[340px] max-w-[calc(100vw-1rem)] rounded-[14px] border-[1.5px] overflow-hidden"
+                  // R126-3h (TOKENS §5/§9 — the dropdown RISES): the clay
+                  // card — rounded-xl (the off-ladder rounded-[14px] dies),
+                  // the 1px clay-rim hairline (the border-[1.5px] dies),
+                  // bg-card, .ac-clay-sheet (the UPWARD two-leg shadow;
+                  // the inline card/border/softShadow legs are gone).
+                  className="fixed z-[80] w-[340px] max-w-[calc(100vw-1rem)] rounded-xl border border-clay-rim bg-card ac-clay-sheet overflow-hidden"
                   style={{
                     top: popoverPos.top,
                     left: popoverPos.left,
-                    backgroundColor: styles.card,
-                    borderColor: styles.border,
-                    boxShadow: styles.softShadow,
                   }}
                 >
                   {/* Header row: title + "Mark all read" action. */}
-                  <div
-                    className="flex items-center justify-between px-3 py-2 border-b-[1.5px]"
-                    style={{ borderColor: styles.border }}
-                  >
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-line">
                     <span
                       className="text-[11px] font-bold uppercase tracking-widest"
                       style={{ color: styles.textTertiary }}
@@ -330,23 +339,11 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
                       <button
                         type="button"
                         onClick={() => void markAllRead()}
-                        className="text-[11px] font-bold rounded-md px-2 py-1 transition-colors"
-                        style={{
-                          color: styles.accent,
-                          background: withAlpha(styles.accent, 0.08),
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = withAlpha(
-                            styles.accent,
-                            0.16,
-                          );
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = withAlpha(
-                            styles.accent,
-                            0.08,
-                          );
-                        }}
+                        // R126-3h: the accent-tint chip spelling (TOKENS §10 —
+                        // bg-accent-tint + text-accent-deep) with the CSS
+                        // hover wash; the withAlpha(accent) fill + the JS
+                        // hover pair are retired.
+                        className="text-[11px] font-bold rounded-md px-2 py-1 transition-colors bg-accent-tint text-accent-deep hover:bg-hover"
                       >
                         Mark all read
                       </button>
@@ -365,7 +362,6 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
                       </div>
                     ) : (
                       recent.map((n) => {
-                        const tone = toneForKind(n.kind);
                         const clickable = !!n.sessionId && !!n.projectId;
                         return (
                           <button
@@ -373,66 +369,53 @@ export function NotificationBell({ collapsed }: { collapsed: boolean }) {
                             type="button"
                             role="menuitem"
                             onClick={() => openRow(n)}
-                            className="w-full text-left flex items-start gap-2.5 px-3 py-2.5 transition-colors border-b-[1px] last:border-b-0"
+                            // R126-3h (TOKENS §6): the row hover is the CSS
+                            // class; the JS onMouseEnter/onMouseLeave pair is
+                            // retired. The UNREAD tint rides the sanctioned
+                            // accent-soft wash (the withAlpha(accent, 0.04)
+                            // JS leg is gone).
+                            className={cn(
+                              "w-full text-left flex items-start gap-2.5 px-3 py-2.5 transition-colors border-b last:border-b-0 hover:bg-hover",
+                              n.read === 0 && "bg-accent-soft",
+                            )}
                             style={{
                               borderColor: styles.borderSubtle,
-                              background:
-                                n.read === 1
-                                  ? "transparent"
-                                  : withAlpha(styles.accent, 0.04),
                               cursor: clickable ? "pointer" : "default",
-                            }}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.background = styles.subtle;
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.background =
-                                n.read === 1
-                                  ? "transparent"
-                                  : withAlpha(styles.accent, 0.04);
                             }}
                           >
                             <div
-                              className="mt-0.5 shrink-0 grid place-items-center w-6 h-6 rounded-full"
-                              style={{
-                                background:
-                                  tone === "transparent"
-                                    ? styles.subtle
-                                    : withAlpha(tone, 0.16),
-                                color:
-                                  tone === "transparent"
-                                    ? styles.textSecondary
-                                    : tone,
-                              }}
+                              className={cn(
+                                "mt-0.5 shrink-0 grid place-items-center w-6 h-6 rounded-full",
+                                toneClassesForKind(n.kind),
+                              )}
                             >
                               <IconForKind kind={n.kind} />
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start gap-2">
                                 <span
-                                  className="flex-1 text-[12.5px] font-bold leading-tight truncate"
+                                  className="flex-1 text-[13px] font-bold leading-tight truncate"
                                   style={{ color: styles.text }}
                                 >
                                   {n.title}
                                 </span>
                                 {n.read === 0 && (
                                   <span
-                                    className="mt-1 shrink-0 w-2 h-2 rounded-full"
-                                    style={{ background: styles.accent }}
+                                    className="mt-1 shrink-0 w-2 h-2 rounded-full bg-accent"
                                     aria-label="unread"
                                   />
                                 )}
                               </div>
                               {n.body && (
                                 <div
-                                  className="mt-0.5 text-[11.5px] leading-snug truncate"
+                                  className="mt-0.5 text-[11px] leading-snug truncate"
                                   style={{ color: styles.textSecondary }}
                                 >
                                   {n.body}
                                 </div>
                               )}
                               <div
-                                className="mt-1 text-[10.5px] uppercase tracking-wider font-bold"
+                                className="mt-1 text-[10px] uppercase tracking-wider font-bold"
                                 style={{ color: styles.textTertiary }}
                               >
                                 {timeAgo(n.ts)}

@@ -1,7 +1,6 @@
 import { Brain, Check, ChevronDown } from "lucide-react";
 import type { ModelReasoningSupport, ThinkingLevel } from "shared";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
-import { withAlpha } from "../../dashboard/helpers";
 import {
   displayThinkingLevel,
   thinkingOption,
@@ -137,10 +136,11 @@ export function ThinkingLevelButton({
         aria-expanded={menu.isOpen}
         aria-label={`Thinking level: ${current.label}`}
         title={`Thinking level — ${current.description}`}
-        className="flex items-center gap-1.5 h-7 px-2 rounded-lg text-[11px] font-medium transition-colors hover:bg-hover"
-        style={{ color: styles.textSecondary }}
+        // R126-3d-4: the chip grammar (bg-well + the clay rim hairline +
+        // 12px/600 secondary ink; hover = the CSS wash).
+        className="flex items-center gap-1.5 h-7 px-2 rounded-lg border border-clay-rim bg-well text-muted text-[12px] font-semibold transition-colors duration-100 hover:border-accent hover:bg-accent-tint"
       >
-        <Brain size={12} className="shrink-0" style={{ color: styles.accent }} />
+        <Brain size={12} className="shrink-0 text-accent" />
         {/* R87-A1 staggered composer shrink — tier 2: the thinking label
             collapses (animated max-width + fade) one step AFTER the mode
             label (560px) at the 500px @container floor, so the pills fold in
@@ -161,8 +161,10 @@ export function ThinkingLevelButton({
         <div
           role="menu"
           aria-label="Thinking level"
-          className="absolute bottom-9 right-0 w-56 rounded-2xl border p-1.5 z-50"
-          style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+          // R126-3d-4: the flyout = the clay card (card + rim + .ac-clay-sm
+          // — the small-surface shadow step; the bentoShadow/border JS legs
+          // retired).
+          className="absolute bottom-9 right-0 w-56 rounded-2xl border border-clay-rim bg-card p-1.5 z-50 ac-clay-sm"
         >
           {spec.options.map((option) => {
             const isSelected = option.id === displayLevel;
@@ -177,15 +179,15 @@ export function ThinkingLevelButton({
                   if (!isSelected) onChange(option.id);
                 }}
                 className={`w-full flex items-center gap-2 text-left px-2 py-1.5 rounded-lg transition-colors ${
-                  isSelected ? "" : "hover:bg-hover"
+                  isSelected ? "bg-accent-tint" : "hover:bg-hover"
                 }`}
-                style={{
-                  background: isSelected ? withAlpha(styles.accent, 0.09) : "transparent",
-                }}
               >
                 <span
-                  className="text-[12px] font-medium min-w-0 flex-1"
-                  style={{ color: isSelected ? styles.accent : styles.text }}
+                  // R126-3d-4: the selected row = accentTint + accentDeep ink
+                  // (the pickers' selected-row grammar).
+                  className={`text-[12px] font-medium min-w-0 flex-1 ${
+                    isSelected ? "text-accent-deep" : "text-muted"
+                  }`}
                 >
                   {option.label}
                   {/* R96-F: the model's own default rung — a quiet "default"
@@ -203,7 +205,7 @@ export function ThinkingLevelButton({
                 <span className="text-[10px] min-w-0 truncate" style={{ color: styles.textTertiary }}>
                   {option.description}
                 </span>
-                {isSelected ? <Check size={11} className="shrink-0" style={{ color: styles.accent }} /> : null}
+                {isSelected ? <Check size={11} className="shrink-0 text-accent-deep" /> : null}
               </button>
             );
           })}

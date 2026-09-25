@@ -16,11 +16,9 @@ import {
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { isTauri } from "../../lib/sidecar";
-import { withAlpha } from "../dashboard/helpers";
-// R100-E2: the round-100 primitives (USAGE.md §3) + the semantic status home.
+// R100-E2: the round-100 primitives (USAGE.md §3).
 import { Kicker } from "../ui/Kicker";
 import { SectionCard } from "../ui/SectionCard";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { ToggleSwitch } from "../ui/toggle-switch"; // R93-A4: the shared contrast-aware switch
 import { Dialog, DialogContent, DialogHeader } from "../ui/dialog";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -181,7 +179,8 @@ function DeviceLinkCard() {
   if (settingsQuery.isError) {
     return (
       <SectionCard className="p-4" ariaLabel="Device links">
-        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+        {/* R126-3f-3: status text rides the §11 deep pairs (class leg). */}
+        <p className="text-[11px] text-danger-deep" role="alert">
           {coreUnreachableHint} to manage device links.
         </p>
       </SectionCard>
@@ -204,15 +203,16 @@ function DeviceLinkCard() {
     /* R100-E2: the SectionCard primitive (aria-label passthrough). */
     <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Device links">
       <div className="flex items-center gap-2 flex-wrap">
-        <Smartphone size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <Smartphone size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Device links
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-medium"
-            style={{ color: msgIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+            className={`text-[11px] font-medium ${
+              msgIsError ? "text-danger-deep" : "text-success-deep"
+            }`}
           >
             {msg}
           </span>
@@ -363,11 +363,6 @@ function RemoteAccessCard({ settings }: { settings: CloudConnectorSettingsView |
     );
   }
 
-  const inputStyle = {
-    background: styles.bg,
-    borderColor: styles.border,
-    color: styles.text,
-  };
   const enabled = enabledDraft ?? settings.enabled;
   const relayUrlValue = relayUrlDraft ?? settings.relayUrl;
   const status = settings.status;
@@ -393,25 +388,34 @@ function RemoteAccessCard({ settings }: { settings: CloudConnectorSettingsView |
       tone: "muted",
     };
   }
-  const toneColor = (tone: "success" | "neutral" | "danger" | "muted"): string | undefined => {
-    if (tone === "success") return SEMANTIC_COLORS.success;
-    if (tone === "danger") return SEMANTIC_COLORS.danger;
-    if (tone === "muted") return styles.textTertiary;
-    return styles.textSecondary;
-  };
+  // R126-3f-3: status TEXT rides the §11 deep pairs on the class leg
+  // (never flat hues); the neutral/muted tiers keep the JS text-tier leg.
+  const statusToneClass =
+    statusLine === null
+      ? ""
+      : statusLine.tone === "success"
+        ? "text-success-deep"
+        : statusLine.tone === "danger"
+          ? "text-danger-deep"
+          : "";
+  const statusToneStyle =
+    statusLine !== null && (statusLine.tone === "muted" || statusLine.tone === "neutral")
+      ? { color: statusLine.tone === "muted" ? styles.textTertiary : styles.textSecondary }
+      : undefined;
 
   return (
     <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Remote access">
       <div className="flex items-center gap-2 flex-wrap">
-        <Globe size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <Globe size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Remote access (internet)
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-medium"
-            style={{ color: msgIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+            className={`text-[11px] font-medium ${
+              msgIsError ? "text-danger-deep" : "text-success-deep"
+            }`}
           >
             {msg}
           </span>
@@ -444,8 +448,8 @@ function RemoteAccessCard({ settings }: { settings: CloudConnectorSettingsView |
           open — the connector's own truth, never the draft). */}
       {statusLine !== null && (
         <div
-          className="text-[11px] leading-relaxed"
-          style={{ color: toneColor(statusLine.tone) }}
+          className={`text-[11px] leading-relaxed ${statusToneClass}`}
+          style={statusToneStyle}
           data-testid="remote-status"
         >
           {statusLine.text}
@@ -465,8 +469,8 @@ function RemoteAccessCard({ settings }: { settings: CloudConnectorSettingsView |
             placeholder="https://acute-relay.anikuta.workers.dev"
             aria-label="Relay URL"
             data-testid="remote-relay-input"
-            className="h-8 w-full rounded-lg border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
-            style={inputStyle}
+            /* R126-3f-3: THE WELL + rim (TOKENS §10) — inputs are recesses. */
+            className="h-8 w-full rounded-lg border border-clay-rim bg-well px-2.5 font-mono text-[11px] text-ink outline-none"
           />
         </div>
         <div>
@@ -485,16 +489,18 @@ function RemoteAccessCard({ settings }: { settings: CloudConnectorSettingsView |
               placeholder={settings.hostKeyPresent ? "•••••••• saved — type to replace" : "paste the relay's host key"}
               aria-label="Host key"
               data-testid="remote-hostkey-input"
-              className="h-8 flex-1 min-w-[180px] rounded-lg border-[1.5px] px-2.5 font-mono text-[11px] outline-none"
-              style={inputStyle}
+              /* R126-3f-3: THE WELL + rim (TOKENS §10). */
+              className="h-8 flex-1 min-w-[180px] rounded-lg border border-clay-rim bg-well px-2.5 font-mono text-[11px] text-ink outline-none"
             />
             {settings.hostKeyPresent && hostKeyDraft === "" && forgetKey === false && !enabled && (
               <button
                 type="button"
                 onClick={() => setForgetKey(true)}
                 title="Clear the saved host key when you Save (offered only while remote access is disabled)"
-                className="h-8 px-2.5 rounded-lg text-[11px] font-medium shrink-0"
-                style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.1), color: SEMANTIC_COLORS.danger }}
+                /* R126-3f-3: outlined danger (border-danger-deep +
+                 * text-danger-deep — the conversion grammar's danger action;
+                 * the withAlpha wash fill is retired). */
+                className="h-8 px-2.5 rounded-lg text-[11px] font-medium shrink-0 border border-danger-deep text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
                 data-testid="remote-forget-key"
               >
                 Forget
@@ -502,8 +508,7 @@ function RemoteAccessCard({ settings }: { settings: CloudConnectorSettingsView |
             )}
             {settings.hostKeyPresent && forgetKey && (
               <span
-                className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
-                style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.12), color: SEMANTIC_COLORS.danger }}
+                className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0 bg-badge-danger text-badge-danger-fg"
                 data-testid="remote-forget-key-pending"
               >
                 will be cleared on Save
@@ -511,8 +516,7 @@ function RemoteAccessCard({ settings }: { settings: CloudConnectorSettingsView |
             )}
             {settings.hostKeyPresent && hostKeyDraft === "" && forgetKey === false && enabled && (
               <span
-                className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
-                style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
+                className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0 bg-badge-success text-badge-success-fg"
                 data-testid="remote-key-saved"
               >
                 Key saved
@@ -526,8 +530,12 @@ function RemoteAccessCard({ settings }: { settings: CloudConnectorSettingsView |
             onClick={() => save.mutate()}
             disabled={save.isPending}
             title="Apply the relay URL, host key, and the enabled switch"
-            className="h-9 px-4 rounded-full text-[11px] font-semibold transition-all active:scale-95 disabled:opacity-50 inline-flex items-center gap-1.5 self-start"
-            style={{ background: styles.accent, color: styles.accentText }}
+            /* R126-3f-3: the quiet-solid primary (bg-accent-deep + the
+             * accentText ink pair on the JS leg — TOKENS §1d) with the
+             * ac-clay-pressed press collapse; rounded-lg replaces the
+             * bento-era rounded-full. */
+            className="ac-clay-pressed h-9 px-4 rounded-lg text-[11px] font-semibold transition-transform active:scale-[0.98] disabled:opacity-50 inline-flex items-center gap-1.5 self-start bg-accent-deep"
+            style={{ color: styles.accentText }}
             data-testid="remote-save"
           >
             <Globe size={13} /> {save.isPending ? "Saving…" : "Save"}
@@ -577,7 +585,7 @@ function QrCanvas({ payload }: { payload: string }) {
   return (
     <>
       {failed ? (
-        <span className="text-[11px] px-4 text-center" style={{ color: SEMANTIC_COLORS.danger }}>
+        <span className="text-[11px] px-4 text-center text-danger-deep">
           the QR could not be rendered
         </span>
       ) : svg === null ? (
@@ -773,7 +781,7 @@ function MiniCopyButton({ text, label, testId }: { text: string; label: string; 
       className="w-6 h-6 rounded-md grid place-items-center shrink-0 transition-colors hover:bg-hover"
       style={{ color: styles.textTertiary }}
     >
-      {copied ? <Check size={11} style={{ color: SEMANTIC_COLORS.success }} /> : <Copy size={11} />}
+      {copied ? <Check size={11} className="text-success-deep" /> : <Copy size={11} />}
     </button>
   );
 }
@@ -944,7 +952,17 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
           if (!o) onClose();
         }}
       >
-        <DialogContent className="w-[min(480px,92vw)]" aria-describedby={undefined}>
+        <DialogContent
+          /* R126-3f-3: the pairing dialog's card = the CLAY dialog (SCREENS
+           * §3 Overlay — the 3f-2 spelling): the 1px clay-rim hairline +
+           * .ac-clay resolve over the shared DialogContent's bento legs via
+           * twMerge (border-[1.5px]→border, border-line→border-clay-rim) and
+             * the cascade (the unlayered .ac-clay box-shadow beats the layered
+             * shadow-2xl). Structure byte-identical — the R116-e/R118-F
+             * z-order + dismissal contracts ride the shared Radix shell. */
+          className="w-[min(480px,92vw)] border border-clay-rim ac-clay"
+          aria-describedby={undefined}
+        >
         <DialogHeader
           title="Link a device"
           description="Scan with ACUTE on your phone — or type it in by hand."
@@ -957,15 +975,16 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
           </div>
         ) : state.kind === "error" ? (
           <div className="px-5 py-5 flex flex-col gap-3" data-testid="pair-error">
-            <p className="text-[11px] leading-relaxed" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+            <p className="text-[11px] leading-relaxed text-danger-deep" role="alert">
               Could not open the pairing window ({state.message}).
             </p>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => void start()}
-                className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95"
-                style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
+                /* R126-3f-3: the accent-tint action spelling (bg-accent-tint +
+                 * text-accent-deep — the 3f-2 addable-tier button). */
+                className="h-9 px-4 rounded-lg text-[11px] font-semibold bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
                 data-testid="pair-retry"
               >
                 Try again
@@ -973,8 +992,9 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
               <button
                 type="button"
                 onClick={onClose}
-                className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-colors hover:opacity-80"
-                style={{ borderColor: styles.border, color: styles.textSecondary }}
+                /* R126-3f-3: the outlined secondary (border-line-strong),
+                 * hover as a CSS class. */
+                className="h-9 px-4 rounded-lg text-[11px] font-semibold border border-line-strong text-muted transition-colors duration-100 hover:bg-subtle hover:text-ink active:scale-[0.98]"
               >
                 Close
               </button>
@@ -985,7 +1005,7 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
             className="px-5 py-8 flex flex-col items-center gap-2 text-center"
             data-testid="pair-linked"
           >
-            <CheckCircle2 size={20} style={{ color: SEMANTIC_COLORS.success }} />
+            <CheckCircle2 size={20} className="text-success-deep" />
             <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
               Device linked ✓
             </span>
@@ -1015,7 +1035,10 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
                   This desktop is
                 </span>
                 <span
-                  className="text-2xl sm:text-3xl font-bold leading-tight"
+                  /* R126-3f-3: the hero name's weight snaps to the ladder's
+                   * 600 title law (font-bold retired with the bento era —
+                   * TOKENS §2: 700 is wizard display + StatCard value only). */
+                  className="text-2xl sm:text-3xl font-semibold leading-tight"
                   style={{ color: styles.text }}
                   data-testid="pair-machine-name"
                 >
@@ -1031,8 +1054,7 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
               />
               {expired ? (
                 <p
-                  className="text-[11px] font-medium"
-                  style={{ color: SEMANTIC_COLORS.danger }}
+                  className="text-[11px] font-medium text-danger-deep"
                   data-testid="pair-expired"
                 >
                   Pairing window closed — generate a new PIN
@@ -1079,15 +1101,17 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
                 scroll owner for the whole stack; the inner max-h-240 stays
                 for long lists). */}
             <div
-              className="rounded-xl border-[1.5px] overflow-hidden shrink-0"
-              style={{ borderColor: styles.border, background: styles.subtle }}
+              /* R126-3f-3: the manual panel = THE WELL (TOKENS §10 — the
+               * ladder's workhorse recess replaces the old subtle wash);
+               * shrink-0 is the R118-F fix, byte-identical. */
+              className="rounded-xl border border-clay-rim bg-well overflow-hidden shrink-0"
             >
               <button
                 type="button"
                 onClick={() => setManualOpen((v) => !v)}
                 aria-expanded={manualOpen}
                 data-testid="pair-manual-toggle"
-                className="w-full h-9 px-3 flex items-center justify-between gap-2 text-[11px] font-semibold transition-colors hover:opacity-80"
+                className="w-full h-9 px-3 flex items-center justify-between gap-2 text-[11px] font-semibold transition-colors duration-100 hover:bg-hover"
                 style={{ color: styles.textSecondary }}
               >
                 Type it in by hand instead
@@ -1098,8 +1122,7 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
               </button>
               {manualOpen && (
                 <div
-                  className="px-3 pb-3 flex flex-col gap-2 border-t max-h-[240px] overflow-y-auto"
-                  style={{ borderColor: styles.borderSubtle }}
+                  className="px-3 pb-3 flex flex-col gap-2 border-t border-line max-h-[240px] overflow-y-auto"
                   data-testid="pair-manual"
                 >
                   <div>
@@ -1171,8 +1194,10 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
                 onClick={() => void start()}
                 disabled={state.kind !== "pairing"}
                 title="Mints a fresh 120-second window — the old PIN dies immediately"
-                className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 disabled:opacity-50 inline-flex items-center gap-1.5"
-                style={{ borderColor: withAlpha(styles.accent, 0.5), color: styles.accent }}
+                /* R126-3f-3: the accent-tint action spelling + press 0.98
+                 * (the withAlpha(accent) outline + rounded-full bento pill
+                 * are retired). */
+                className="h-9 px-4 rounded-lg text-[11px] font-semibold bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-50 inline-flex items-center gap-1.5"
                 data-testid="pair-new-pin"
               >
                 <QrCode size={13} /> Generate new PIN
@@ -1195,11 +1220,13 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
                     ? "Copies the addresses, PIN, and certificate fingerprint — paste it into ACUTE on your phone"
                     : "No LAN address reported — scan the QR or use the manual details"
                 }
-                className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
-                style={{
-                  borderColor: copiedText ? withAlpha(SEMANTIC_COLORS.success, 0.5) : styles.border,
-                  color: copiedText ? SEMANTIC_COLORS.success : styles.textSecondary,
-                }}
+                /* R126-3f-3: the outlined secondary with the §11 success-deep
+                 * copied confirmation (border + ink swap when copied). */
+                className={`h-9 px-4 rounded-lg text-[11px] font-semibold border transition-colors duration-100 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 ${
+                  copiedText
+                    ? "border-success-deep text-success-deep"
+                    : "border-line-strong text-muted hover:bg-subtle hover:text-ink"
+                }`}
                 data-testid="pair-copy-text"
               >
                 {copiedText ? <Check size={13} /> : <Copy size={13} />} {copiedText ? "Copied" : "Copy pairing text"}
@@ -1207,8 +1234,7 @@ function PairingDialog({ open, onClose }: { open: boolean; onClose: () => void }
               <button
                 type="button"
                 onClick={onClose}
-                className="h-9 px-4 rounded-full text-[11px] font-semibold border-[1.5px] transition-colors hover:opacity-80"
-                style={{ borderColor: styles.border, color: styles.textSecondary }}
+                className="h-9 px-4 rounded-lg text-[11px] font-semibold border border-line-strong text-muted transition-colors duration-100 hover:bg-subtle hover:text-ink active:scale-[0.98]"
                 data-testid="pair-close"
               >
                 Close
@@ -1248,7 +1274,7 @@ function LinkDeviceCard({ linksEnabled }: { linksEnabled: boolean }) {
   return (
     <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Link a device">
       <div className="flex items-center gap-2 flex-wrap">
-        <QrCode size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <QrCode size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Link a device
         </span>
@@ -1262,8 +1288,11 @@ function LinkDeviceCard({ linksEnabled }: { linksEnabled: boolean }) {
               ? "Opens a 120-second pairing window with a QR code and PIN"
               : "Turn on device links first — the pairing window rides the encrypted listener"
           }
-          className="h-9 px-4 rounded-full text-[11px] font-semibold transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 self-start"
-          style={{ background: styles.accent, color: styles.accentText }}
+          /* R126-3f-3: the quiet-solid primary (bg-accent-deep + the
+           * accentText ink pair on the JS leg — TOKENS §1d) with the
+           * ac-clay-pressed press collapse. */
+          className="ac-clay-pressed h-9 px-4 rounded-lg text-[11px] font-semibold transition-transform active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 self-start bg-accent-deep"
+          style={{ color: styles.accentText }}
           data-testid="pair-start-button"
         >
           <QrCode size={13} /> Pair a device
@@ -1319,8 +1348,8 @@ function DeviceRow({
   return (
     <div
       data-device={device.id}
-      className="border-b last:border-b-0"
-      style={{ borderColor: styles.borderSubtle }}
+      /* R126-3f-3: the row hairline on the class leg (border-line). */
+      className="border-b border-line last:border-b-0"
     >
       <div className="flex items-center gap-2 px-3 pt-2.5 flex-wrap">
         <span
@@ -1333,8 +1362,8 @@ function DeviceRow({
         {device.scopes.map((scope) => (
           <span
             key={scope}
-            className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
-            style={{ background: styles.subtle, color: styles.textTertiary }}
+            /* R126-3f-3: the scope chip = the §11 neutral badge tone. */
+            className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0 bg-badge-neutral text-badge-neutral-fg"
             data-testid={`device-scope-${device.id}`}
           >
             {scope}
@@ -1353,8 +1382,9 @@ function DeviceRow({
           onClick={() => setConfirmRevoke(true)}
           aria-label={`Revoke device ${device.label}`}
           title="Unlink this device — its token stops working immediately"
-          className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 flex items-center gap-1"
-          style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.12), color: SEMANTIC_COLORS.danger }}
+          /* R126-3f-3: the outlined danger action (border-danger-deep +
+           * text-danger-deep — the withAlpha wash fill is retired). */
+          className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 flex items-center gap-1 border border-danger-deep text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
           data-testid={`device-revoke-${device.id}`}
         >
           <Trash2 size={11} /> Revoke
@@ -1406,15 +1436,16 @@ function LinkedDevicesCard() {
   return (
     <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Linked devices">
       <div className="flex items-center gap-2 flex-wrap">
-        <Smartphone size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <Smartphone size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Linked devices
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-medium"
-            style={{ color: msgIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+            className={`text-[11px] font-medium ${
+              msgIsError ? "text-danger-deep" : "text-success-deep"
+            }`}
           >
             {msg}
           </span>
@@ -1426,7 +1457,7 @@ function LinkedDevicesCard() {
       </p>
 
       {devicesQuery.isError ? (
-        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+        <p className="text-[11px] text-danger-deep" role="alert">
           {coreUnreachableHint} to list linked devices.
         </p>
       ) : devicesQuery.isLoading || devicesQuery.data === undefined ? (
@@ -1435,8 +1466,9 @@ function LinkedDevicesCard() {
         </span>
       ) : (
         <div
-          className="rounded-lg border-[1.5px] overflow-hidden max-h-72 overflow-y-auto"
-          style={{ borderColor: styles.border }}
+          /* R126-3f-3: the list container = the rim hairline (the 1.5px
+           * border-[Npx] spelling is retired — TOKENS §5). */
+          className="rounded-lg border border-clay-rim overflow-hidden max-h-72 overflow-y-auto"
           data-testid="devices-list"
         >
           {devicesQuery.data.length === 0 && (
@@ -1489,7 +1521,7 @@ export function DevicesTab() {
       </div>
       {cloudQuery.isError ? (
         <SectionCard className="p-4" ariaLabel="Remote access">
-          <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+          <p className="text-[11px] text-danger-deep" role="alert">
             {coreUnreachableHint} to manage remote access.
           </p>
         </SectionCard>

@@ -14,12 +14,15 @@ export function NeedBrainScreen() {
 
   const isNow = brainChoice === "now";
   const isLater = brainChoice === "later";
-  const checkColor = s.isDark ? "#111" : "white";
-  // Selected-card emphasis: accent border + bento lift + a soft accent ring
-  const selectedRing = (on: boolean) =>
-    on
-      ? `${s.bentoShadow}, 0 0 0 4px color-mix(in srgb, ${s.accent} 20%, transparent)`
-      : s.softShadow;
+  // R126-3g: the choice cards speak the selection grammar — the selected
+  // card = the accentTint fill + the 2px accentDeep ring (the mobile
+  // "2px when selected" law); the radio = the accentDeep fill + accentText
+  // check. The pre-R126 toggleActive fill + #111/white check ink retired.
+  const checkColor = s.accentText;
+  const choiceCard = (on: boolean) => ({
+    background: on ? s.accentTint : s.card,
+    border: on ? `2px solid ${s.accentDeep}` : `1px solid ${s.clayRim}`,
+  });
 
   const handleBack = () => setStep(1);
   const handleNext = () => {
@@ -43,14 +46,10 @@ export function NeedBrainScreen() {
       <div className="mt-6 md:mt-8 short:mt-4 grid flex-1 content-center md:grid-cols-2 gap-4 md:gap-5 2xl:gap-8">
         {/* Card 1 – Configure Now */}
         <div
-          className={`h-full flex flex-col text-left rounded-[28px] border-[2px] p-5 md:p-6 short:p-4 transition-all group cursor-pointer ${
+          className={`h-full flex flex-col text-left rounded-[24px] border p-5 md:p-6 short:p-4 transition-all group cursor-pointer ac-clay ${
             isNow ? "translate-y-[-2px]" : ""
           }`}
-          style={{
-            background: s.card,
-            borderColor: isNow ? s.accent : s.border,
-            boxShadow: selectedRing(isNow),
-          }}
+          style={choiceCard(isNow)}
           onClick={() => setBrainChoice("now")}
           role="button"
           tabIndex={0}
@@ -58,12 +57,12 @@ export function NeedBrainScreen() {
         >
           {/* Top row */}
           <div className="flex justify-between items-start">
-            {/* Brain SVG icon */}
+            {/* Brain SVG icon — R126-3g: the ClayIconChip tile (accentTint +
+                rim + the accentDeep glyph). */}
             <div
-              className="w-12 h-12 rounded-[14px] border-[1.5px] grid place-items-center"
-              style={{ backgroundColor: s.accent, borderColor: s.borderStrong }}
+              className="w-12 h-12 rounded-[14px] border grid place-items-center bg-accent-tint border-clay-rim"
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke={s.accentText} strokeWidth="1.5" className="w-6 h-6">
+              <svg viewBox="0 0 24 24" fill="none" stroke={s.accentDeep} strokeWidth="1.5" className="w-6 h-6">
                 <path d="M12 2C8.5 2 5 4.5 5 8.5c0 2 1 3.5 2 4.5v5c0 1.5 1 3 2.5 3.5.5-1 1.5-1.5 2.5-1.5s2 .5 2.5 1.5c1.5-.5 2.5-2 2.5-3.5v-5c1-1 2-2.5 2-4.5C19 4.5 15.5 2 12 2z" />
               </svg>
             </div>
@@ -71,8 +70,7 @@ export function NeedBrainScreen() {
             {/* Right column: badge + radio */}
             <div className="flex items-center gap-2">
               <span
-                className="px-2 py-0.5 rounded-full border text-[10px] font-bold"
-                style={{ backgroundColor: s.accent, color: s.accentText, borderColor: s.accent }}
+                className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-badge-accent text-badge-accent-fg"
               >
                 RECOMMENDED
               </span>
@@ -81,7 +79,7 @@ export function NeedBrainScreen() {
                 className="w-6 h-6 rounded-full border-[1.5px] grid place-items-center"
                 style={{
                   borderColor: s.borderStrong,
-                  background: isNow ? s.toggleActive : "transparent",
+                  background: isNow ? s.accentDeep : "transparent",
                 }}
               >
                 {isNow && (
@@ -97,13 +95,13 @@ export function NeedBrainScreen() {
           <div className="mt-3 font-black text-[16px] tracking-tight" style={{ color: s.text }}>Configure now</div>
           <div className="text-[12px] font-medium" style={{ color: s.textSecondary }}>Most devs start here</div>
 
-          {/* Checklist */}
+          {/* Checklist — R126-3g: the ✓ chips ride the accentTint +
+              accentDeep icon-chip pair. */}
           <div className="mt-5 short:mt-3 space-y-2">
             {["Connect API • secure & local", "Test connection • instant feedback", "Tune reasoning • none → extra"].map((item) => (
               <div key={item} className="flex items-center gap-2 text-[13px] font-medium" style={{ color: s.text }}>
                 <span
-                  className="w-5 h-5 rounded-full grid place-items-center text-[10px]"
-                  style={{ background: s.pillBg, color: s.pillText }}
+                  className="w-5 h-5 rounded-full grid place-items-center text-[10px] bg-accent-tint text-accent-deep"
                 >
                   ✓
                 </span>
@@ -112,17 +110,13 @@ export function NeedBrainScreen() {
             ))}
           </div>
 
-          {/* Provider logos */}
+          {/* Provider logos — R126-3g: the ghost avatars sink into wells. */}
           <div className="mt-5 short:mt-3 flex items-center gap-2">
             {["O", "A", "G", "R"].map((letter) => (
               <span
                 key={letter}
-                className="w-8 h-8 rounded-full border grid place-items-center text-[11px] font-black"
-                style={{
-                  background: s.subtle,
-                  borderColor: s.border,
-                  color: s.text,
-                }}
+                className="w-8 h-8 rounded-full border grid place-items-center text-[11px] font-black border-clay-rim bg-well"
+                style={{ color: s.text }}
               >
                 {letter}
               </span>
@@ -136,11 +130,7 @@ export function NeedBrainScreen() {
             className="mt-auto pt-5 short:pt-3"
           >
             <div
-              className="rounded-[14px] border px-3 py-2.5 flex items-center justify-between"
-              style={{
-                background: s.subtle,
-                borderColor: s.border,
-              }}
+              className="ac-well rounded-[14px] px-3 py-2.5 flex items-center justify-between"
             >
               <span className="text-[11px] font-bold" style={{ color: s.textTertiary }}>EST. TIME</span>
               <span className="text-[12px] font-bold" style={{ color: s.text }}>~35 sec</span>
@@ -150,14 +140,10 @@ export function NeedBrainScreen() {
 
         {/* Card 2 – I'll do it later */}
         <div
-          className={`h-full flex flex-col text-left rounded-[28px] border-[2px] p-5 md:p-6 short:p-4 transition-all group cursor-pointer ${
+          className={`h-full flex flex-col text-left rounded-[24px] border p-5 md:p-6 short:p-4 transition-all group cursor-pointer ac-clay ${
             isLater ? "translate-y-[-2px]" : ""
           }`}
-          style={{
-            background: s.card,
-            borderColor: isLater ? s.accent : s.border,
-            boxShadow: selectedRing(isLater),
-          }}
+          style={choiceCard(isLater)}
           onClick={() => setBrainChoice("later")}
           role="button"
           tabIndex={0}
@@ -165,13 +151,10 @@ export function NeedBrainScreen() {
         >
           {/* Top row */}
           <div className="flex justify-between items-start">
-            {/* Clock SVG icon */}
+            {/* Clock SVG icon — R126-3g: the quiet choice's tile sinks into
+                the well (the unselected tier). */}
             <div
-              className="w-12 h-12 rounded-[14px] border-[1.5px] grid place-items-center"
-              style={{
-                background: s.subtle,
-                borderColor: s.borderStrong,
-              }}
+              className="w-12 h-12 rounded-[14px] border grid place-items-center border-clay-rim bg-well"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke={s.text} strokeWidth="1.5" className="w-6 h-6">
                 <circle cx="12" cy="12" r="9" />
@@ -184,7 +167,7 @@ export function NeedBrainScreen() {
               className="w-6 h-6 rounded-full border-[1.5px] grid place-items-center"
               style={{
                 borderColor: s.borderStrong,
-                background: isLater ? s.toggleActive : "transparent",
+                background: isLater ? s.accentDeep : "transparent",
               }}
             >
               {isLater && (
@@ -204,16 +187,13 @@ export function NeedBrainScreen() {
             Start exploring without a model. Add one whenever you&apos;re ready. No keys needed.
           </p>
 
-          {/* Demo brain card */}
+          {/* Demo brain card — R126-3g: dashed clay rim. */}
           <div
-            className="mt-6 short:mt-4 rounded-[14px] border-[1.5px] border-dashed p-3 flex items-center gap-3"
-            style={{
-              borderColor: s.border,
-            }}
+            className="mt-6 short:mt-4 rounded-[14px] border border-dashed p-3 flex items-center gap-3 border-clay-rim"
           >
             <span
-              className="w-10 h-10 rounded-full grid place-items-center text-[16px]"
-              style={{ background: s.subtle }}
+              className="w-10 h-10 rounded-full grid place-items-center text-[16px] bg-well"
+              style={{ color: s.textTertiary }}
             >
               ◐
             </span>

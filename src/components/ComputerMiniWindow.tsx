@@ -9,6 +9,7 @@ import { SEMANTIC_COLORS } from "../lib/semantics";
 import { isTauri } from "../lib/sidecar";
 import type { ThemeStyles } from "../lib/themes";
 import { useThemeStyles } from "../lib/use-theme-styles";
+import { cn } from "../lib/utils";
 import { withAlpha } from "./dashboard/helpers";
 
 /**
@@ -277,12 +278,15 @@ function MiniPill({
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -12, scale: 0.97 }}
       transition={{ duration: 0.18, ease }}
-      className="pointer-events-auto flex max-w-[560px] items-center gap-3 rounded-full border px-3.5 py-1.5"
+      // R126-3h (TOKENS §5/§9 — the pill RISES): the clay card spelling —
+      // rounded-full stays (a pill), the 1px clay-rim hairline replaces the
+      // borderStrong leg, and the UPWARD clay sheet shadow replaces
+      // softShadow. The frosted fill (dark-mode translucent card + the
+      // backdrop blur) stays — the floating-pill material.
+      className="pointer-events-auto ac-clay-sheet flex max-w-[560px] items-center gap-3 rounded-full border border-clay-rim px-3.5 py-1.5"
       style={{
         background: styles.isDark ? withAlpha(styles.card, 0.94) : styles.card,
         backdropFilter: "blur(14px)",
-        borderColor: styles.borderStrong,
-        boxShadow: styles.softShadow,
       }}
       role="status"
       aria-label="Agent computer monitor"
@@ -304,8 +308,12 @@ function MiniPill({
           ·
         </span>
         <span
-          className="min-w-0 flex-1 truncate text-[11px]"
-          style={{ color: error !== null ? SEMANTIC_COLORS.danger : styles.textSecondary }}
+          className={cn(
+            "min-w-0 flex-1 truncate text-[11px]",
+            // R126-3h: the error ink rides the danger-deep tier (the flat
+            // SEMANTIC hex dies).
+            error !== null ? "text-danger-deep" : "text-muted",
+          )}
           data-testid="mini-activity"
           title={activity}
         >
@@ -323,7 +331,11 @@ function MiniPill({
         ) : null}
       </div>
 
-      {/* STOP — the danger pill (the one prominent control). */}
+      {/* STOP — the danger pill (the one prominent control).
+          R126-3h: the OUTLINED-danger species (1px border-danger-deep +
+          danger-deep ink on transparent, the composer Stop spelling — the
+          danger wash fill dies); the kill-switch state rides the MUTED tier
+          (the hardcoded #788494 gray dies). */}
       <button
         type="button"
         onClick={onStop}
@@ -334,20 +346,12 @@ function MiniPill({
             ? "The kill switch is active — the agent cannot control the desktop"
             : "Kill switch — stop the agent's computer control now"
         }
-        className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[10.5px] font-bold uppercase tracking-wider transition-colors disabled:cursor-default"
-        style={
+        className={cn(
+          "flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[10.5px] font-bold uppercase tracking-wider transition-colors duration-100 disabled:cursor-default",
           killSwitch
-            ? {
-                color: styles.textTertiary,
-                background: withAlpha("#788494", 0.10),
-                borderColor: styles.border,
-              }
-            : {
-                color: SEMANTIC_COLORS.danger,
-                background: withAlpha(SEMANTIC_COLORS.danger, 0.13),
-                borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
-              }
-        }
+            ? "border-line-strong text-muted"
+            : "border-danger-deep text-danger-deep hover:bg-badge-danger",
+        )}
       >
         {stopping ? (
           <LoaderCircle size={11} className="animate-spin" aria-hidden />
@@ -360,14 +364,15 @@ function MiniPill({
   );
 }
 
-/** The status dot — a heartbeat while the agent is in control, a calm gray
- * point once stopped (the MiniApp PulsingDot discipline). */
+/** The status dot — a heartbeat while the agent is in control, a calm
+ * MUTED-tier point once stopped (R126-3h: the hardcoded #788494 gray dies —
+ * the muted ink class owns the stopped hue; the live hue is a DOT, the §11
+ * dots-only flat-hue exception, and keeps the semantic success green). */
 function PulsingDot({ live }: { live: boolean }) {
-  const color = live ? SEMANTIC_COLORS.success : "#788494";
   return (
     <motion.span
-      className="inline-block shrink-0 rounded-full"
-      style={{ width: 6, height: 6, background: color }}
+      className={cn("inline-block shrink-0 rounded-full", live ? "" : "bg-muted")}
+      style={live ? { width: 6, height: 6, background: SEMANTIC_COLORS.success } : { width: 6, height: 6 }}
       initial={false}
       animate={live ? { scale: [1, 1.5, 1], opacity: [1, 0.45, 1] } : { scale: 1, opacity: 0.7 }}
       transition={live ? { repeat: Infinity, duration: 1.6, ease: "easeInOut" } : { duration: 0.18, ease }}

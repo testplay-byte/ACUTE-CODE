@@ -41,8 +41,10 @@ src/
 ├── components/
 │   ├── shell/                AppShell + Sidebar (navigation) — the app frame
 │   ├── project-chat/         THE everyday chat screen (/project/:id/chat):
-│   │                         ProjectChatScreen → ChatFocusLayout / Experimental
-│   │                         (freeform panels) → AgentChatPanel (chat orchestrator)
+│   │                         ProjectChatScreen → ChatFocusLayout (the ONE
+│   │                         chat layout — R126-3d-1 retired the dead
+│   │                         3-panel/experimental branches) → AgentChatPanel
+│   │                         (chat orchestrator)
 │   │                         + WorkingSection (shared turn renderer) + composer/
 │   │                         (Composer, ModelSelector, ContextDonut) + panels/
 │   │                         (Explorer, Todo) + CommandPalette ⌘K + ChatMarkdown

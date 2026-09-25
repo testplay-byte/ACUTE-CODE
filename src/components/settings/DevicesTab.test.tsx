@@ -724,11 +724,13 @@ describe("DevicesTab §b R115: the pairing dialog upgrades (ROUND-115 R115-E1)",
     expect(hero.textContent).toContain("This desktop is");
     const eyebrow = hero.firstElementChild as HTMLElement;
     expect(eyebrow.textContent).toBe("This desktop is");
-    // The name dominates: text-2xl/3xl font-bold, and it renders AFTER
-    // (below) the eyebrow.
+    // The name dominates: text-2xl/3xl, and it renders AFTER
+    // (below) the eyebrow. R126-3f-3 re-pin: the hero's weight snapped
+    // font-bold → font-semibold (TOKENS §2's weight law — 700 is wizard
+    // display + StatCard value only); the size tiers are unchanged.
     const name = screen.getByTestId("pair-machine-name");
     expect(name.textContent).toBe("Confused Coconut");
-    expect(name.className).toContain("font-bold");
+    expect(name.className).toContain("font-semibold");
     expect(name.className).toContain("text-2xl");
     expect(eyebrow.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 

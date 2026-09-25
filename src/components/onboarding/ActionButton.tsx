@@ -21,6 +21,14 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
  * (the --ac-chrome-sheen stop halved in themes.ts + the narrowed gradient
  * in index.css) — "jewelry, rationed": a glint catching the light, not a
  * shine sweep. The class grammar is unchanged.
+ *
+ * R126-3g (the clay palette pass): the gradient stops re-derive from the
+ * ONE accent family — accent → accentDeep (TOKENS §1d) — replacing the
+ * pre-R126 accent→accent2 second-hue ramp; the keycap hint chip sinks into
+ * the recessed well (surfaceWell + clayRim hairline, TOKENS §10) instead
+ * of the accentText color-mix tint. The gradient + sheen + bentoShadow
+ * grammar itself is UNTOUCHED (WIZARD-DNA §7 — the one sanctioned CTA
+ * surface).
  */
 export function ActionButton({
   variant,
@@ -46,25 +54,22 @@ export function ActionButton({
         type="button"
         aria-label={ariaLabel}
         onClick={onClick}
-        className="h-12 px-5 rounded-full border-[1.5px] font-bold text-[14px] hover:opacity-80 transition-opacity cursor-pointer"
-        style={{
-          background: s.card,
-          borderColor: s.border,
-          color: s.text,
-          boxShadow: s.softShadow,
-        }}
+        className="h-12 px-5 rounded-full border font-bold text-[14px] hover:opacity-80 transition-opacity cursor-pointer border-clay-rim ac-clay-sm bg-card"
+        style={{ color: s.text }}
       >
         {children}
       </button>
     );
   }
 
+  // R126-3g: the gradient stops re-derive from the accent family —
+  // accent → accentDeep (the second-hue accent2 stop retired).
   const idle =
     variant === "primary" && !disabled
       ? {
-          background: `linear-gradient(135deg, ${s.accent}, ${s.theme.accent2})`,
+          background: `linear-gradient(135deg, ${s.accent}, ${s.accentDeep})`,
           color: s.accentText,
-          borderColor: s.accent,
+          borderColor: s.accentDeep,
           boxShadow: s.bentoShadow,
         }
       : {
@@ -91,9 +96,12 @@ export function ActionButton({
         <span
           className="px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold grid place-items-center leading-none"
           style={{
-            color: s.accentText,
-            background: `color-mix(in srgb, ${s.accentText} 18%, transparent)`,
-            border: `1px solid color-mix(in srgb, ${s.accentText} 38%, transparent)`,
+            // R126-3g: the keycap hint chip = the recessed well
+            // (surfaceWell fill + clayRim hairline, TOKENS §10) with
+            // primary ink — the accentText color-mix tint retired.
+            color: s.text,
+            background: s.surfaceWell,
+            border: `1px solid ${s.clayRim}`,
           }}
         >
           {hint}

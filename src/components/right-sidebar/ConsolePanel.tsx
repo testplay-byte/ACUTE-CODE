@@ -10,11 +10,9 @@ import {
 import { clearAll, dismiss, errors, subscribe, type AppError } from "../../lib/error-bus";
 import { formatWhen } from "../../lib/format";
 import type { RightSidebarTab } from "../../lib/right-sidebar-store";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
 import { ease } from "../../lib/motion";
-import { withAlpha } from "../dashboard/helpers";
 import { ClampedText } from "../shared/ClampedText";
 
 /**
@@ -93,13 +91,15 @@ function formatEntry(entry: ConsoleEntry): string {
 }
 
 /**
- * Source chip colors — documented exception like MemoryPanel's KIND_COLORS:
- * they carry source meaning across every theme/mode. Frontend = data blue
- * (the app's own code), sidecar = danger red (the engine itself failed).
+ * R126-3e (§11 — the de-blue): the source/kind chip = the BADGE TONES —
+ * sidecar = danger (the engine itself failed), frontend = neutral (the
+ * app's own quiet reporting; the blue SOURCE_COLORS leg died). The source
+ * distinction rides the chip TEXT as always; the tones are sanctioned
+ * containers, never flat-hue fills.
  */
-const SOURCE_COLORS: Record<ConsoleEntry["source"], string> = {
-  frontend: "#82aaff",
-  sidecar: SEMANTIC_COLORS.danger,
+const SOURCE_CHIP_CLASSES: Record<ConsoleEntry["source"], string> = {
+  frontend: "bg-badge-neutral text-badge-neutral-fg",
+  sidecar: "bg-badge-danger text-badge-danger-fg",
 };
 
 export function ConsolePanel({ projectId, tab }: { projectId: string; tab: RightSidebarTab }) {
@@ -203,17 +203,20 @@ export function ConsolePanel({ projectId, tab }: { projectId: string; tab: Right
       data-project-id={projectId}
     >
       {/* ── Panel header: label + live count + actions ── */}
+      {/* R126-3e: the header strip = the in-flow chrome shade
+          (bg-header-surface + the clay-rim hairline); the count chip = the
+          NEUTRAL badge tone. */}
       <div
-        className="shrink-0 flex items-center gap-2 px-3 h-9 border-b"
-        style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle }}
+        className="shrink-0 flex items-center gap-2 px-3 h-9 border-b border-clay-rim bg-header-surface"
       >
         <Activity size={13} style={{ color: styles.accent }} className="shrink-0" />
         <div className="flex-1 min-w-0 truncate text-[12px] font-semibold" style={{ color: styles.text }}>
           Console
         </div>
         <span
-          className="shrink-0 text-[10px] font-mono font-medium uppercase px-1.5 py-0.5 rounded-md"
-          style={{ color: styles.textTertiary, background: withAlpha(styles.textTertiary, 0.1) }}
+          // R126-3e tightening (§6 numbers discipline): tabular-nums on the
+          // live count.
+          className="shrink-0 text-[10px] font-mono font-medium uppercase px-1.5 py-0.5 rounded-md tabular-nums bg-badge-neutral text-badge-neutral-fg"
           data-testid="console-count"
         >
           {entries.length} errors
@@ -263,26 +266,23 @@ export function ConsolePanel({ projectId, tab }: { projectId: string; tab: Right
         ) : sidecarQuery.isError && !showSidecarError ? (
           // Engine unreachable AND nothing to show from the frontend half —
           // the sibling error card (MemoryPanel's visual language).
+          // R126-3e (§11): the danger badge-tone container + the
+          // outlined-danger Retry — the withAlpha washes died.
           <div className="px-3 py-3">
             <div
-              className="rounded-xl px-3 py-3 flex flex-col gap-2"
-              style={{
-                background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-                border: `1px solid ${withAlpha(SEMANTIC_COLORS.danger, 0.3)}`,
-              }}
+              className="rounded-xl px-3 py-3 flex flex-col gap-2 bg-badge-danger text-badge-danger-fg"
             >
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold">
                 Couldn&apos;t load engine errors
               </div>
-              <div className="text-[11px]" style={{ color: styles.textSecondary }}>
+              <div className="text-[11px]">
                 {sidecarQuery.error instanceof Error
                   ? sidecarQuery.error.message
                   : "The sidecar didn't answer."}
               </div>
               <button
                 onClick={() => void sidecarQuery.refetch()}
-                className="self-start h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5"
-                style={{ background: styles.card, color: styles.text, border: `1px solid ${styles.border}` }}
+                className="self-start h-6 px-2.5 rounded-full text-[10px] font-semibold inline-flex items-center gap-1.5 border border-danger-deep text-danger-deep transition-transform duration-100 active:scale-[0.98]"
               >
                 <RefreshCw size={10} /> Try again
               </button>
@@ -292,8 +292,11 @@ export function ConsolePanel({ projectId, tab }: { projectId: string; tab: Right
           <div className="h-full grid place-items-center px-6 text-center">
             <div className="max-w-[240px]">
               <div
-                className="w-11 h-11 mx-auto mb-3 grid place-items-center rounded-2xl border-2 border-dashed"
-                style={{ borderColor: styles.border, color: styles.textTertiary }}
+                // R126-3e tightening: the dashed tile rides the clay rim on
+                // the class leg (one spelling with RightSidebar's empty tile);
+                // the inline borderColor leg died.
+                className="w-11 h-11 mx-auto mb-3 grid place-items-center rounded-2xl border-2 border-dashed border-clay-rim"
+                style={{ color: styles.textTertiary }}
               >
                 <Activity size={18} />
               </div>
@@ -309,8 +312,9 @@ export function ConsolePanel({ projectId, tab }: { projectId: string; tab: Right
           <div className="px-2.5 py-2.5 flex flex-col gap-1.5" data-testid="console-entries">
             {clearError !== null || showSidecarError ? (
               <div
-                className="rounded-xl px-3 py-2 text-[11px]"
-                style={{ color: SEMANTIC_COLORS.danger, background: withAlpha(SEMANTIC_COLORS.danger, 0.08) }}
+                // R126-3e (§11): the inline alert = the danger badge-tone
+                // container — the withAlpha wash died.
+                className="rounded-xl px-3 py-2 text-[11px] bg-badge-danger text-badge-danger-fg"
                 role="alert"
                 data-testid="console-sidecar-error-note"
               >
@@ -340,8 +344,9 @@ export function ConsolePanel({ projectId, tab }: { projectId: string; tab: Right
 
       {/* ── Footer hint: what this console watches ── */}
       <div
-        className="shrink-0 flex items-center gap-1.5 px-3 h-7 border-t text-[10px]"
-        style={{ borderColor: styles.border, color: styles.textTertiary, background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.subtle }}
+        // R126-3e: the footer strip = the in-flow chrome shade.
+        className="shrink-0 flex items-center gap-1.5 px-3 h-7 border-t border-clay-rim bg-header-surface text-[10px]"
+        style={{ color: styles.textTertiary }}
       >
         <Activity size={10} style={{ color: styles.accent }} className="shrink-0" />
         <span className="truncate">Frontend + engine errors · live</span>
@@ -366,7 +371,6 @@ function ConsoleRow({
   onDismiss: () => void;
 }) {
   const styles = useThemeStyles();
-  const color = SOURCE_COLORS[entry.source];
   const hasDetail = entry.detail !== undefined || entry.componentStack !== undefined;
 
   return (
@@ -376,11 +380,10 @@ function ConsoleRow({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.97 }}
       transition={{ duration: 0.14, ease }}
-      className="rounded-xl px-2.5 py-2 group relative"
-      style={{
-        background: styles.isDark ? "rgba(0,0,0,0.14)" : styles.card,
-        border: `1px solid ${styles.border}`,
-      }}
+      // R126-3e (TOKENS §10): the merged log row = THE RECESSED MONO BLOCK
+      // (.ac-mono-block — the home for terminal/mono text; the message ink
+      // inherits the block's own); the JS isDark/card + border legs died.
+      className="rounded-xl px-2.5 py-2 group relative ac-mono-block"
       data-testid="console-entry"
       data-entry-id={entry.id}
       data-entry-source={entry.source}
@@ -388,8 +391,7 @@ function ConsoleRow({
       {/* Chip row: source+kind chip · ts · ×count badge */}
       <div className="flex items-center gap-2 min-w-0">
         <span
-          className="text-[10px] font-mono font-medium uppercase px-1.5 py-0.5 rounded-md shrink-0 max-w-[45%] truncate"
-          style={{ color, background: withAlpha(color, 0.14) }}
+          className={`text-[10px] font-mono font-medium uppercase px-1.5 py-0.5 rounded-md shrink-0 max-w-[45%] truncate ${SOURCE_CHIP_CLASSES[entry.source]}`}
           data-kind-chip={`${entry.source}/${entry.kind}`}
           title={`${entry.source} · ${entry.kind}`}
         >
@@ -404,8 +406,8 @@ function ConsoleRow({
         </span>
         {entry.count > 1 ? (
           <span
-            className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-md shrink-0 tabular-nums"
-            style={{ color: SEMANTIC_COLORS.danger, background: withAlpha(SEMANTIC_COLORS.danger, 0.12) }}
+            // R126-3e (§11): the ×count badge = the danger badge tone.
+            className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-md shrink-0 tabular-nums bg-badge-danger text-badge-danger-fg"
             data-testid="console-entry-count"
             title={`fired ${entry.count} times`}
           >
@@ -440,7 +442,9 @@ function ConsoleRow({
           <X size={11} />
         </button>
       </div>
-      {/* The message — mono, clamped; click anywhere on the card expands. */}
+      {/* The message — mono, clamped; click anywhere on the card expands.
+          R126-3e: the ink inherits the mono block's own (the JS text leg
+          died). */}
       <div
         onClick={hasDetail ? onToggle : undefined}
         className={hasDetail ? "cursor-pointer" : undefined}
@@ -452,15 +456,14 @@ function ConsoleRow({
           text={entry.message}
           lines={expanded ? 200 : 3}
           className="text-[11px] font-mono leading-[1.55] whitespace-pre-wrap break-words pr-1"
-          style={{ color: styles.text }}
         />
       </div>
       {/* Expanded detail: full detail + component stack in a <pre>. */}
       {expanded ? (
         <pre
           data-testid="console-entry-detail"
-          className="mt-1.5 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-lg px-2 py-1.5 text-[10px] font-mono leading-[1.5] custom-scrollbar"
-          style={{ background: styles.isDark ? "rgba(0,0,0,0.2)" : styles.subtle, color: styles.textSecondary }}
+          className="mt-1.5 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-mono-line px-2 py-1.5 text-[10px] font-mono leading-[1.5] custom-scrollbar"
+          style={{ color: styles.textSecondary }}
         >
           {[entry.detail, entry.componentStack].filter((s) => s !== undefined).join("\n\n") ||
             "(no detail)"}

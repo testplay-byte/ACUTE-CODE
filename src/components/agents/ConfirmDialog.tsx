@@ -22,7 +22,10 @@ export function ConfirmDialog({
       <DialogContent className="w-[min(400px,92vw)]" aria-describedby={undefined}>
         <DialogHeader title={title} />
         <div className="px-5 py-4 text-[13px] text-muted">{body}</div>
-        <div className="flex justify-end gap-2 border-t-[1.5px] border-line px-5 py-3.5">
+        {/* R126-3h: the footer divider snaps to the 1px hairline (the 1.5px
+            bento-era spelling dies); the buttons ride controls.tsx's
+            converted species (ghost cancel + the OUTLINED danger confirm). */}
+        <div className="flex justify-end gap-2 border-t border-line px-5 py-3.5">
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>

@@ -30,8 +30,7 @@ export function AtMentionPicker({
       role="listbox"
       aria-label="Mention a project file"
       data-at-mention-picker
-      className="absolute bottom-full left-2 mb-1.5 w-72 max-w-[calc(100%-1rem)] rounded-2xl border p-1.5 z-50"
-      style={{ background: styles.card, borderColor: styles.border, boxShadow: styles.bentoShadow }}
+      className="absolute bottom-full left-2 mb-1.5 w-72 max-w-[calc(100%-1rem)] rounded-2xl border border-clay-rim bg-card p-1.5 z-50 ac-clay-sm"
     >
       <div className="px-2 pb-1.5 mb-1 border-b font-mono text-[10px]" style={{ borderColor: styles.borderSubtle, color: styles.textTertiary }}>
         @ {query}
@@ -47,11 +46,16 @@ export function AtMentionPicker({
             onMouseEnter={() => onHighlight(i)}
             title={path}
             className={`w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-lg font-mono text-[10px] truncate transition-colors ${
-              i === highlighted ? "bg-accent-soft" : "hover:bg-hover"
+              // R126-3d-4: the selected row = accentTint + accentDeep ink
+              // (the pickers' selected-row grammar; bg-accent-soft retired).
+              i === highlighted ? "bg-accent-tint text-accent-deep" : "hover:bg-hover text-muted"
             }`}
-            style={{ color: styles.textSecondary }}
           >
-            <FileText size={11} className="shrink-0" style={{ color: i === highlighted ? styles.accent : styles.textTertiary }} />
+            <FileText
+              size={11}
+              className={`shrink-0 ${i === highlighted ? "text-accent-deep" : ""}`}
+              style={i === highlighted ? undefined : { color: styles.textTertiary }}
+            />
             <span className="min-w-0 flex-1 truncate">{path}</span>
           </button>
         ))}

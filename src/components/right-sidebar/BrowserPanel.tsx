@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -433,7 +433,6 @@ function ViewportNumberInput({
   testId: string;
   width: number;
 }) {
-  const styles = useThemeStyles();
   const [draft, setDraft] = useState(String(value));
   const [focused, setFocused] = useState(false);
   useEffect(() => {
@@ -459,8 +458,9 @@ function ViewportNumberInput({
       }}
       aria-label={label}
       data-testid={testId}
-      className="px-1 rounded-full border text-center outline-none"
-      style={{ width, height: 24, background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
+      // R126-3e: the number steppers = the chip grammar (bg-well + the rim).
+      className="px-1 rounded-full border border-clay-rim bg-well text-center outline-none text-muted"
+      style={{ width, height: 24 }}
     />
   );
 }
@@ -1803,12 +1803,6 @@ export function BrowserPanel({
     : `${viewW}×${viewH} @ ${Math.round(zoom * 100)}%` +
       (fit && fitScale < 1 ? ` (fit ${Math.round(scale * 100)}%)` : "");
 
-  const ghostBtn = (extraStyle?: CSSProperties): CSSProperties => ({
-    color: styles.textSecondary,
-    border: `1px solid ${styles.border}`,
-    ...extraStyle,
-  });
-
   const hasPage = state !== null && state.currentUrl !== null && state.ticket !== null;
 
   // R96-G: the address field's focus ring — a real browser's bar visually
@@ -1822,8 +1816,9 @@ export function BrowserPanel({
     <div className="h-full grid place-items-center px-6 text-center" data-testid="browser-empty">
       <div>
         <div
-          className="w-14 h-14 mx-auto mb-3 grid place-items-center rounded-2xl"
-          style={{ background: styles.isDark ? "rgba(0,0,0,0.18)" : styles.card, border: `1px solid ${styles.border}` }}
+          // R126-3e: the empty-state icon tile = the accent-tint hero tile
+          // (TOKENS §10) + the clay rim; the JS isDark/card legs died.
+          className="w-14 h-14 mx-auto mb-3 grid place-items-center rounded-2xl bg-accent-tint border border-clay-rim"
         >
           <Globe size={26} style={{ color: styles.accent }} />
         </div>
@@ -1853,8 +1848,9 @@ export function BrowserPanel({
             <button
               key={link.url}
               onClick={() => onQuickLink(link.url)}
-              className="inline-flex items-center gap-1 h-7 px-3 rounded-full text-[11px] font-medium transition-colors hover:bg-hover"
-              style={ghostBtn()}
+              // R126-3e: the quick links = the chip grammar (border-clay-rim +
+              // bg-well + text-muted) — the ghostBtn JS border leg died.
+              className="inline-flex items-center gap-1 h-7 px-3 rounded-full text-[11px] font-medium border border-clay-rim bg-well text-muted transition-colors hover:bg-hover"
             >
               <Globe size={10} />
               {link.label}
@@ -1867,9 +1863,10 @@ export function BrowserPanel({
 
   return (
     <div
-      className="h-full flex flex-col min-h-0 gap-1.5 p-1.5"
+      // R126-3e (TOKENS §10): the panel's ambient bed = THE WELL (the
+      // recessed rung); the JS isDark/subtle leg died.
+      className="h-full flex flex-col min-h-0 gap-1.5 p-1.5 bg-well"
       data-testid="browser-panel"
-      style={{ background: styles.isDark ? "rgba(0,0,0,0.10)" : styles.subtle }}
     >
       {/* ── Chrome bar: navigation + address + explicit external actions.
           R60-D: the R59 rounded-card language — each panel row is a rounded
@@ -1884,8 +1881,9 @@ export function BrowserPanel({
           application itself"), and it can never stick: the echo-suppressed
           navigation hook now clears `loading` too (file:// pages included). ── */}
       <div
-        className="relative shrink-0 flex items-center gap-1 px-2 h-9 rounded-xl border"
-        style={{ borderColor: styles.border, background: styles.isDark ? "rgba(0,0,0,0.15)" : styles.card }}
+        // R126-3e: the toolbar = the CHIP GRAMMAR (border-clay-rim + bg-well
+        // — the quiet container; the JS isDark/card + border legs died).
+        className="relative shrink-0 flex items-center gap-1 px-2 h-9 rounded-xl border border-clay-rim bg-well"
       >
         <button
           onClick={() => goDirection("back")}
@@ -1944,11 +1942,14 @@ export function BrowserPanel({
 
         <form onSubmit={onSubmit} className="flex-1 min-w-0 flex items-center">
           <div
-            className="flex-1 flex items-center gap-1.5 h-7 px-2.5 rounded-full border transition-colors"
+            // R126-3e: the URL bar = THE WELL + rim (TOKENS §10's input-fill
+            // law) with the R96-G FOCUS ACCENT EDGE kept byte-identical (the
+            // accent border + the soft halo — the focus story stands).
+            className="flex-1 flex items-center gap-1.5 h-7 px-2.5 rounded-full border transition-colors bg-well border-clay-rim"
             style={{
-              background: styles.card,
-              borderColor: addressFocused ? styles.accent : styles.border,
-              boxShadow: addressFocused ? `0 0 0 2px ${withAlpha(styles.accent, 0.18)}` : undefined,
+              ...(addressFocused
+                ? { borderColor: styles.accent, boxShadow: `0 0 0 2px ${withAlpha(styles.accent, 0.18)}` }
+                : {}),
             }}
           >
             {state?.loading ? (
@@ -2050,8 +2051,10 @@ export function BrowserPanel({
           title says so instead of a dead click. ── */}
       <div
         data-testid="browser-viewport-bar"
-        className="shrink-0 flex min-h-8 flex-wrap items-center gap-x-1.5 gap-y-1 px-2 py-1 rounded-xl border text-[11px]"
-        style={{ borderColor: styles.border, color: styles.textTertiary, background: styles.isDark ? "rgba(0,0,0,0.08)" : "transparent" }}
+        // R126-3e: the viewport bar (the staged-capture chrome row) = a CLAY
+        // SURFACE (bg-card + the clay rim) on the well bed.
+        className="shrink-0 flex min-h-8 flex-wrap items-center gap-x-1.5 gap-y-1 px-2 py-1 rounded-xl border border-clay-rim bg-card text-[11px]"
+        style={{ color: styles.textTertiary }}
       >
         {/* Group 1 — size: preset, W×H, zoom. */}
         <span className="flex min-w-0 items-center gap-1">
@@ -2071,8 +2074,8 @@ export function BrowserPanel({
             }}
             aria-label="Display size preset"
             data-testid="browser-preset-select"
-            className="h-6 min-w-0 max-w-32 rounded-full border px-2 outline-none cursor-pointer tabular-nums"
-            style={{ background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
+            // R126-3e: the selects = the chip grammar (bg-well + the rim).
+            className="h-6 min-w-0 max-w-32 rounded-full border border-clay-rim bg-well px-2 outline-none cursor-pointer tabular-nums text-muted"
           >
             {/* ROUND-50: native-mode default — fill the panel like a real
                 browser side-panel; presets remain one click away. */}
@@ -2118,8 +2121,7 @@ export function BrowserPanel({
             onChange={(e) => void setViewport(tabId, { zoom: Number(e.target.value) / 100 })}
             aria-label="Zoom"
             data-testid="browser-zoom-select"
-            className="h-6 rounded-full border px-2 outline-none cursor-pointer tabular-nums"
-            style={{ background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
+            className="h-6 rounded-full border border-clay-rim bg-well px-2 outline-none cursor-pointer tabular-nums text-muted"
           >
             {ZOOM_STEPS.map((z) => (
               <option key={z} value={String(Math.round(z * 100))}>
@@ -2163,9 +2165,8 @@ export function BrowserPanel({
           </button>
         </span>
         <span
-          className="ml-auto shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded-full tabular-nums"
+          className="ml-auto shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded-full tabular-nums bg-badge-neutral text-badge-neutral-fg"
           data-testid="browser-readout"
-          style={{ background: styles.subtle, color: styles.textTertiary }}
           title={
             nativeMode
               ? `Native mode: the page sees the preset's true CSS pixels — larger presets are scaled down to fit (the fit % is shown); the page always sees the dimensions you set`
@@ -2180,12 +2181,10 @@ export function BrowserPanel({
           rounded card in the same row rhythm (R60-D). ── */}
       {state?.error != null ? (
         <div
-          className="shrink-0 flex items-start gap-2 px-3 py-2 text-[11px] rounded-xl border"
-          style={{
-            background: styles.isDark ? "rgba(220,38,38,0.12)" : "rgba(254,226,226,1)",
-            color: styles.isDark ? "#fca5a5" : "#b91c1c",
-            borderColor: styles.border,
-          }}
+          // R126-3e (§11): the panel error card = the danger badge-tone
+          // container (the hardcoded mode rgba/hex pairs died) + the
+          // outlined-danger Retry.
+          className="shrink-0 flex items-start gap-2 px-3 py-2 text-[11px] rounded-xl border border-clay-rim bg-badge-danger text-badge-danger-fg"
           data-testid="browser-error-card"
           role="alert"
         >
@@ -2194,8 +2193,7 @@ export function BrowserPanel({
           <button
             onClick={onRetry}
             data-testid="browser-retry"
-            className="shrink-0 px-2 py-0.5 rounded-md font-medium"
-            style={ghostBtn({ color: styles.isDark ? "#fca5a5" : "#b91c1c", borderColor: styles.isDark ? "rgba(252,165,165,0.4)" : "rgba(185,28,28,0.3)" })}
+            className="shrink-0 px-2 py-0.5 rounded-md font-medium border border-danger-deep text-danger-deep transition-transform duration-100 active:scale-[0.98]"
           >
             Retry
           </button>
@@ -2219,8 +2217,11 @@ export function BrowserPanel({
           The proxy path's geometry below is EXACTLY as before. ── */}
       <div
         ref={contentRef}
-        className="relative flex-1 min-h-0 overflow-auto rounded-xl border"
-        style={{ background: styles.isDark ? "rgba(0,0,0,0.22)" : styles.subtle, borderColor: styles.border }}
+        // R126-3e: the content frame = the deep mono-block substrate (the
+        // page's recessed bed) + the clay rim; the JS isDark/subtle + border
+        // legs died. The webview glue (bounds sync, snap widths, keep-alive)
+        // is byte-identical.
+        className="relative flex-1 min-h-0 overflow-auto rounded-xl border border-clay-rim bg-mono-block"
       >
         {nativeMode ? (
           /* ROUND-50 (R50-a): the page area placeholder. The native child

@@ -42,6 +42,10 @@ vi.mock("../../../lib/menu-overlay", () => ({
     overlayState.hidden += 1;
   }),
   prewarmMenuOverlay: vi.fn(() => {}),
+  // R126-3h: the hook now builds its payload theme through the shared
+  // menuThemeFromStyles builder — a stub is enough (the theme's VALUES are
+  // pinned by lib/menu-overlay.test.ts, not here).
+  menuThemeFromStyles: vi.fn(() => ({ isDark: false }) as never),
   onMenuOverlayPick: vi.fn((cb: (pick: { kind: string; item: { kind: string; id: string } }) => void) => {
     overlayState.pickHandler = cb;
     return () => {

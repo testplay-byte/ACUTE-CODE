@@ -42,6 +42,7 @@ import {
   ContextDonut,
   buildUsageCardSections,
   contextDonutColor,
+  type DonutTones,
   usageRingColorKey,
 } from "./ContextDonut";
 import { fetchSessionContext, type SessionContextReport } from "../../../lib/api";
@@ -264,15 +265,18 @@ describe("ROUND-95 (R95-F) measured-usage prominence", () => {
 });
 
 describe("ROUND-95 (R95-F) ring grading (R51-c pure fn, pinned)", () => {
-  it("accent below the warn threshold, amber at it, danger above the danger threshold", () => {
-    const accent = "#3b82f6";
+  it("accent below the warn threshold, the warn tone at it, danger above the danger threshold", () => {
+    // R126-3d-4 re-pin: the tones arrive as a THEME triplet (accentDeep
+    // primary + warningDeep/dangerDeep tiers — the material spec); the
+    // THRESHOLDS are the pure contract, the colors the caller's.
+    const tones: DonutTones = { accent: "#3b82f6", warn: "#b45309", danger: "#dc2626" };
     expect(CONTEXT_DONUT_WARN).toBe(0.6);
     expect(CONTEXT_DONUT_DANGER).toBe(0.85);
-    expect(contextDonutColor(50_000, 200_000, accent)).toBe(accent);
-    expect(contextDonutColor(120_000, 200_000, accent)).toBe("#f59e0b");
-    expect(contextDonutColor(180_000, 200_000, accent)).toBe("#ef4444");
+    expect(contextDonutColor(50_000, 200_000, tones)).toBe(tones.accent);
+    expect(contextDonutColor(120_000, 200_000, tones)).toBe(tones.warn);
+    expect(contextDonutColor(180_000, 200_000, tones)).toBe(tones.danger);
     // Degenerate windows never divide by zero.
-    expect(contextDonutColor(10, 0, accent)).toBe(accent);
+    expect(contextDonutColor(10, 0, tones)).toBe(tones.accent);
   });
 });
 

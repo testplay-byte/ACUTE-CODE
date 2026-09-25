@@ -7,7 +7,6 @@ import { openLink } from "../../lib/open-link";
 import type { RightSidebarTab } from "../../lib/right-sidebar-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { highlightLine, getFileColor, SYNTAX_COLORS } from "../project-chat/highlight";
 import { withAlpha } from "../dashboard/helpers";
 
@@ -74,6 +73,9 @@ export function Markdown({ content, projectId }: { content: string; projectId?: 
         <pre
           key={`pre-${key++}`}
           className="my-2 rounded-lg p-3 font-mono text-[12px] leading-[1.55] overflow-x-auto auto-scroll border"
+          // R126-3e: the fenced-code block keeps the SANCTIONED syntax
+          // palette (the brief's keep — the Prism-family colors ride their
+          // own documented hexes).
           style={{ background: "rgba(0,0,0,0.18)", borderColor: withAlpha(SYNTAX_COLORS.comment, 0.3), color: "#d4d4d4" }}
         >
           <code>{buf.join("\n")}</code>
@@ -217,12 +219,12 @@ export function FileViewerPanel({ projectId, tab }: { projectId: string; tab: Ri
   return (
     <div className="h-full flex flex-col min-h-0">
       {/* File path breadcrumb */}
+      {/* R126-3e: the path strip = the in-flow chrome shade
+          (bg-header-surface + the clay-rim hairline). */}
       <div
-        className="shrink-0 flex items-center gap-1.5 px-3 h-7 border-b font-mono text-[11px] truncate"
+        className="shrink-0 flex items-center gap-1.5 px-3 h-7 border-b border-clay-rim bg-header-surface font-mono text-[11px] truncate"
         style={{
-          borderColor: styles.border,
           color: styles.textSecondary,
-          background: styles.isDark ? "rgba(0,0,0,0.15)" : styles.subtle,
         }}
         title={filePath}
       >
@@ -237,7 +239,9 @@ export function FileViewerPanel({ projectId, tab }: { projectId: string; tab: Ri
             loading…
           </div>
         ) : error ? (
-          <div className="px-3 py-2 text-[11px] font-mono" style={{ color: SEMANTIC_COLORS.danger }}>
+          // R126-3e (§11): the load failure = danger status TEXT (the deep
+          // pair, class leg).
+          <div className="px-3 py-2 text-[11px] font-mono text-danger-deep">
             {error instanceof Error ? error.message : "failed to load file"}
           </div>
         ) : isMd ? (

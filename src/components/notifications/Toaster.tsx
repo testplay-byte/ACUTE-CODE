@@ -46,7 +46,9 @@ import {
   X,
 } from "lucide-react";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-import { withAlpha } from "../dashboard/helpers";
+// R126-3h: withAlpha is retired from this file (the tone legs are the §11
+// badge-tone classes now); the cn helper composes them.
+import { cn } from "../../lib/utils";
 // R98-J: the Web-Notification path below is WEB-ONLY now —
 // tauri-plugin-notification (>= 2.3) injects a window.Notification
 // POLYFILL into every Tauri webview, so without this guard the in-page
@@ -87,19 +89,28 @@ export function autoDismissDelayFor(kind: NotificationKind): number | null {
   return PERSISTENT_KINDS.has(kind) ? null : AUTO_DISMISS_MS;
 }
 
-/** Per-kind accent color (status tones — independent of the theme palette). */
-function toneForKind(kind: NotificationKind): string {
+/** Per-kind status tone (R126-3h, TOKENS §11 — the status grammar): the
+ * icon circle is a CHIP CONTAINER, so it rides the tinted badge tone pair
+ * with the deep-tier glyph — the hardcoded semantic hexes
+ * (#10B981/#EF4444/#F59E0B/#6366F1) and their withAlpha washes are retired
+ * (flat hues are dots-only, never text/chips). */
+const TONE_SUCCESS = "bg-badge-success text-success-deep";
+const TONE_DANGER = "bg-badge-danger text-danger-deep";
+const TONE_WARNING = "bg-badge-warning text-warning-deep";
+const TONE_RUNNING = "bg-badge-running text-running-deep";
+
+function toneClassesForKind(kind: NotificationKind): string {
   switch (kind) {
     case "task_complete":
     case "subagent_complete":
-      return "#10B981"; // emerald-500
+      return TONE_SUCCESS;
     case "task_failed":
     case "subagent_failed":
-      return "#EF4444"; // red-500
+      return TONE_DANGER;
     case "permission_request":
-      return "#F59E0B"; // amber-500
+      return TONE_WARNING;
     default:
-      return "#6366F1"; // indigo-500 (queued/running)
+      return TONE_RUNNING;
   }
 }
 
@@ -297,7 +308,6 @@ export function Toaster() {
     >
       <AnimatePresence initial={false}>
         {toasts.map(({ id, notification: n }) => {
-          const tone = toneForKind(n.kind);
           // R99-C: a linked local toast is clickable — its body is the View
           // action (the update ping navigates to /settings?tab=about).
           const clickable = !!n.link || (!!n.sessionId && !!n.projectId);
@@ -309,21 +319,22 @@ export function Toaster() {
               animate={{ opacity: 1, x: 0, scale: 1 }}
               exit={{ opacity: 0, x: 60, scale: 0.96 }}
               transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
-              className="pointer-events-auto overflow-hidden rounded-[14px] border-[1.5px]"
-              style={{
-                backgroundColor: styles.card,
-                borderColor: withAlpha(tone, 0.4),
-                boxShadow: styles.softShadow,
-              }}
+              // R126-3h (TOKENS §5/§9 — toasts RISE): the stack surface is
+              // the CLAY SHEET card — rounded-xl (the off-ladder
+              // rounded-[14px] dies), the 1px clay-rim hairline (the
+              // border-[1.5px] + withAlpha(tone) edge dies), bg-card, and
+              // .ac-clay-sheet (the UPWARD two-leg shadow for rising
+              // surfaces — the anchored-menu recipe; the softShadow JS leg
+              // is gone).
+              className="pointer-events-auto overflow-hidden rounded-xl border border-clay-rim bg-card ac-clay-sheet"
               role="status"
             >
               <div className="flex items-start gap-2.5 p-3.5">
                 <div
-                  className="mt-0.5 shrink-0 grid place-items-center w-7 h-7 rounded-full"
-                  style={{
-                    background: withAlpha(tone, 0.14),
-                    color: tone,
-                  }}
+                  className={cn(
+                    "mt-0.5 shrink-0 grid place-items-center w-7 h-7 rounded-full",
+                    toneClassesForKind(n.kind),
+                  )}
                 >
                   <IconForKind kind={n.kind} />
                 </div>
@@ -358,7 +369,7 @@ export function Toaster() {
                     </div>
                   )}
                   <div
-                    className="mt-1 text-[10.5px] uppercase tracking-wider font-bold"
+                    className="mt-1 text-[10px] uppercase tracking-wider font-bold"
                     style={{ color: styles.textTertiary }}
                   >
                     {timeAgo(n.ts)}
@@ -368,14 +379,10 @@ export function Toaster() {
                   type="button"
                   onClick={() => dismiss(id)}
                   aria-label="Dismiss notification"
-                  className="shrink-0 w-6 h-6 rounded-md grid place-items-center transition-colors"
+                  // R126-3h (TOKENS §6): the dismiss hover wash is the CSS
+                  // class — the JS onMouseEnter/onMouseLeave pair is retired.
+                  className="shrink-0 w-6 h-6 rounded-md grid place-items-center transition-colors hover:bg-hover"
                   style={{ color: styles.textTertiary }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = styles.subtle;
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                  }}
                 >
                   <X size={13} />
                 </button>

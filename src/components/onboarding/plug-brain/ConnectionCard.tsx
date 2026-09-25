@@ -9,6 +9,7 @@ import {
   type ConnectionTestResult,
 } from "../providers-api";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
+import { SEMANTIC_COLORS } from "../../../lib/semantics";
 
 /**
  * Connection card — demo anatomy (components/plug-brain/ConnectionCard.tsx)
@@ -113,22 +114,12 @@ export function ConnectionCard() {
 
   return (
     <div
-      className="rounded-[24px] border-[1.5px] p-4 md:p-5"
-      style={{
-        background: s.card,
-        borderColor: s.border,
-        boxShadow: s.softShadow,
-      }}
+      className="rounded-[24px] border p-4 md:p-5 border-clay-rim ac-clay bg-card"
     >
       <div className="flex items-center justify-between">
         <span className="font-bold tracking-tight" style={{ color: s.text }}>Connection</span>
         <span
-          className="text-[10px] font-bold px-2 py-1 rounded-full border"
-          style={{
-            backgroundColor: s.accent,
-            color: s.accentText,
-            borderColor: s.accent,
-          }}
+          className="text-[10px] font-bold px-2 py-1 rounded-full bg-badge-neutral text-badge-neutral-fg"
         >
           STEP 2
         </span>
@@ -200,11 +191,7 @@ export function ConnectionCard() {
               </button>
               <button
                 type="button"
-                className="h-9 px-3 rounded-[10px] text-[11px] font-bold cursor-pointer transition-colors"
-                style={{
-                  background: s.pillBg,
-                  color: s.pillText,
-                }}
+                className="h-9 px-3 rounded-[10px] text-[11px] font-bold cursor-pointer transition-colors bg-badge-neutral text-badge-neutral-fg"
                 onClick={toggleShowApiKey}
               >
                 {showApiKey ? "Hide" : "Show"}
@@ -294,15 +281,12 @@ export function ConnectionCard() {
             </div>
 
             {/* Model dropdown — always rendered while open, with explicit
-                empty states so manual entry is never blocked */}
+                empty states so manual entry is never blocked. R126-3g: clay
+                popover + the selection grammar rows (CSS hover wash; the JS
+                handlers retired). */}
             {modelOpen && (
               <div
-                className="absolute z-20 top-[56px] left-0 right-0 rounded-[16px] border-[1.5px] p-1.5 animate-slideDown max-h-[260px] overflow-y-auto custom-scrollbar"
-                style={{
-                  background: s.card,
-                  borderColor: s.borderStrong,
-                  boxShadow: s.bentoShadow,
-                }}
+                className="absolute z-20 top-[56px] left-0 right-0 rounded-[16px] border p-1.5 animate-slideDown max-h-[260px] overflow-y-auto custom-scrollbar border-clay-rim ac-clay bg-card"
               >
                 {modelsQuery.isFetching && (
                   <div className="py-5 text-center text-[12px] font-medium" style={{ color: s.textTertiary }}>
@@ -325,76 +309,77 @@ export function ConnectionCard() {
                     No catalog matches “{modelSearch}” — press Enter to keep it.
                   </div>
                 )}
-                {filteredModels.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    className="h-[42px] w-full rounded-[14px] flex items-center gap-2 px-3 cursor-pointer transition-colors text-left text-[13px] font-mono"
-                    style={{
-                      background: m.id === modelId ? s.subtleHover : "transparent",
-                      color: s.text,
-                    }}
-                    onClick={() => {
-                      setModelId(m.id);
-                      setModelOpen(false);
-                      setModelSearch("");
-                    }}
-                    onMouseEnter={(e) => {
-                      if (m.id !== modelId) e.currentTarget.style.background = s.subtle;
-                    }}
-                    onMouseLeave={(e) => {
-                      if (m.id !== modelId) e.currentTarget.style.background = "transparent";
-                    }}
-                  >
-                    <span className="truncate">{m.id}</span>
-                    {m.contextWindow ? (
-                      <span className="ml-auto shrink-0 text-[10px]" style={{ color: s.textTertiary }}>
-                        {Math.round(m.contextWindow / 1000)}K ctx
-                      </span>
-                    ) : null}
-                    {m.id === modelId && (
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="shrink-0">
-                        <path d="M3 8.5L6.5 12L13 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    )}
-                  </button>
-                ))}
+                {filteredModels.map((m) => {
+                  const isSelected = m.id === modelId;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      aria-current={isSelected ? "true" : undefined}
+                      className={`relative h-[42px] w-full rounded-[14px] flex items-center gap-2 px-3 cursor-pointer transition-colors text-left text-[13px] font-mono ${
+                        isSelected ? "bg-accent-tint text-accent-deep" : "hover:bg-hover"
+                      }`}
+                      onClick={() => {
+                        setModelId(m.id);
+                        setModelOpen(false);
+                        setModelSearch("");
+                      }}
+                    >
+                      {isSelected && (
+                        <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-accent-deep" aria-hidden />
+                      )}
+                      <span className="truncate">{m.id}</span>
+                      {m.contextWindow ? (
+                        <span className="ml-auto shrink-0 text-[10px]" style={{ color: s.textTertiary }}>
+                          {Math.round(m.contextWindow / 1000)}K ctx
+                        </span>
+                      ) : null}
+                      {isSelected && (
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="shrink-0">
+                          <path d="M3 8.5L6.5 12L13 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
           {modelsQuery.isError && (
-            <p className="mt-1.5 text-[11px] font-medium" style={{ color: "#E0680C" }}>
+            <p className="mt-1.5 text-[11px] font-medium text-warning-deep">
               {(modelsQuery.error as Error).message} — you can still type a model id by hand.
             </p>
           )}
         </div>
 
-        {/* Connection test */}
+        {/* Connection test — R126-3g: the test pill rides the §11 badge
+            tones + the pipeline's flat status hues (dots only); the quiet
+            button is a clay secondary. */}
         <div className="flex items-center justify-between gap-3">
           <button
             type="button"
-            className="h-10 px-4 rounded-full border-[1.5px] text-[12px] font-bold flex items-center gap-2 cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{
-              background: s.card,
-              borderColor: s.borderStrong,
-              color: s.text,
-              boxShadow: s.softShadow,
-            }}
+            className="h-10 px-4 rounded-full border text-[12px] font-bold flex items-center gap-2 cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed border-clay-rim ac-clay-sm bg-card"
+            style={{ color: s.text }}
             onClick={handleTest}
             disabled={!providerId || testing}
           >
             <span
               className="w-2 h-2 rounded-full"
               style={{
-                background: testResult?.ok ? "#27C93F" : testResult && !testResult.ok ? "#FF5F56" : s.borderStrong,
+                background: testResult?.ok
+                  ? SEMANTIC_COLORS.success
+                  : testResult && !testResult.ok
+                    ? SEMANTIC_COLORS.danger
+                    : s.borderStrong,
               }}
             />
             {testing ? "Testing…" : "Test connection"}
           </button>
           {testResult && (
             <span
-              className="text-[11px] font-medium truncate min-w-0"
-              style={{ color: testResult.ok ? s.textSecondary : "#D64545" }}
+              className={`text-[11px] font-medium truncate min-w-0 ${
+                testResult.ok ? "text-success-deep" : "text-danger-deep"
+              }`}
               title={testResult.message}
             >
               {testResult.ok

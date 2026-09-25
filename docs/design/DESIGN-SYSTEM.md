@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-24 round-126 -->
 # ACUTE-CODE Design System
 
 **Why this document exists (owner direction, round-16/2026-08-23):** "the UI
@@ -7,6 +7,21 @@ system which we can follow" — one reference every screen follows, so the app
 stays consistent by construction and new features plug in without visual
 drift. Owner verdicts supersede anything here; record changes to this file
 in the same round that changes the UI.
+
+**ROUND-126 (the Clay Companion redesign) supersessions, recorded here per
+the standing rule:** (1) the app's default theme is **Clay Studio** (was
+Nova Cream — a one-time nova→clay migration on both the local persist leg
+and the server hydration leg; TOKENS §1b). (2) The identity faces are
+**Manrope + JetBrains Mono** (was Space Grotesk; TOKENS §2). (3) The
+**bento 1.5px top-level card border is retired** — the clay card's default
+edge is the warm `clayRim` hairline + the layered clay shadow (TOKENS §5/§9,
+COMPONENTS §3); §2's border-forward paragraphs below are historical. (4)
+The **surface ladder** (well/header/tint/rim/mono — TOKENS §10) and the
+**status grammar** (badge tone containers + deep text tiers — TOKENS §11)
+join the pipeline. (5) The chat route's borderless law (below) STANDS —
+only its inner recesses adopt the well/mono-block materials. Where this
+file's older text still speaks bento/nova, `docs/design-language/` (the
+language layer, updated in this same round) is the operative authority.
 
 ## 1. Source of truth
 

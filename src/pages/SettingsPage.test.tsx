@@ -30,6 +30,9 @@ import { SettingsPage } from "./SettingsPage";
 import { resetTestState, renderWithProviders } from "../test-utils";
 import { useConfigStore } from "../lib/config-store";
 import { useThemeStore } from "../lib/theme-store";
+// R126-3f-1: the material pins derive their expectations from the SAME
+// source the components read (deriveThemeStyles) — never hand-copied hex.
+import { deriveThemeStyles } from "../lib/themes";
 
 /** Every request 401s (the bearer wall) — queries fail soft, layout renders. */
 const fetchMock = vi.fn(
@@ -275,6 +278,72 @@ describe("Appearance tab simplification (R62-2a)", () => {
     expect(column.className).toContain("flex-col");
     expect(column.className).toContain("gap-4");
     expect(column.className).not.toContain("gap-5");
+  });
+
+  /* ── R126-3f-1: the Clay Companion material pins (visual contracts the
+   * reskin changed — TOKENS §5/§9/§10 + COMPONENTS §2/§3). */
+  it("R126: the mode control speaks the RangeSelector grammar — the well track + the gliding accentDeep knob (TAB_SPRING)", () => {
+    renderWithProviders(<SettingsPage />);
+
+    const track = screen.getByRole("radiogroup", { name: "Theme mode" });
+    // The track = THE RECESS: bg-well + the clay rim hairline (TOKENS §10),
+    // rounded-lg — the usage wave's segmented-control spelling.
+    expect(track.className).toContain("bg-well");
+    expect(track.className).toContain("border-clay-rim");
+    expect(track.className).toContain("rounded-lg");
+    // The knob = ONE solid accentDeep pill gliding in index space.
+    const knob = screen.getByTestId("theme-mode-knob");
+    expect(knob.className).toContain("bg-accent-deep");
+    expect(knob.className).toContain("rounded-full");
+    // The pref sections' header rows ride SettingsRow (label + one-line
+    // description) — the mobile hub grammar at PC density.
+    expect(screen.getByText("Chat Density").className).toContain("text-[13px]");
+    const densityKnob = screen.getByTestId("chat-density-knob");
+    expect(densityKnob.className).toContain("bg-accent-deep");
+  });
+
+  it("R126: the theme cards are CLAY cards and the Clay Studio card carries the Default badge (the §11 accent tone)", () => {
+    renderWithProviders(<SettingsPage />);
+
+    const clayCard = screen.getByRole("button", { name: "Theme Bento Blue" });
+    expect(clayCard.className).toContain("rounded-2xl");
+    expect(clayCard.className).toContain("border-clay-rim");
+    expect(clayCard.className).toContain("bg-card");
+    expect(clayCard.className).toContain("ac-clay");
+    // The 1.5px bento border + the selected ring/halo are retired.
+    expect(clayCard.className).not.toContain("border-[1.5px]");
+    const selected = screen.getByRole("button", { name: "Theme Nova Cream" });
+    expect(selected.className).toContain("border-accent-deep");
+    expect((selected as HTMLElement).style.boxShadow).toBe("");
+
+    // The default badge rides the clay (default) theme's card.
+    const clayThemeCard = screen.getByRole("button", { name: "Theme Clay Studio" });
+    const badge = clayThemeCard.querySelector("span.bg-badge-accent") as HTMLElement | null;
+    expect(badge).not.toBeNull();
+    expect(badge?.className).toContain("text-badge-accent-fg");
+    expect(badge?.textContent).toBe("Default");
+    // …and ONLY there (the other five cards carry no badge).
+    expect(document.querySelectorAll("span.bg-badge-accent").length).toBe(1);
+  });
+
+  it("R126: the pick-one cards speak the chip grammar — resting = the well, selected = bg-accent-tint + the accentDeep ink + the filled radio", () => {
+    renderWithProviders(<SettingsPage />);
+
+    // Medium is the store default — the selected card.
+    const medium = screen.getByRole("button", { name: /Medium/ });
+    expect(medium.className).toContain("bg-accent-tint");
+    expect(medium.className).toContain("border-clay-rim");
+    expect(screen.getByText("Medium").className).toContain("text-accent-deep");
+    // The radio circle is FILLED in accentDeep (the chip grammar's marker).
+    const radio = medium.querySelector("span.border-accent-deep") as HTMLElement | null;
+    expect(radio).not.toBeNull();
+    expect(radio?.className).toContain("bg-accent-deep");
+
+    // A resting card is the well recess.
+    const small = screen.getByRole("button", { name: /Small/ });
+    expect(small.className).toContain("bg-well");
+    expect(small.className).not.toContain("bg-accent-tint");
+    expect(screen.getByText("Small").className).toContain("text-ink");
   });
 });
 
@@ -570,6 +639,16 @@ describe("Functionality tab + Auto-retry card (ROUND-78 R78-C, R98-I1)", () => {
     const rateLimit = (await screen.findByTestId("retry-switch-autoRetryRateLimit")) as HTMLElement;
     expect(rateLimit.getAttribute("aria-checked")).toBe("true");
 
+    // R126-3f-1 material pin — the five hand-rolled inline switches ride the
+    // shared ToggleSwitch now: the ON track is the quiet-solid pair
+    // (accentDeep fill — derived from the SAME source the component reads)
+    // and the REST track would be the well; geometry + role/aria/testid are
+    // byte-identical to the inline copy this replaces.
+    const { themeId } = useThemeStore.getState();
+    expect(rateLimit.tagName).toBe("BUTTON");
+    expect(rateLimit.getAttribute("role")).toBe("switch");
+    expect(rateLimit.style.background).toBe(deriveThemeStyles(themeId, true).accentDeep);
+
     fireEvent.click(rateLimit);
     await waitFor(() => expect(rateLimit.getAttribute("aria-checked")).toBe("false"));
 
@@ -733,6 +812,15 @@ describe("Functionality tab + Auto-retry card (ROUND-78 R78-C, R98-I1)", () => {
     expect(alert.closest("section")?.getAttribute("data-testid")).toBe("retry-settings-card");
     expect(screen.queryByText("loading retry settings…")).toBeNull();
     const retryButton = screen.getByRole("button", { name: "Retry loading retry settings" });
+    // R126-3f-1 material pins — the badge-tone danger container + the
+    // outlined-danger Retry (the sibling waves' spelling, TOKENS §11):
+    // the withAlpha danger washes + flat-hue danger text died with the round.
+    expect(alert.className).toContain("bg-badge-danger");
+    expect(alert.className).toContain("text-badge-danger-fg");
+    expect(alert.className).not.toContain("rounded-2xl");
+    expect(retryButton.className).toContain("border-danger-deep");
+    expect(retryButton.className).toContain("text-danger-deep");
+    expect(retryButton.className).toContain("active:scale-[0.98]");
     // No dead switches while the card has nothing real to show.
     expect(screen.queryByTestId("retry-switch-autoRetryRateLimit")).toBeNull();
 

@@ -1,8 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
+import { motion } from "framer-motion";
 import { ChartPie } from "lucide-react";
 import type { ThemeStyles } from "../../lib/themes";
 import type { UsageStatsModel } from "../../lib/api";
-import { formatCompactTokens, formatCost, modelColor, shortModelName } from "./usage-helpers";
+import { ease } from "../../lib/motion";
+import { Kicker } from "../ui/Kicker";
+import { formatCompactTokens, formatCost, modelColor, shortModelName, CLAY_CARD, DONUT_SWEEP_MS } from "./usage-helpers";
+import { cn } from "../../lib/utils";
 
 /**
  * ROUND-98 (R98-I2, owner: "the model-usage donut"): the token-share ring
@@ -14,23 +18,21 @@ import { formatCompactTokens, formatCost, modelColor, shortModelName } from "./u
  * either lights that model and dims every other segment AND row (the
  * round-97 context-bar contract, generalized).
  *
- * R121-d (the chart-hover ratchet leg): the highlight is now POINTER-OWNED
- * — ONE onPointerMove on the card resolves the hovered index from the DOM
- * hit (`[data-donut-idx]` on the arcs AND the legend rows — the browser's
- * own hit-testing does the geometry; the design audit's R5 law: hover is a
- * CSS class or a pointer read, never a hover pair). The mutual highlight
- * is unchanged: the same `hovered` state drives both surfaces, so the arc
- * and its row can never disagree.
+ * R121-d (the chart-hover ratchet leg): the highlight is POINTER-OWNED —
+ * ONE onPointerMove on the card resolves the hovered index from the DOM
+ * hit (`[data-donut-idx]` on the arcs AND the legend rows); the mutual
+ * highlight is unchanged.
  *
  * R99-E (anti-jitter kit): the card reserves its final height
  * (min-h-[184px]/md:192px — header + the fixed 120px ring); legend rows
- * truncate (never wrap-jitter) and every number renders tabular-nums.
+ * truncate and every number renders tabular-nums.
  *
- * R100-G (research §C2 P3, the ladder sweep): the header label snapped to
- * the label tier (11px/500/0.08em), the ring's headline stat snapped to the
- * ladder's `value` token (22px/600, tabular — font-black + tracking-tighter
- * were the wizard display tell), and the card rides the 16px radius step
- * (rounded-2xl). The model palette + the fixed-height reserves stay.
+ * R126-3b (the Clay Companion redesign): the card rides the CLAY material
+ * (rim + `.ac-clay`), and the ring SWEEPS once per data load — each arc's
+ * dasharray animates 0→share over 500ms (MOTION §2 DONUT_SWEEP_MS), keyed
+ * by the data fingerprint so a window switch redraws the sweep honestly.
+ * The STABLE per-model palette (usage-helpers modelColor) is the sanctioned
+ * data-viz exception — untouched (same name = same color, everywhere).
  */
 
 const SIZE = 120;
@@ -45,7 +47,7 @@ export function ModelDonut({
   models: UsageStatsModel[];
   styles: ThemeStyles;
 }) {
-  const { card, border, text, textSecondary, textTertiary, accent, softShadow, isDark } = styles;
+  const { text, textSecondary, textTertiary, isDark } = styles;
   const [hovered, setHovered] = useState<number | null>(null);
 
   // R121-d: the ONE pointer read — the browser's own hit-testing resolves
@@ -58,7 +60,7 @@ export function ModelDonut({
   }, []);
   const onPointerLeave = useCallback(() => setHovered(null), []);
 
-  const { segments, totalTokens } = useMemo(() => {
+  const { segments, totalTokens, dataKey } = useMemo(() => {
     const total = models.reduce((sum, m) => sum + m.tokens, 0);
     let start = 0; // accumulated share fraction
     const out = models.map((m) => {
@@ -74,7 +76,7 @@ export function ModelDonut({
       start += share;
       return entry;
     });
-    return { segments: out, totalTokens: total };
+    return { segments: out, totalTokens: total, dataKey: models.map((m) => `${m.model}:${m.tokens}`).join("|") };
   }, [models, isDark]);
 
   const top = segments[0];
@@ -85,17 +87,10 @@ export function ModelDonut({
       data-testid="model-donut"
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
-      className="flex min-h-[184px] flex-col rounded-2xl border-[1.5px] p-4 md:min-h-[192px] md:p-5"
-      style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
+      className={cn(CLAY_CARD, "flex min-h-[184px] flex-col p-4 md:min-h-[192px] md:p-5")}
     >
-      <div className="mb-4 flex shrink-0 items-center gap-2">
-        <ChartPie size={13} style={{ color: accent, opacity: 0.7 }} />
-        <span
-          className="text-[11px] font-medium uppercase leading-none tracking-[0.08em]"
-          style={{ color: textTertiary }}
-        >
-          Model Usage · Share of Tokens
-        </span>
+      <div className="mb-4 flex shrink-0 items-center">
+        <Kicker icon={ChartPie}>Model Usage · Share of Tokens</Kicker>
       </div>
 
       {top === undefined || totalTokens === 0 ? (
@@ -103,14 +98,14 @@ export function ModelDonut({
           <p className="text-[12px] font-semibold" style={{ color: text }}>
             No model usage in this window
           </p>
-          <p className="max-w-[240px] text-[11px]" style={{ color: textSecondary }}>
-            The donut appears once the ledger records model calls.
-          </p>
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-5">
           <div className="relative grid shrink-0 place-items-center">
+            {/* R126-3b: keyed by the data fingerprint — the sweep plays once
+                per data load (a window switch redraws it), never looping. */}
             <svg
+              key={dataKey}
               width={SIZE}
               height={SIZE}
               viewBox={`0 0 ${SIZE} ${SIZE}`}
@@ -118,12 +113,12 @@ export function ModelDonut({
               focusable="false"
               className="shrink-0"
             >
-              {/* The §6 6px track */}
-              <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none" stroke={styles.subtle} strokeWidth={STROKE} />
+              {/* The §6 6px track — the recessed well leg */}
+              <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none" stroke="var(--ac-surface-well)" strokeWidth={STROKE} />
               {segments.map(
                 (seg, i) =>
                   seg.share > 0 && (
-                    <circle
+                    <motion.circle
                       key={seg.model}
                       cx={SIZE / 2}
                       cy={SIZE / 2}
@@ -131,15 +126,19 @@ export function ModelDonut({
                       fill="none"
                       stroke={seg.color}
                       strokeWidth={STROKE}
-                      strokeDasharray={`${CIRCUMFERENCE * seg.share} ${CIRCUMFERENCE}`}
                       transform={`rotate(${(-90 + seg.start * 360).toFixed(3)} ${SIZE / 2} ${SIZE / 2})`}
                       opacity={hovered === null || hovered === i ? 1 : 0.3}
                       data-donut-model={seg.model}
                       data-donut-idx={i}
                       style={{ cursor: "pointer" }}
+                      // R126-3b (MOTION §2): the 500ms arc-draw sweep, once
+                      // per data load.
+                      initial={{ strokeDasharray: `0 ${CIRCUMFERENCE}` }}
+                      animate={{ strokeDasharray: `${CIRCUMFERENCE * seg.share} ${CIRCUMFERENCE}` }}
+                      transition={{ duration: DONUT_SWEEP_MS, ease }}
                     >
                       <title>{`${seg.model} · ${Math.round(seg.share * 100)}% · ${seg.tokens.toLocaleString()} tokens`}</title>
-                    </circle>
+                    </motion.circle>
                   ),
               )}
             </svg>

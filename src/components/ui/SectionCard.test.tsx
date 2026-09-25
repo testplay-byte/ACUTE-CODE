@@ -3,12 +3,14 @@
  * ROUND-100 (R100-C) tests — the SectionCard primitive
  * (src/components/ui/SectionCard.tsx).
  *
- * The settings/panel bento card per research §C1.4 + TOKENS.md §4–5:
- * 16px radius (rounded-2xl — the 4th radius step, NOT an arbitrary value),
- * 1.5px border-line, bg-card, p-5/p-6 density, optional softShadow, and the
- * kicker/title header slot. Tests pin the class contract, the a11y wiring
- * (aria-labelledby → the h3 section title), and the theme-utility legs
- * (bg-card / border-line — the --ac-* bridge, no inline hex).
+ * R126-3f-1 re-pin — the primitive's OWN clay conversion: 16px radius
+ * (rounded-2xl, the 4th radius step) + the warm 1px clay-rim hairline on
+ * all four sides + bg-card + the `.ac-clay` two-leg depth (TOKENS §5/§9,
+ * COMPONENTS §3 species 1). The 1.5px bento border + the softShadow leg
+ * RETIRED — `shadow` is a documented NO-OP (callers keep compiling).
+ * Tests pin the class contract, the a11y wiring (aria-labelledby → the h3
+ * section title), and the theme-utility legs (bg-card / border-clay-rim —
+ * the --ac-* bridge, no inline hex).
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -18,8 +20,8 @@ afterEach(() => {
   cleanup();
 });
 
-describe("R100-C: SectionCard (the settings/panel bento card)", () => {
-  it("renders a section with the bento contract: rounded-2xl + 1.5px border-line + bg-card + p-5", () => {
+describe("R100-C / R126: SectionCard (the settings/panel clay card)", () => {
+  it("R126: renders a section with the CLAY contract — rounded-2xl + 1px border-clay-rim + bg-card + .ac-clay + p-5", () => {
     render(
       <SectionCard testId="card">
         <p>content</p>
@@ -28,9 +30,14 @@ describe("R100-C: SectionCard (the settings/panel bento card)", () => {
     const el = screen.getByTestId("card");
     expect(el.tagName).toBe("SECTION");
     expect(el.className).toContain("rounded-2xl");
-    expect(el.className).toContain("border-[1.5px]");
-    expect(el.className).toContain("border-line");
+    // R126-3f-1: the warm 1px clay rim on all four sides replaces the
+    // retired 1.5px bento border (TOKENS §5).
+    expect(el.className).toContain("border-clay-rim");
+    expect(el.className).not.toContain("border-[1.5px]");
     expect(el.className).toContain("bg-card");
+    // The two-leg clay depth rides the pattern class (TOKENS §9) — never
+    // an inline boxShadow.
+    expect(el.className).toContain("ac-clay");
     expect(el.className).toContain("p-5");
     // The 16px step is a Tailwind SCALE utility — the arbitrary spelling is
     // exactly what audit rule R2 exists to retire.
@@ -47,7 +54,7 @@ describe("R100-C: SectionCard (the settings/panel bento card)", () => {
     expect(screen.getByTestId("card").className).not.toContain("p-5");
   });
 
-  it("rests FLAT by default — no inline boxShadow (cards are surfaces, not floats)", () => {
+  it("rests on the .ac-clay class — NO inline boxShadow (the clay depth is the pattern class, never a style leg)", () => {
     render(
       <SectionCard testId="card">
         <p>content</p>
@@ -56,13 +63,15 @@ describe("R100-C: SectionCard (the settings/panel bento card)", () => {
     expect((screen.getByTestId("card") as HTMLElement).style.boxShadow).toBe("");
   });
 
-  it("shadow adds the softShadow elevation via the theme pipeline (inline style, no hex)", () => {
+  it("R126: the `shadow` prop is a documented NO-OP — the softShadow leg died with the clay conversion (callers keep compiling)", () => {
     render(
       <SectionCard shadow testId="card">
         <p>content</p>
       </SectionCard>,
     );
-    expect((screen.getByTestId("card") as HTMLElement).style.boxShadow).not.toBe("");
+    // The clay card's depth is `.ac-clay`; no inline boxShadow ever paints.
+    expect((screen.getByTestId("card") as HTMLElement).style.boxShadow).toBe("");
+    expect(screen.getByTestId("card").className).toContain("ac-clay");
   });
 
   it("title renders a 13px/600 section heading and wires aria-labelledby to it", () => {

@@ -23,6 +23,15 @@ export interface ThemeColors {
    * must keep ~4.5:1 against bgDark for text/icons/charts.
    */
   accentDark?: string;
+  /**
+   * R126 (the Clay Companion bridge): the LIGHT-mode deep accent — the same
+   * hue deepened for accent-as-text + CTA fills (accentDeep is the tier the
+   * mobile constitution's AMENDMENT 3 introduced; one accent FAMILY, two
+   * depths — never a second accent). Optional: themes without one resolve
+   * accentDeep to their own accent (identity), exactly like mobile's
+   * `theme.accentDeep ?? theme.accent`.
+   */
+  accentDeep?: string;
   accent2: string;
   bgLight: string;
   bgDark: string;
@@ -170,38 +179,42 @@ export const THEMES: ThemeColors[] = [
   },
   {
     // R107-g (owner: "go with the Clay Studio aesthetic… a mixture of liquid
-    // chrome"): the clay substrate theme — hand-thrown-ceramics warmth for the
-    // whole app. Muted terracotta accent (the warm family the owner asked for;
-    // indigo/blue defaults are banned house-wide), sand neutrals with a
-    // brown-tinted charcoal for dark mode (never a blue-black), all inside the
-    // contrast envelope the existing five themes already tolerate (measured:
-    // accent/bgLight 3.45:1 — above nova 2.75; accentDark/bgDark 5.90:1 — over
-    // the ~4.5:1 accent-dark bar; text 12–15:1 both modes). The liquid-chrome
-    // counterpoint lives in the --ac-chrome-* ramp (TOKENS §8) — theme-
-    // independent jewelry, not part of this table.
+    // chrome"): the clay substrate theme — hand-thrown-ceramics warmth for
+    // the whole app. R126 (the Clay Companion bridge — the full PC redesign
+    // on the mobile app's design language): every literal below is now the
+    // mobile `clay` entry VERBATIM (mobile/src/design/tokens.ts:86-110), so
+    // the phone and the desktop render the SAME material — the round-117
+    // surface-ladder amendment values (bg #ECEEE8/#211B16, card #FDFDFB/
+    // #332C26 — card-vs-bg 1.15:1 light / 1.24:1 dark), the two-tier accent
+    // family (terracotta #C4653F marker tier + the NEW ember accentDeep
+    // #B45330 for accent-as-text/CTA fills; dark collapses both tiers to the
+    // salmon #D98A63), and the taupe accent2 #8A6A55. R126 also makes clay
+    // the DEFAULT theme (theme-store.ts) with a one-time nova→clay
+    // migration — the app's identity language is Clay Companion now.
     id: "clay",
     name: "Clay Studio",
     accent: "#C4653F",
     accentDark: "#D98A63",
-    accent2: "#E3A67F",
-    bgLight: "#F4EEE5",
-    bgDark: "#26211C",
-    cardLight: "#FDFBF7",
-    cardDark: "#2F2924",
+    accentDeep: "#B45330",
+    accent2: "#8A6A55",
+    bgLight: "#ECEEE8",
+    bgDark: "#211B16",
+    cardLight: "#FDFDFB",
+    cardDark: "#332C26",
     textLight: "#2A2018",
     textDark: "#F2EBE1",
     dot: "#C4653F",
     dotDark: "#D98A63",
-    paletteLight: ["#C4653F", "#E3A67F", "#F4EEE5", "#FDFBF7", "#2A2018"],
-    paletteDark: ["#D98A63", "#C4653F", "#26211C", "#2F2924", "#F2EBE1"],
+    paletteLight: ["#C4653F", "#B45330", "#ECEEE8", "#FDFDFB", "#2A2018"],
+    paletteDark: ["#D98A63", "#B09380", "#211B16", "#332C26", "#F2EBE1"],
     selectedBg: "#C4653F",
     selectedText: "#FFFFFF",
-    unselectedBg: "#EFE6DA",
-    unselectedBorder: "#D9C7B2",
-    blockBg: "#FBF8F2",
-    blockBorder: "#E6DACA",
-    sidebarBg: "#F0E9DE",
-    sidebarBorder: "#DFD2C0",
+    unselectedBg: "#EFE7DB",
+    unselectedBorder: "#E0D3C2",
+    blockBg: "#F8F4EC",
+    blockBorder: "#E8DFD0",
+    sidebarBg: "#F1EAE0",
+    sidebarBorder: "#E3D8C8",
   },
 ];
 
@@ -247,12 +260,21 @@ function parseColor(color: string): [number, number, number] {
   const cached = colorCache.get(color);
   if (cached) return cached;
 
+  // R126: the hex parser is the ALWAYS-AVAILABLE fallback, not a non-DOM
+  // special case — a DOM can exist while the 2D canvas cannot (happy-dom in
+  // the test runner, SSR snapshot renderers). The pre-R126 shape returned
+  // [0,0,0] in exactly those environments, silently blacking every mixHex
+  // derivative (sidebarBg, and now the R126 surface ladder). Parse order:
+  // canvas (named colors, rgb(), anything CSS) → hex regex → honest black.
+  const hexMatch = /^#?([0-9a-f]{6})$/i.exec(color.trim());
+  if (hexMatch) {
+    const n = parseInt(hexMatch[1], 16);
+    const hexResult: [number, number, number] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    colorCache.set(color, hexResult);
+    return hexResult;
+  }
   if (typeof document === "undefined") {
-    // Non-DOM fallback (tests): hex only.
-    const m = /^#?([0-9a-f]{6})$/i.exec(color.trim());
-    if (!m) return [0, 0, 0];
-    const n = parseInt(m[1], 16);
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    return [0, 0, 0];
   }
 
   if (!canvasCtx) {
@@ -316,6 +338,12 @@ export interface ThemeStyles {
   text: string;
   accent: string;
   accentText: string;
+  // R126 (the Clay Companion bridge — mobile tokens.ts:441): the deep tier
+  // of the ONE accent family — accent-as-text + CTA fills. Light mode: the
+  // theme's accentDeep ?? accent; dark mode: the tier collapses into the
+  // resolved dark accent. "One accent per screen" still holds — accentDeep
+  // is the same hue deepened for contrast duty, never a second accent.
+  accentDeep: string;
   // Round-30: distinct sidebar surface (owner: "give the sidebar a different
   // kind of color and try to make it separate from the other elements").
   // Derived from the theme accent so EVERY theme gets a harmonious but
@@ -342,6 +370,13 @@ export interface ThemeStyles {
   // R108-e: the clay material's layered depth (see deriveThemeStyles).
   clayShadow: string;
   clayShadowSm: string;
+  // R126 (the Clay Companion bridge — mobile tokens.ts:494-512, the v2
+  // two-leg shadows at alphas that actually draw: contact 10-14%, ambient
+  // 14-24%): the pressed leg (the press collapse) + the UPWARD sheet leg
+  // (docks/sheets/toasts — anything that rises). clayShadow/clayShadowSm
+  // were retuned to the mobile v2 strings verbatim.
+  clayShadowPressed: string;
+  clayShadowSheet: string;
   // Text helpers
   textSecondary: string;
   textTertiary: string;
@@ -353,6 +388,54 @@ export interface ThemeStyles {
   toggleActive: string;
   // Dot grid
   dotColor: string;
+  // ── R126: the Clay Companion surface ladder + status grammar (mobile
+  // tokens.ts resolveTheme, ported verbatim — every value mode-aware and
+  // computed from the resolved theme so ALL themes get them free) ──
+  /** The recessed well: one step DOWN from card (mobile AMENDMENT — 8%
+   * warm taupe light / 5% white dark). Accordions, recent-activity rows,
+   * inputs, mono blocks, skeletons. */
+  surfaceWell: string;
+  /** The in-flow chrome shade (bg +6% warm ink light / +30% black dark) —
+   * header columns, the chat top strip. */
+  surfaceHeader: string;
+  /** 12% accent into the card (18% dark) — icon chips, selected markers,
+   * hero tiles. Hue without loudness. */
+  accentTint: string;
+  /** The warm hairline rim on all four sides — the default card edge in
+   * light mode (10% ink into card); 10% white in dark. */
+  clayRim: string;
+  /** The matte top-edge highlight — a DARK-MODE-ONLY device (14% white);
+   * the light value resolves but light mode uses the rim only. */
+  clayTopEdge: string;
+  /** Mono surfaces (terminal/output blocks): one recessed step with its own
+   * border + ink tiers. */
+  monoBg: string;
+  monoBorder: string;
+  monoText: string;
+  /** The deep/bright semantic pairs for STATUS TEXT + badge containers
+   * (mobile AMENDMENT — flat hues stay for DOTS only; never
+   * white-on-saturated fills). */
+  successDeep: string;
+  warningDeep: string;
+  dangerDeep: string;
+  runningDeep: string;
+  /** The tinted badge containers (12% of the flat hue into card light /
+   * 20% dark, deep-on-tint ink — every pair ≥4.5:1 in both modes). */
+  badgeTones: Record<BadgeToneName, BadgeToneColors>;
+}
+
+/** R126: the badge tone vocabulary (mobile tokens.ts:317-322 verbatim). */
+export type BadgeToneName =
+  | "neutral"
+  | "accent"
+  | "danger"
+  | "warning"
+  | "success"
+  | "running";
+
+export interface BadgeToneColors {
+  bg: string;
+  fg: string;
 }
 
 /**
@@ -385,16 +468,64 @@ export function deriveThemeStyles(
   const theme =
     typeof themeIdOrTheme === "string" ? getTheme(themeIdOrTheme) : themeIdOrTheme;
 
+  // ── R126: the Clay Companion resolution prologue (mobile tokens.ts
+  // resolveTheme:425-469, ported verbatim) — every new token below is
+  // computed from the SAME inputs the mobile app uses, so the phone and the
+  // desktop agree on the material, not just the palette. ──
+  const accent = isDark ? theme.accentDark ?? theme.accent : theme.accent;
+  const card = isDark ? theme.cardDark : theme.cardLight;
+  const bg = isDark ? theme.bgDark : theme.bgLight;
+  // The clay ink family: warm in light mode (ceramics cast warm shadows —
+  // rgba(38,34,28) so the warm cast never reads ORANGE against the
+  // #ECEEE8-class whites; still warm family, never the forbidden cold
+  // blue-black), pure black in dark mode (the shadows must out-contrast the
+  // dark cards). Theme-independent, mode-aware.
+  const inkWarm = isDark ? "rgba(0,0,0," : "rgba(38,34,28,";
+  // The two-tier accent family (mobile AMENDMENT 3): accent stays the
+  // marker/icon/tint hue; accentDeep is the same hue deepened for
+  // accent-as-text + CTA fills. Dark mode: the deep tier IS the dark
+  // accent (the tiers collapse).
+  const accentDeep = isDark ? accent : theme.accentDeep ?? theme.accent;
+  // accentText is an EXPLICIT pair for clay (mobile's hard pin): white on
+  // the ember light (4.98:1), warm ink on the salmon dark (6.30:1 — the
+  // pre-117 dark CTA rendered white on light terracotta at 3.98:1, below
+  // AA). The other themes keep the computed pick. This is the ONE
+  // id-conditional in the pipeline (documented, mirrors mobile exactly).
+  const accentText =
+    theme.id === "clay" ? (isDark ? "#211B16" : "#FFFFFF") : getContrastText(accent);
+  // The ink ladder (mobile R117-g1: tertiary lifted 0.40→0.57/0.52 so
+  // captions hold AA on the card — 5.23:1 light / 4.91:1 dark).
+  const textSecondary = isDark ? "rgba(255,255,255,0.62)" : "rgba(0,0,0,0.62)";
+  const textTertiary = isDark ? "rgba(255,255,255,0.52)" : "rgba(0,0,0,0.57)";
+  // The recessed well + the accent's tinted container (mobile R117-g1 §2.1
+  // — #8A6A55 is the clay TAUPE, the material's constant well ink, same
+  // for every theme exactly like mobile).
+  const surfaceWell = isDark ? mixHex(card, "#FFFFFF", 0.05) : mixHex(card, "#8A6A55", 0.08);
+  const accentTint = mixHex(card, accent, isDark ? 0.18 : 0.12);
+  // The Badge tinted containers (deep-on-tint, mobile R117-g1 §2.2): 12% of
+  // the flat hue into the card light / 20% dark, deep (light) / bright
+  // (dark) ink riding it. The flat fills stay for dots only.
+  const badgeTint = (hue: string): string => mixHex(card, hue, isDark ? 0.2 : 0.12);
+  const badgeTones: Record<BadgeToneName, BadgeToneColors> = {
+    success: { bg: badgeTint("#22c55e"), fg: isDark ? "#4ADE80" : "#166534" },
+    warning: { bg: badgeTint("#f59e0b"), fg: isDark ? "#FBBF24" : "#92400E" },
+    danger: { bg: badgeTint("#ef4444"), fg: isDark ? "#FCA5A5" : "#B91C1C" },
+    running: { bg: badgeTint("#3b82f6"), fg: isDark ? "#93C5FD" : "#1D4ED8" },
+    accent: { bg: accentDeep, fg: accentText },
+    neutral: { bg: surfaceWell, fg: textSecondary },
+  };
+
   return {
     theme,
     isDark,
     isMono: achromaticAccent(theme),
     // Core
-    bg: isDark ? theme.bgDark : theme.bgLight,
-    card: isDark ? theme.cardDark : theme.cardLight,
+    bg,
+    card,
     text: isDark ? theme.textDark : theme.textLight,
-    accent: isDark ? theme.accentDark ?? theme.accent : theme.accent,
-    accentText: getContrastText(isDark ? theme.accentDark ?? theme.accent : theme.accent),
+    accent,
+    accentText,
+    accentDeep,
 
     // Round-32 sidebar surface (owner-approved design Acute-Ui-Screens.html,
     // Frame 1): a SUBTLE warm tint — light #FFF6E5 ≈ 4.5% accent into bgLight,
@@ -438,25 +569,37 @@ export function deriveThemeStyles(
     // R108-e (owner verdict on R107-g's execution: "You implemented clay but
     // it was not implemented properly… at the very top you implemented some
     // glow fade and other stuff like that"): clay depth is FORM, not paint —
-    // layered SOFT SHADOWS instead of gradient top-lights. Each recipe stacks
-    // a tight directional contact shadow (the card resting on the surface)
-    // under a larger, very soft ambient one, tinted with the clay ink family
-    // in light mode (hand-thrown ceramics cast WARM shadows, never cold
-    // black) and deepened toward black in dark mode. Mode-aware,
-    // theme-independent — same pipeline slot as softShadow above; consumed
-    // via the .ac-clay pattern class (COMPONENTS §8), TOKENS §9.
+    // layered SOFT SHADOWS instead of gradient top-lights. R126 retuned the
+    // strings to the mobile v2 grammar VERBATIM (mobile tokens.ts:494-512):
+    // each recipe stacks a tight contact shadow under a larger soft ambient
+    // one, at alphas that actually draw (contact 10-14%, ambient 14-24% —
+    // the pre-R126 8-14% ambient legs were below the perception floor),
+    // tinted with the clay ink family in light mode (hand-thrown ceramics
+    // cast WARM shadows, never cold black) and deepened toward black in
+    // dark mode. Mode-aware, theme-independent — consumed via the
+    // .ac-clay pattern classes (index.css), TOKENS §9.
     clayShadow: isDark
-      ? "0 2px 4px rgba(0,0,0,0.35), 0 16px 40px -8px rgba(0,0,0,0.45)"
-      : "0 2px 4px rgba(42,32,24,0.08), 0 16px 40px -8px rgba(42,32,24,0.13)",
+      ? `0px 2px 4px ${inkWarm}0.45), 0px 14px 36px -8px ${inkWarm}0.60)`
+      : `0px 2px 4px ${inkWarm}0.14), 0px 12px 32px -8px ${inkWarm}0.24)`,
     // The small-surface step of the same recipe (chips, small tiles, the
     // pickers' compact cards) — the ambient leg halves with the footprint.
     clayShadowSm: isDark
-      ? "0 1px 2px rgba(0,0,0,0.30), 0 8px 20px -4px rgba(0,0,0,0.40)"
-      : "0 1px 2px rgba(42,32,24,0.08), 0 8px 20px -4px rgba(42,32,24,0.10)",
+      ? `0px 1px 2px ${inkWarm}0.35), 0px 4px 12px -4px ${inkWarm}0.45)`
+      : `0px 1px 2px ${inkWarm}0.10), 0px 3px 10px -4px ${inkWarm}0.14)`,
+    // R126: the pressed leg — the press collapse target (the tight contact
+    // shadow alone; the ambient leg lifts with the press).
+    clayShadowPressed: isDark
+      ? `0px 1px 2px ${inkWarm}0.40)`
+      : `0px 1px 2px ${inkWarm}0.12)`,
+    // R126: the UPWARD leg — docks, toasts, sheets: anything that RISES
+    // casts its shadow up (mobile clayShadowSheet verbatim).
+    clayShadowSheet: isDark
+      ? `0px -2px 6px ${inkWarm}0.50), 0px -14px 36px -8px ${inkWarm}0.65)`
+      : `0px -2px 6px ${inkWarm}0.12), 0px -12px 32px -8px ${inkWarm}0.22)`,
 
-    // Text helpers
-    textSecondary: isDark ? "rgba(255,255,255,0.60)" : "rgba(0,0,0,0.60)",
-    textTertiary: isDark ? "rgba(255,255,255,0.40)" : "rgba(0,0,0,0.40)",
+    // Text helpers (R126: the mobile ink ladder — tertiary lifted to AA)
+    textSecondary,
+    textTertiary,
 
     // Pill / badge
     pillBg: isDark ? "rgba(255,255,255,0.10)" : "black",
@@ -468,6 +611,29 @@ export function deriveThemeStyles(
 
     // Dot grid
     dotColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
+
+    // ── R126: the Clay Companion surface ladder + status grammar (computed
+    // in the prologue above; mobile tokens.ts verbatim) ──
+    surfaceWell,
+    surfaceHeader: isDark ? mixHex(bg, "#000000", 0.30) : mixHex(bg, "#2A2018", 0.06),
+    accentTint,
+    // AMENDMENT 1 (mobile round-117): the warm hairline rim on all four
+    // sides — the default card edge in light mode; the matte top edge
+    // becomes a dark-mode-only device at 14% white.
+    clayRim: isDark ? "rgba(255,255,255,0.10)" : mixHex(card, "#2A2018", 0.10),
+    clayTopEdge: isDark
+      ? mixHex(card, "#FFFFFF", 0.14)
+      : mixHex(card, "#FFFFFF", 0.55),
+    // Mono surfaces (terminal/output blocks) — recessed + their own ink.
+    monoBg: isDark ? "rgba(0,0,0,0.22)" : mixHex(card, "#2A2018", 0.06),
+    monoBorder: isDark ? "rgba(255,255,255,0.08)" : "rgba(42,32,24,0.10)",
+    monoText: isDark ? "rgba(242,235,225,0.92)" : "#3A2E22",
+    // The deep/bright semantic pairs (status TEXT + badge ink).
+    successDeep: isDark ? "#4ADE80" : "#15803D",
+    warningDeep: isDark ? "#FBBF24" : "#B45309",
+    dangerDeep: isDark ? "#F87171" : "#DC2626",
+    runningDeep: isDark ? "#93C5FD" : "#1D4ED8",
+    badgeTones,
   };
 }
 
@@ -489,6 +655,37 @@ export function syncThemeCssVars(styles: ThemeStyles): void {
     "--ac-accent": styles.accent,
     "--ac-accent-2": t.accent2,
     "--ac-accent-text": styles.accentText,
+    // R126 (the Clay Companion bridge): the deep accent tier + the surface
+    // ladder + the status grammar — every value computed in
+    // deriveThemeStyles, bridged here so both the CSS-class leg and the
+    // Tailwind @theme leg can consume them.
+    "--ac-accent-deep": styles.accentDeep,
+    "--ac-surface-well": styles.surfaceWell,
+    "--ac-surface-header": styles.surfaceHeader,
+    "--ac-accent-tint": styles.accentTint,
+    "--ac-clay-rim": styles.clayRim,
+    "--ac-clay-top-edge": styles.clayTopEdge,
+    "--ac-clay-shadow-pressed": styles.clayShadowPressed,
+    "--ac-clay-shadow-sheet": styles.clayShadowSheet,
+    "--ac-mono-bg": styles.monoBg,
+    "--ac-mono-border": styles.monoBorder,
+    "--ac-mono-text": styles.monoText,
+    "--ac-success-deep": styles.successDeep,
+    "--ac-warning-deep": styles.warningDeep,
+    "--ac-danger-deep": styles.dangerDeep,
+    "--ac-running-deep": styles.runningDeep,
+    "--ac-badge-success-bg": styles.badgeTones.success.bg,
+    "--ac-badge-success-fg": styles.badgeTones.success.fg,
+    "--ac-badge-warning-bg": styles.badgeTones.warning.bg,
+    "--ac-badge-warning-fg": styles.badgeTones.warning.fg,
+    "--ac-badge-danger-bg": styles.badgeTones.danger.bg,
+    "--ac-badge-danger-fg": styles.badgeTones.danger.fg,
+    "--ac-badge-running-bg": styles.badgeTones.running.bg,
+    "--ac-badge-running-fg": styles.badgeTones.running.fg,
+    "--ac-badge-accent-bg": styles.badgeTones.accent.bg,
+    "--ac-badge-accent-fg": styles.badgeTones.accent.fg,
+    "--ac-badge-neutral-bg": styles.badgeTones.neutral.bg,
+    "--ac-badge-neutral-fg": styles.badgeTones.neutral.fg,
     "--ac-border": styles.border,
     "--ac-border-strong": styles.borderStrong,
     "--ac-border-subtle": styles.borderSubtle,

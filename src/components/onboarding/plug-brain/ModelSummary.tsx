@@ -145,24 +145,14 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
 
   return (
     <div className="grid gap-3">
-      {/* --- MODEL SUMMARY CARD --- */}
+      {/* --- MODEL SUMMARY CARD — R126-3g: the clay card. --- */}
       <div
-        className="rounded-[24px] border-[1.5px] p-4"
-        style={{
-          background: s.card,
-          borderColor: s.borderStrong,
-          boxShadow: s.bentoShadow,
-        }}
+        className="rounded-[24px] border p-4 border-clay-rim ac-clay bg-card"
       >
         <div className="flex items-center justify-between">
           <span className="font-black tracking-tight" style={{ color: s.text }}>Model Summary</span>
           <span
-            className="px-2 py-1 rounded-full border text-[10px] font-bold"
-            style={{
-              backgroundColor: s.accent,
-              color: s.accentText,
-              borderColor: s.accent,
-            }}
+            className="px-2 py-1 rounded-full text-[10px] font-bold bg-badge-success text-badge-success-fg"
           >
             LIVE
           </span>
@@ -172,12 +162,11 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
         <div className="mt-3 flex flex-wrap gap-2">
           {provider && (
             <span
-              className="px-3 py-1.5 rounded-full text-[11px] font-bold flex items-center gap-1.5"
-              style={{ background: s.pillBg, color: s.pillText }}
+              className="px-3 py-1.5 rounded-full text-[11px] font-bold flex items-center gap-1.5 bg-badge-neutral text-badge-neutral-fg"
             >
               <span
                 className="w-5 h-5 rounded-full grid place-items-center text-[10px] font-bold"
-                style={{ background: s.accent, color: s.accentText }}
+                style={{ background: s.accentDeep, color: s.accentText }}
               >
                 {providerLetter}
               </span>
@@ -186,19 +175,15 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
           )}
           {modelId && (
             <span
-              className="px-3 py-1.5 rounded-full border text-[11px] font-mono font-bold truncate max-w-[160px]"
-              style={{
-                background: s.card,
-                borderColor: s.border,
-                color: s.text,
-              }}
+              className="px-3 py-1.5 rounded-full border text-[11px] font-mono font-bold truncate max-w-[160px] border-clay-rim bg-well"
+              style={{ color: s.text }}
             >
               {modelId}
             </span>
           )}
         </div>
 
-        {/* Stats grid */}
+        {/* Stats grid — R126-3g: recessed wells. */}
         <div className="grid grid-cols-2 gap-2 mt-3">
           {[
             { label: "Context", value: formatContextLabel(contextWindow) },
@@ -208,8 +193,7 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
           ].map((item) => (
             <div
               key={item.label}
-              className="rounded-[14px] border p-3"
-              style={{ background: s.subtle, borderColor: s.border }}
+              className="ac-well rounded-[14px] p-3"
             >
               <div className="text-[10px] font-bold uppercase tracking-widest" style={{ color: s.textTertiary }}>
                 {item.label}
@@ -221,10 +205,9 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
           ))}
         </div>
 
-        {/* Reasoning row */}
+        {/* Reasoning row — R126-3g: the well + the accent meter bars. */}
         <div
-          className="mt-3 rounded-[14px] border p-3 flex items-center justify-between"
-          style={{ borderColor: s.border }}
+          className="ac-well mt-3 rounded-[14px] p-3 flex items-center justify-between"
         >
           <div>
             <div className="text-[10px] font-bold uppercase tracking-widest" style={{ color: s.textTertiary }}>
@@ -243,51 +226,44 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
                 key={i}
                 className="w-1.5 h-5 rounded-full"
                 style={{
-                  background: i <= reasoningIndex ? s.toggleActive : s.border,
+                  background: i <= reasoningIndex ? s.accent : s.border,
                 }}
               />
             ))}
           </div>
         </div>
 
-        {/* Cost card (THEMED) */}
+        {/* Cost card — R126-3g: the accentTint fill + accentDeep ink (hue
+            without loudness — the full-accent fill retired). */}
         <div
-          className="mt-3 rounded-[14px] border-[1.5px] p-3 flex items-center justify-between"
-          style={{
-            backgroundColor: s.accent,
-            borderColor: s.accent,
-          }}
+          className="mt-3 rounded-[14px] border p-3 flex items-center justify-between bg-accent-tint border-clay-rim"
         >
           <div>
             <div
-              className="text-[10px] font-bold uppercase tracking-widest"
-              style={{ color: s.accentText, opacity: 0.7 }}
+              className="text-[10px] font-bold uppercase tracking-widest text-accent-deep"
+              style={{ opacity: 0.75 }}
             >
               Est. cost / task
             </div>
-            <div className="mt-0.5 font-black text-[16px]" style={{ color: s.accentText }}>
+            <div className="mt-0.5 font-black text-[16px] text-accent-deep">
               {estCost}
             </div>
           </div>
           <div
             className="w-10 h-10 rounded-full grid place-items-center text-[12px]"
-            style={{ background: s.accentText, color: s.accent }}
+            style={{ background: s.accentDeep, color: s.accentText }}
           >
             ✦
           </div>
         </div>
 
-        {/* Security note */}
+        {/* Security note — R126-3g: the well + the success badge ✓. */}
         <div
-          className="mt-3 flex items-center gap-2 text-[11px] font-bold px-3 py-2 rounded-full border"
-          style={{
-            background: s.subtle,
-            borderColor: s.border,
-            color: s.text,
-          }}
+          className="ac-well mt-3 flex items-center gap-2 text-[11px] font-bold px-3 py-2 rounded-full"
+          style={{ color: s.textSecondary }}
         >
           <span
-            className="w-5 h-5 rounded-full bg-[#27C93F] grid place-items-center text-[10px] text-black shrink-0"
+            className="w-5 h-5 rounded-full grid place-items-center text-[10px] shrink-0 bg-badge-success text-badge-success-fg"
           >
             ✓
           </span>
@@ -295,20 +271,19 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
         </div>
       </div>
 
-      {/* --- READY TO SHIP STICKER (THEMED) --- */}
+      {/* --- READY TO SHIP STICKER — R126-3g: the accentDeep fill +
+          accentText ink (the §11 accent pair); the rotation stays. --- */}
       <div
-        className="rounded-[18px] border-[1.5px] px-4 py-3 rotate-[1deg] flex items-center justify-between"
+        className="rounded-[18px] px-4 py-3 rotate-[1deg] flex items-center justify-between ac-clay-sm"
         style={{
-          backgroundColor: s.accent,
-          borderColor: s.accent,
+          backgroundColor: s.accentDeep,
           color: s.accentText,
-          boxShadow: s.bentoShadowSm,
         }}
       >
         <span className="font-black tracking-tight text-[15px]">READY TO SHIP</span>
         <span
           className="px-2 py-1 rounded-full text-[10px] font-bold"
-          style={{ background: s.accentText, color: s.accent }}
+          style={{ background: s.accentText, color: s.accentDeep }}
         >
           STICKER
         </span>
@@ -321,7 +296,7 @@ export function ModelSummary({ onBack, onSave }: { onBack: () => void; onSave: (
         </p>
       )}
       {saveError && (
-        <p className="text-[11px] font-medium px-1" style={{ color: "#D64545" }}>
+        <p className="text-[11px] font-medium px-1 text-danger-deep">
           {saveError}
         </p>
       )}

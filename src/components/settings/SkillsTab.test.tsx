@@ -331,7 +331,11 @@ describe("SkillsTab (ROUND-61 R61-2-a)", () => {
     const amber = await screen.findByTestId("pinned-budget");
     expect(amber.textContent).toContain("pinned bodies ≈ 20,000 chars of the 24,000 budget");
     expect(amber.textContent).toContain("past 80%");
-    expect(amber.style.color).toBe(SEMANTIC_COLORS.warning);
+    // R126-3f-3 re-pin: the amber readout's ink moved off the inline
+    // SEMANTIC_COLORS.warning leg onto the §11 class leg (text-warning-deep
+    // — TOKENS §11's deep/bright warning pair); the truth it asserts is
+    // unchanged (the amber tier renders when past 80% of the budget).
+    expect(amber.className).toContain("text-warning-deep");
   });
 
   it("R98-E3: file-skill rows render read-only — disabled switches, the \u201cedit the SKILL.md\u201d note, and no PATCH on click", async () => {

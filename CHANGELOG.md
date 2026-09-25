@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-24 round-125 -->
+<!-- last-reviewed: 2026-09-25 round-126 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,46 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [0.119.0] — 2026-09-25 — the Clay Companion redesign: the whole desktop speaks the Android app's design language
+
+### The redesign (one language, every screen)
+- **The desktop now speaks Clay Companion** — the same design language as the Android companion,
+  adapted for the desktop: warm clay surfaces (the round-117 surface ladder — recessed wells,
+  warm hairline rims, layered two-leg shadows), the two-tier terracotta accent family (the marker
+  hue + a deepened accent-as-text tier that holds AA contrast), the badge-tone status grammar
+  (tinted containers with deep-on-tint ink — the flat-hue status text and white-on-saturated chips
+  are extinct), and Manrope + JetBrains Mono as the identity faces (the phone's pair — one product
+  family).
+- **Clay Studio is the default theme** with a one-time migration off the never-re-designed nova
+  default — on both the local profile and the server-synced appearance, converging both legs. A
+  deliberate pick of any other flavor afterwards rides untouched forever.
+- **The navigation model got its own redesign**: the sidebar's project rows now NAVIGATE into the
+  project (the body click opens the chat; a dedicated hover-revealed chevron toggles the session
+  tree — the explorer-class split), the sessions render in ONE recessed well with hairline
+  dividers, "+N more" is a real button, and the app's cat-face logo wears the clay accent family
+  (the hardcoded orange gradient and its orange-only glow are gone).
+- **Every screen rode the wave**: the dashboard's stat row is now ONE clay card with inset-divided
+  cells (no icon tiles — the numbers own the grid); the usage instrument carries a gliding
+  segmented range control and hairline-divided leaderboards; the chat screen's transcript, activity
+  wells, tool rows, and composer all speak the clay material with the mobile's user-bubble recipe;
+  the right sidebar's seven panels (terminal on the recessed mono surface, the browser chrome, the
+  memory list) and the SubAgent panel's long-standing blue fills are gone; the whole settings hub
+  (15 sections) + the setup wizard (theatrical DNA kept — the glows now derive from the accent
+  family) + the toasts, notifications, and every secondary OS window.
+- **The dead layouts are gone**: ~950 lines of unreachable three-panel/experimental chat layouts
+  retired (verified: no UI could ever activate them), plus the orphaned panels and store state
+  they left behind — the chat has ONE layout, fully polished.
+
+### The engineering behind it
+- The design language is documented as a constitution (`docs/design-language/` — TOKENS §10
+  surface ladder + §11 status grammar, MOTION's house spring grammar, COMPONENTS' clay recipes,
+  SCREENS' five PC archetypes + the navigation laws) and machine-enforced: the audit's drift
+  counts went DOWN across the redesign (hardcoded hexes 101→74, arbitrary type/border spellings
+  1635→1519, JS hover handlers 21→13).
+- The full gate stack stayed green throughout: 274 suites / 4,840 tests, typecheck, lint, the
+  production build, 12 e2e, the license audit — with every visual contract change re-pinned
+  in lockstep and every behavior/testid/aria contract preserved byte-identical.
 
 ## [0.118.0] — 2026-09-24 — the live-center truth pass: duplicate writes, occlusion-proof screenshots, per-session drafts, the visible ledger
 

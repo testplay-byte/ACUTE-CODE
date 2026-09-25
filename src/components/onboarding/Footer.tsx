@@ -1,4 +1,5 @@
 import { useThemeStyles } from "../../lib/use-theme-styles";
+import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { WIZARD_EDGE } from "./onboarding-types";
 
 /**
@@ -20,7 +21,12 @@ export function Footer() {
         >
           <span>© 2026 ACUTE-CODE • CRAFTED WITH ✦</span>
           <span className="hidden md:inline-flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-[#27C93F]" />
+            {/* R126-3g: the nominal dot rides the pipeline's flat success
+                hue (dots only, TOKENS §11) — the hardcoded #27C93F retired. */}
+            <span
+              className="w-2 h-2 rounded-full"
+              style={{ background: SEMANTIC_COLORS.success }}
+            />
             all systems nominal
           </span>
         </div>

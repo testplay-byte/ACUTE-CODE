@@ -3,9 +3,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Bug, ChevronDown, LoaderCircle } from "lucide-react";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-import { withAlpha } from "../dashboard/helpers";
+import { cn } from "../../lib/utils";
 
 /**
  * ROUND-66 (R66-2-c, the owner's C1 directive): the DEDICATED debug-report
@@ -34,6 +33,19 @@ import { withAlpha } from "../dashboard/helpers";
  * stream state (stream-store's liveTurn.debugReport: streaming text while
  * the analyst works) or the FOLDED shape (AssistantTurnItem.debugReport,
  * state "done"). The folded turn renders the same card with state done.
+ *
+ * R126-3h (the flagged-debt ledger — 3d-2's caveat, TOKENS §11 status
+ * grammar): the ERROR card's amber materials (the withAlpha(AMBER, 0.4)
+ * border + the subtle fill + the flat-hue amber text) are RETIRED — the
+ * error container is the §11 WARNING badge tone (bg-badge-warning + its fg
+ * pair, the queue-kept notice spelling) with warning-deep ink on the icon /
+ * title / status / alert line; the resting card is the WELL container
+ * (.ac-well — surfaceWell + the clay rim, TOKENS §10). The status line rides
+ * the deep tiers (streaming → running-deep, done → success-deep, error →
+ * warning-deep). The Copy footer is the OUTLINED-SECONDARY action
+ * (border-line-strong + text-muted + hover wash — COMPONENTS §4). The
+ * SEMANTIC_COLORS amber import + withAlpha are gone (flat hues are
+ * dots-only, and this card has no dot).
  */
 export interface DebugReportCardProps {
   report: {
@@ -52,13 +64,13 @@ export interface DebugReportCardProps {
   projectId?: string;
 }
 
-/** The amber status color — the SEMANTIC_COLORS exception pattern: a
- * documented cross-theme token (the debug analyst's failure is a warning,
- * not the red of a failed turn — the turn itself succeeded).
- * R100-D: the local #d97706 hex is retired — the ONE documented spelling
- * is SEMANTIC_COLORS.warning (semantics.ts), same as every other amber
- * surface after the R100-D sweep. */
-const AMBER = SEMANTIC_COLORS.warning;
+/** R126-3h: the status line's deep-tier ink (TOKENS §11 — text, never a
+ * flat hue): streaming → running, done → success, error → warning. */
+function statusToneClass(state: "streaming" | "done" | "error"): string {
+  if (state === "streaming") return "text-running-deep";
+  if (state === "error") return "text-warning-deep";
+  return "text-success-deep";
+}
 
 /**
  * ROUND-67 (R67-B): the clipboard payload for the "Copy report" button.
@@ -95,8 +107,6 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
     prevStreaming.current = isStreaming;
   }, [isStreaming]);
 
-  const borderTone = isError ? withAlpha(AMBER, 0.4) : styles.borderSubtle;
-  const titleTone = isError ? AMBER : styles.textSecondary;
   // The copy footer needs the DONE report's text (never streaming/error).
   const copyText = buildDebugReportCopyText(report);
 
@@ -104,8 +114,14 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
     <div
       data-testid="debug-report-card"
       // R100-D: 14px arbitrary radius → rounded-xl (the 12px card step).
-      className="rounded-xl border overflow-hidden"
-      style={{ borderColor: borderTone, background: styles.subtle }}
+      // R126-3h: the container is the WELL at rest (border-clay-rim +
+      // bg-well, TOKENS §10 — the subtle fill + borderSubtle legs are
+      // retired) and the §11 WARNING badge tone on error (the
+      // withAlpha(AMBER, 0.4) border dies).
+      className={cn(
+        "rounded-xl border overflow-hidden",
+        isError ? "border-transparent bg-badge-warning text-badge-warning-fg" : "border-clay-rim bg-well",
+      )}
     >
       {/* Header row (ROUND-67 R67-B: the whole row is the collapse toggle):
           the analyst mark + label + model chip + the honest subtitle (this
@@ -126,20 +142,23 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
       >
         <Bug
           size={14}
-          className="shrink-0"
-          style={{ color: isError ? AMBER : styles.textTertiary }}
+          // R126-3h: error → the warning-deep ink tier (the flat AMBER leg
+          // dies); resting → the muted secondary ink.
+          className={cn("shrink-0", isError ? "text-warning-deep" : "text-muted")}
           aria-hidden
         />
         {/* R100-D (weight law): the card title is 600 (bold is wizard
-            display only). */}
-        <span className="text-[12px] font-semibold shrink-0" style={{ color: titleTone }}>
+            display only). R126-3h: error → warning-deep; resting → muted. */}
+        <span
+          className={cn("text-[12px] font-semibold shrink-0", isError ? "text-warning-deep" : "text-muted")}
+        >
           Debug report
         </span>
         {report.model ? (
           <span
-            // R100-D: 10.5→10px mono (the meta-mono tier).
-            className="font-mono text-[10px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate"
-            style={{ background: styles.card, color: styles.textTertiary }}
+            // R100-D: 10.5→10px mono (the meta-mono tier). R126-3h: the chip
+            // rides the class legs (bg-card + text-muted).
+            className="font-mono text-[10px] px-1.5 py-0.5 rounded-md shrink-0 max-w-[240px] truncate bg-card text-muted"
             title={report.model}
           >
             {report.model}
@@ -154,8 +173,12 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
         </span>
         <span
           data-testid="debug-report-status"
-          className="ml-auto shrink-0 flex items-center gap-1.5 text-[10px] font-medium"
-          style={{ color: isError ? AMBER : styles.textTertiary }}
+          // R126-3h: the status text rides the §11 deep tiers (the flat
+          // tertiary/amber ink legs are retired).
+          className={cn(
+            "ml-auto shrink-0 flex items-center gap-1.5 text-[10px] font-medium",
+            statusToneClass(report.state),
+          )}
         >
           {isStreaming ? (
             <>
@@ -195,8 +218,9 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
               {isError ? (
                 <div
                   // R100-D: 11.5→12px (the no-half-pixel snap).
-                  className="text-[12px] leading-[1.5] break-words"
-                  style={{ color: withAlpha(AMBER, styles.isDark ? 0.95 : 0.9) }}
+                  // R126-3h: the honest failure line rides the warning-deep
+                  // tier (the withAlpha(AMBER) flat-hue text dies).
+                  className="text-[12px] leading-[1.5] break-words text-warning-deep"
                   role="alert"
                 >
                   {report.error ?? "The debug analyst failed to produce a report."}
@@ -222,10 +246,7 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
           Styling mirrors TurnErrorCard's "Copy details" (the h-7 px-2.5
           bordered pill) with the 1200ms copied→"Copied" flash. */}
       {report.state === "done" && report.text !== "" ? (
-        <div
-          className="px-3.5 py-2 flex items-center border-t"
-          style={{ borderColor: borderTone }}
-        >
+        <div className="px-3.5 py-2 flex items-center border-t border-line">
           <button
             type="button"
             onClick={() => {
@@ -237,8 +258,10 @@ export function DebugReportCard({ report, projectId }: DebugReportCardProps) {
             aria-label="Copy debug report"
             data-testid="debug-report-copy"
             // R100-D: 11.5→12px; buttons are 600 per the weight law.
-            className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border transition-colors"
-            style={{ borderColor: styles.border, color: styles.textSecondary }}
+            // R126-3h: the OUTLINED-SECONDARY species (border-line-strong +
+            // text-muted + the CSS hover wash — the neutral border/
+            // secondary ink inline pair is retired).
+            className="h-7 px-2.5 rounded-lg text-[12px] font-semibold border border-line-strong text-muted transition-colors duration-100 hover:bg-subtle hover:text-ink"
           >
             {copied ? "Copied" : "Copy report"}
           </button>

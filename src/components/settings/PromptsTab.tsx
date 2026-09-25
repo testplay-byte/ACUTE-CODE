@@ -3,9 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Eye, EyeOff, RotateCcw, Search } from "lucide-react";
 import { useProjects } from "../../hooks/use-projects";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-import { bdr, withAlpha } from "../dashboard/helpers";
 import { ClampedText } from "../shared/ClampedText";
 import { SkeletonBlock, SkeletonRows } from "../shared/Skeletons";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -214,8 +212,7 @@ function SectionEditor({
             aria-expanded={showDefault}
             aria-label={`Show the default text for ${section.id}`}
             title={showDefault ? "Hide the built-in text" : "Show the built-in text this override replaces"}
-            className="flex h-7 items-center gap-1.5 rounded-lg px-2 text-[11px] font-semibold shrink-0"
-            style={{ background: styles.subtle, color: styles.textSecondary }}
+            className="flex h-7 items-center gap-1.5 rounded-lg px-2 text-[11px] font-semibold shrink-0 bg-well border border-clay-rim text-muted transition-colors duration-100 hover:bg-hover"
           >
             {showDefault ? <EyeOff size={11} /> : <Eye size={11} />}
             {showDefault ? "Hide default" : "Show default"}
@@ -223,12 +220,9 @@ function SectionEditor({
           {showDefault && (
             <pre
               data-testid={`prompt-default-${section.id}`}
-              className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-xl p-2.5 font-mono text-[11px] leading-relaxed"
-              style={{
-                background: styles.subtle,
-                border: bdr("1.5px", styles.borderSubtle),
-                color: styles.textSecondary,
-              }}
+              /* R126-3f-3: the mono surface (TOKENS §10 — .ac-mono-block +
+               * text-mono-ink; the subtle + bdr legs are retired). */
+              className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-xl p-2.5 font-mono text-[11px] leading-relaxed ac-mono-block text-mono-ink"
             >
               {section.defaultText}
             </pre>
@@ -257,15 +251,17 @@ function SectionEditor({
           aria-label={`Edit the override for ${section.id}`}
           rows={8}
           data-testid={`prompt-override-input-${section.id}`}
-          className="w-full resize-y rounded-lg border-[1.5px] px-2.5 py-2 font-mono text-[11px] leading-relaxed outline-none"
-          style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
+          /* R126-3f-3: THE WELL + rim (TOKENS §10) — the editor's input. */
+          className="w-full resize-y rounded-lg border border-clay-rim bg-well px-2.5 py-2 font-mono text-[11px] leading-relaxed text-ink outline-none"
         />
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
         <span
-          className="font-mono text-[11px] tabular-nums"
-          style={{ color: draft.length >= OVERRIDE_CHAR_CAP ? SEMANTIC_COLORS.warning : styles.textTertiary }}
+          className={`font-mono text-[11px] tabular-nums ${
+            draft.length >= OVERRIDE_CHAR_CAP ? "text-warning-deep" : ""
+          }`}
+          style={draft.length >= OVERRIDE_CHAR_CAP ? undefined : { color: styles.textTertiary }}
           data-testid={`prompt-counter-${section.id}`}
         >
           {draft.length.toLocaleString("en-US")} / {OVERRIDE_CHAR_CAP.toLocaleString("en-US")} chars
@@ -274,8 +270,7 @@ function SectionEditor({
         {/* The standing drop hint — the confirm dialog repeats it on click. */}
         {emptySave && dirty && (
           <span
-            className="text-[11px] font-medium"
-            style={{ color: SEMANTIC_COLORS.warning }}
+            className="text-[11px] font-medium text-warning-deep"
             data-testid={`prompt-drop-hint-${section.id}`}
           >
             Saving this empty override REMOVES the section from the prompt entirely.
@@ -285,8 +280,7 @@ function SectionEditor({
 
       {capNote && (
         <p
-          className="text-[11px] font-medium"
-          style={{ color: SEMANTIC_COLORS.warning }}
+          className="text-[11px] font-medium text-warning-deep"
           data-testid={`prompt-cap-note-${section.id}`}
         >
           {capNote}
@@ -294,8 +288,7 @@ function SectionEditor({
       )}
       {error && (
         <p
-          className="text-[11px] font-medium"
-          style={{ color: SEMANTIC_COLORS.danger }}
+          className="text-[11px] font-medium text-danger-deep"
           role="alert"
           data-testid={`prompt-editor-error-${section.id}`}
         >
@@ -309,8 +302,9 @@ function SectionEditor({
           onClick={onSaveClick}
           disabled={!dirty || save.isPending}
           aria-label={`Save the override for ${section.id}`}
-          className="h-8 shrink-0 rounded-lg px-3 text-[11px] font-semibold disabled:opacity-50"
-          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          /* R126-3f-3: the accent-tint action spelling (bg-accent-tint +
+           * text-accent-deep). */
+          className="h-8 shrink-0 rounded-lg px-3 text-[11px] font-semibold bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-50"
         >
           {save.isPending ? "Saving…" : "Save"}
         </button>
@@ -322,8 +316,7 @@ function SectionEditor({
             disabled={revert.isPending}
             aria-label={`Revert ${section.id} to the default text`}
             title="Remove the override file — the built-in text composes again"
-            className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-3 text-[11px] font-semibold disabled:opacity-50"
-            style={{ background: styles.subtle, color: styles.textSecondary }}
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-3 text-[11px] font-semibold bg-well border border-clay-rim text-muted transition-colors duration-100 hover:bg-hover disabled:opacity-50"
           >
             <RotateCcw size={11} /> {revert.isPending ? "Reverting…" : "Revert"}
           </button>
@@ -352,9 +345,11 @@ function SectionEditor({
 /* ── One master-list row ──────────────────────────────────────────────────── */
 
 /** A section row: the human TITLE + the status chip + the right-aligned
- * ~token estimate. Active-row grammar = the api tab's provider list
- * (aria-current, accent-soft wash on the CSS-var leg, 2.5px accent bar) —
- * hover rides `hover:bg-hover`, never a JS handler (TOKENS §1 rule 4). */
+ * ~token estimate. Active-row grammar = the selection grammar (R126-3f-3:
+ * bg-accent-tint + text-accent-deep + the 2px bg-accent-deep bar +
+ * aria-current — the 3f-2 provider-rail spelling; the pre-R126
+ * bg-accent-soft wash + 2.5px bar are retired) — hover rides
+ * `hover:bg-hover`, never a JS handler (TOKENS §1 rule 4). */
 function SectionRow({
   section,
   active,
@@ -381,38 +376,32 @@ function SectionRow({
       title={section.id}
       className={`relative w-full items-center gap-2 rounded-lg px-2.5 py-1.5 md:py-2 text-left transition-colors ${
         hiddenOnMobile ? "hidden md:flex" : "flex"
-      } ${active ? "bg-accent-soft" : "hover:bg-hover"}`}
+      } ${active ? "bg-accent-tint" : "hover:bg-hover"}`}
     >
       {active && (
         <span
-          className="absolute left-0 top-1.5 bottom-1.5 w-[2.5px] rounded-full"
-          style={{ background: styles.accent }}
+          className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-accent-deep"
           aria-hidden
         />
       )}
       <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span
-          className="w-full truncate text-[12px] font-medium"
-          style={{ color: active ? styles.text : styles.textSecondary }}
+          className={`w-full truncate text-[12px] font-medium ${active ? "text-accent-deep" : "text-muted"}`}
         >
           {sectionTitle(section.id)}
         </span>
-        {/* The status chip — ONE per row: OVERRIDDEN is accent-tinted,
-            DEFAULT neutral, ABSENT (conditional section not composed
-            here) the amber warning. */}
+        {/* The status chip — ONE per row: OVERRIDDEN is the §11 accent badge
+            tone, DEFAULT neutral, ABSENT (conditional section not composed
+            here) the warning tone. */}
         <span
           data-testid={`prompt-status-${section.id}`}
-          className="w-fit shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider"
-          style={
+          className={`w-fit shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${
             section.overridden
-              ? { background: withAlpha(styles.accent, 0.14), color: styles.accent }
+              ? "bg-badge-accent text-badge-accent-fg"
               : section.present
-                ? { background: styles.subtle, color: styles.textTertiary }
-                : {
-                    background: withAlpha(SEMANTIC_COLORS.warning, 0.1),
-                    color: SEMANTIC_COLORS.warning,
-                  }
-          }
+                ? "bg-badge-neutral text-badge-neutral-fg"
+                : "bg-badge-warning text-badge-warning-fg"
+          }`}
         >
           {section.overridden ? "overridden" : section.present ? "default" : "absent"}
         </span>
@@ -544,13 +533,11 @@ function PromptWorkArea({
         <div
           role="alert"
           data-testid="prompt-diagnostics"
-          className="rounded-xl border-[1.5px] px-3 py-2.5"
-          style={{
-            borderColor: withAlpha(SEMANTIC_COLORS.warning, 0.4),
-            background: withAlpha(SEMANTIC_COLORS.warning, 0.08),
-          }}
+          /* R126-3f-3: the §11 warning badge-tone container (the withAlpha
+           * wash + border spellings are retired). */
+          className="rounded-xl bg-badge-warning px-3 py-2.5"
         >
-          <div className="text-[11px] font-semibold" style={{ color: SEMANTIC_COLORS.warning }}>
+          <div className="text-[11px] font-semibold text-badge-warning-fg">
             Override diagnostics
           </div>
           <ul className="mt-1 flex flex-col gap-0.5">
@@ -576,11 +563,13 @@ function PromptWorkArea({
                 footer. The list owns its scroll (max-h + the app's thin
                 pill scrollbar — the long-list discipline). */}
         <div
-          className="flex w-full flex-col overflow-hidden rounded-xl border-[1.5px] md:w-[300px] md:shrink-0 md:max-h-[560px]"
-          style={{ background: styles.bg, borderColor: styles.border }}
+          /* R126-3f-3: the master pane = the rim-hairline inset panel on the
+           * card surface (the 3f-2 provider-rail material; the page-bg +
+           * 1.5px border spellings are retired). */
+          className="flex w-full flex-col overflow-hidden rounded-xl border border-clay-rim bg-card md:w-[300px] md:shrink-0 md:max-h-[560px]"
           aria-label="Prompt sections list"
         >
-          <div className="relative shrink-0 border-b p-2" style={{ borderColor: styles.border }}>
+          <div className="relative shrink-0 border-b border-line p-2">
             <Search
               size={11}
               className="pointer-events-none absolute left-[18px] top-1/2 -translate-y-1/2"
@@ -594,8 +583,8 @@ function PromptWorkArea({
               placeholder="Filter sections…"
               aria-label="Filter the prompt sections"
               data-testid="prompt-search-input"
-              className="h-8 w-full rounded-lg border-[1.5px] pl-[26px] pr-2.5 text-[12px] outline-none"
-              style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
+              /* R126-3f-3: THE WELL + rim (TOKENS §10). */
+              className="h-8 w-full rounded-lg border border-clay-rim bg-well pl-[26px] pr-2.5 text-[12px] text-ink outline-none"
             />
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-1.5">
@@ -638,8 +627,7 @@ function PromptWorkArea({
                   affordance. */}
           {overriddenSections.length > 0 && (
             <div
-              className="flex shrink-0 items-center gap-2 border-t px-2.5 py-1.5"
-              style={{ borderColor: styles.border }}
+              className="flex shrink-0 items-center gap-2 border-t border-line px-2.5 py-1.5"
             >
               <span
                 className="text-[11px] tabular-nums"
@@ -655,8 +643,9 @@ function PromptWorkArea({
                 disabled={revertAllBusy}
                 data-testid="prompt-revert-all"
                 title="Remove every override file — each section returns to its built-in composition"
-                className="h-7 shrink-0 rounded-lg px-2.5 text-[11px] font-semibold disabled:opacity-50"
-                style={{ color: SEMANTIC_COLORS.danger }}
+                /* R126-3f-3: the outlined danger action (border-danger-deep +
+                 * text-danger-deep). */
+                className="h-7 shrink-0 rounded-lg px-2.5 text-[11px] font-semibold border border-danger-deep text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-50"
               >
                 {revertAllBusy ? "Reverting…" : "Revert all…"}
               </button>
@@ -668,10 +657,11 @@ function PromptWorkArea({
                 Below md it renders only while the mobile editor is open
                 (`hidden md:flex`); ≥md it is always present. */}
         <div
-          className={`min-w-0 flex-1 flex-col overflow-hidden rounded-xl border-[1.5px] ${
+          /* R126-3f-3: the detail pane = the rim-hairline inset panel on the
+           * card surface (same material as the master pane). */
+          className={`min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-clay-rim bg-card ${
             mobileEditorOpen ? "flex" : "hidden md:flex"
           }`}
-          style={{ background: styles.bg, borderColor: styles.border }}
           aria-label="Selected prompt section"
           data-testid="prompt-detail-pane"
         >
@@ -682,14 +672,13 @@ function PromptWorkArea({
           ) : (
             <>
               <div
-                className="flex flex-col gap-1.5 border-b px-3.5 py-3"
-                style={{ borderColor: styles.border }}
+                className="flex flex-col gap-1.5 border-b border-line px-3.5 py-3"
               >
                 <button
                   type="button"
                   onClick={() => setMobileEditorOpen(false)}
                   aria-label="Back to all sections"
-                  className="flex h-7 w-fit items-center gap-1 rounded-lg px-1.5 text-[11px] font-semibold md:hidden"
+                  className="flex h-7 w-fit items-center gap-1 rounded-lg px-1.5 text-[11px] font-semibold transition-colors duration-100 hover:bg-hover md:hidden"
                   style={{ color: styles.textSecondary }}
                 >
                   <ArrowLeft size={11} /> All sections
@@ -698,12 +687,11 @@ function PromptWorkArea({
                   <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
                     {sectionTitle(selected.id)}
                   </span>
-                  {/* The bucket badge — §2 identity-chip grammar (mono, subtle bg). */}
+                  {/* The bucket badge — the §11 neutral badge tone (mono). */}
                   <span
                     data-testid={`prompt-bucket-${selected.id}`}
                     title={BUCKET_TITLES[selected.bucket]}
-                    className="shrink-0 rounded-full px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider"
-                    style={{ background: styles.subtle, color: styles.textTertiary }}
+                    className="shrink-0 rounded-full px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider bg-badge-neutral text-badge-neutral-fg"
                   >
                     {selected.bucket}
                   </span>
@@ -722,17 +710,13 @@ function PromptWorkArea({
                   <span className="flex-1" />
                   <span
                     data-testid={`prompt-detail-status-${selected.id}`}
-                    className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider"
-                    style={
+                    className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider ${
                       selected.overridden
-                        ? { background: withAlpha(styles.accent, 0.14), color: styles.accent }
+                        ? "bg-badge-accent text-badge-accent-fg"
                         : selected.present
-                          ? { background: styles.subtle, color: styles.textTertiary }
-                          : {
-                              background: withAlpha(SEMANTIC_COLORS.warning, 0.1),
-                              color: SEMANTIC_COLORS.warning,
-                            }
-                    }
+                          ? "bg-badge-neutral text-badge-neutral-fg"
+                          : "bg-badge-warning text-badge-warning-fg"
+                    }`}
                   >
                     {selected.overridden ? "overridden" : selected.present ? "default" : "absent"}
                   </span>
@@ -758,11 +742,7 @@ function PromptWorkArea({
                 {selected.id === "project-memory" && selected.overridden ? (
                   <p
                     data-testid="prompt-memory-override-warning"
-                    className="w-fit rounded-full px-2 py-0.5 text-[10px] font-medium"
-                    style={{
-                      background: withAlpha(SEMANTIC_COLORS.warning, 0.1),
-                      color: SEMANTIC_COLORS.warning,
-                    }}
+                    className="w-fit rounded-full px-2 py-0.5 text-[10px] font-medium bg-badge-warning text-badge-warning-fg"
                   >
                     An override replaces the live memory injection
                   </p>
@@ -886,8 +866,9 @@ function SystemPromptCard({ root, projectName }: { root: string; projectName: st
           <span className="flex-1" />
           {msg && (
             <span
-              className="text-[11px] font-medium"
-              style={{ color: msgIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+              className={`text-[11px] font-medium ${
+                msgIsError ? "text-danger-deep" : "text-success-deep"
+              }`}
               role={msgIsError ? "alert" : undefined}
             >
               {msg}
@@ -909,16 +890,14 @@ function SystemPromptCard({ root, projectName }: { root: string; projectName: st
           {report !== undefined ? (
             <>
               <span
-                className="rounded-full px-2 py-0.5 font-mono text-[10px] tabular-nums"
-                style={{ background: styles.subtle, color: styles.textTertiary }}
+                className="rounded-full px-2 py-0.5 font-mono text-[10px] tabular-nums bg-badge-neutral text-badge-neutral-fg"
                 title={`Rough estimate — the ${totalEstChars.toLocaleString("en-US")} composed characters ÷ 4. The live preview below shows the exact composition.`}
                 data-testid="prompt-scope-tokens"
               >
                 ~{fmtTokenEstimate(totalEstTokens)} tokens estimated
               </span>
               <span
-                className="rounded-full px-2 py-0.5 font-mono text-[10px] tabular-nums"
-                style={{ background: styles.subtle, color: styles.textTertiary }}
+                className="rounded-full px-2 py-0.5 font-mono text-[10px] tabular-nums bg-badge-neutral text-badge-neutral-fg"
                 title="Registry sections · sections carrying a .acute/prompts override file"
                 data-testid="prompt-scope-counts"
               >
@@ -942,14 +921,11 @@ function SystemPromptCard({ root, projectName }: { root: string; projectName: st
         <section
           aria-label="Prompt sections"
           data-testid="prompt-sections-error"
-          className="rounded-2xl border-[1.5px] px-4 py-3.5"
-          style={{
-            borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
-            background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-          }}
+          /* R126-3f-3: the §11 danger badge-tone container. */
+          className="rounded-2xl bg-badge-danger px-4 py-3.5"
         >
           <div role="alert">
-            <div className="text-[13px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+            <div className="text-[13px] font-semibold text-badge-danger-fg">
               Could not load the prompt sections
             </div>
             <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
@@ -964,8 +940,8 @@ function SystemPromptCard({ root, projectName }: { root: string; projectName: st
             type="button"
             onClick={() => void sectionsQuery.refetch()}
             aria-label="Retry loading the prompt sections"
-            className="mt-3 h-8 cursor-pointer rounded-lg border px-3.5 text-[12px] font-semibold transition-opacity hover:opacity-85"
-            style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+            /* R126-3f-3: the outlined danger action. */
+            className="mt-3 h-8 cursor-pointer rounded-lg border border-danger-deep px-3.5 text-[12px] font-semibold text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
           >
             Retry
           </button>
@@ -1025,7 +1001,7 @@ function PreviewCard({ root }: { root: string }) {
       testId="prompt-preview-card"
     >
       <div className="flex items-center gap-2 flex-wrap">
-        <Eye size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <Eye size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           Composed prompt
         </span>
@@ -1035,8 +1011,7 @@ function PreviewCard({ root }: { root: string }) {
         <span className="flex-1" />
         {open && previewQuery.data !== undefined && (
           <span
-            className="rounded-full px-1.5 py-0.5 font-mono text-[10px] tabular-nums"
-            style={{ background: styles.subtle, color: styles.textTertiary }}
+            className="rounded-full px-1.5 py-0.5 font-mono text-[10px] tabular-nums bg-badge-neutral text-badge-neutral-fg"
             title="Total characters of the composed effective sections · the ~token estimate (chars ÷ 4)"
             data-testid="prompt-preview-total"
           >
@@ -1049,11 +1024,9 @@ function PreviewCard({ root }: { root: string }) {
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           aria-label={open ? "Hide the composed prompt preview" : "Show the composed prompt preview"}
-          className="h-7 shrink-0 rounded-lg px-2.5 text-[11px] font-semibold"
-          style={{
-            background: open ? withAlpha(styles.accent, 0.12) : styles.subtle,
-            color: open ? styles.accent : styles.textSecondary,
-          }}
+          className={`h-7 shrink-0 rounded-lg px-2.5 text-[11px] font-semibold transition-colors duration-100 ${
+            open ? "bg-accent-tint text-accent-deep" : "border border-clay-rim bg-well text-muted"
+          } hover:bg-hover`}
         >
           {open ? "Hide" : "Show"}
         </button>
@@ -1068,13 +1041,11 @@ function PreviewCard({ root }: { root: string }) {
           <div
             role="alert"
             data-testid="prompt-preview-error"
-            className="rounded-xl border-[1.5px] px-3 py-2.5"
-            style={{
-              borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
-              background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-            }}
+            /* R126-3f-3: the §11 danger badge-tone container + the
+             * outlined-danger Retry. */
+            className="rounded-xl bg-badge-danger px-3 py-2.5"
           >
-            <div className="text-[11px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+            <div className="text-[11px] font-semibold text-badge-danger-fg">
               Could not load the prompt preview
             </div>
             <p className="mt-1 text-[11px] leading-relaxed" style={{ color: styles.textSecondary }}>
@@ -1086,11 +1057,7 @@ function PreviewCard({ root }: { root: string }) {
               type="button"
               onClick={() => void previewQuery.refetch()}
               aria-label="Retry loading the prompt preview"
-              className="mt-2 h-7 cursor-pointer rounded-lg border px-3 text-[11px] font-semibold transition-opacity hover:opacity-85"
-              style={{
-                borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
-                color: SEMANTIC_COLORS.danger,
-              }}
+              className="mt-2 h-7 cursor-pointer rounded-lg border border-danger-deep px-3 text-[11px] font-semibold text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
             >
               Retry
             </button>
@@ -1123,20 +1090,16 @@ function PreviewCard({ root }: { root: string }) {
                   {s.overridden && (
                     <span
                       data-testid={`preview-overridden-${s.id}`}
-                      className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider"
-                      style={{ background: withAlpha(styles.accent, 0.14), color: styles.accent }}
+                      className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider bg-badge-accent text-badge-accent-fg"
                     >
                       overridden
                     </span>
                   )}
                 </div>
                 <pre
-                  className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-xl p-2.5 font-mono text-[11px] leading-relaxed"
-                  style={{
-                    background: styles.subtle,
-                    border: bdr("1.5px", styles.borderSubtle),
-                    color: s.overridden ? styles.text : styles.textSecondary,
-                  }}
+                  /* R126-3f-3: the mono surface (TOKENS §10 — .ac-mono-block +
+                   * text-mono-ink; the subtle + bdr legs are retired). */
+                  className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-xl p-2.5 font-mono text-[11px] leading-relaxed ac-mono-block text-mono-ink"
                 >
                   {s.text}
                 </pre>
@@ -1177,13 +1140,11 @@ export function PromptsTab() {
         <div
           role="alert"
           data-testid="prompts-projects-error"
-          className="rounded-2xl border-[1.5px] px-4 py-3.5"
-          style={{
-            borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.35),
-            background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-          }}
+          /* R126-3f-3: the §11 danger badge-tone container + the
+           * outlined-danger Retry. */
+          className="rounded-2xl bg-badge-danger px-4 py-3.5"
         >
-          <div className="text-[13px] font-semibold" style={{ color: SEMANTIC_COLORS.danger }}>
+          <div className="text-[13px] font-semibold text-badge-danger-fg">
             Could not load the projects
           </div>
           <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: styles.textSecondary }}>
@@ -1194,11 +1155,7 @@ export function PromptsTab() {
             type="button"
             onClick={() => void projects.refetch()}
             aria-label="Retry loading the projects"
-            className="mt-3 h-8 cursor-pointer rounded-lg border px-3.5 text-[12px] font-semibold transition-opacity hover:opacity-85"
-            style={{
-              borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45),
-              color: SEMANTIC_COLORS.danger,
-            }}
+            className="mt-3 h-8 cursor-pointer rounded-lg border border-danger-deep px-3.5 text-[12px] font-semibold text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
           >
             Retry
           </button>
@@ -1207,22 +1164,19 @@ export function PromptsTab() {
         <div
           role="status"
           aria-label="Loading the projects"
-          className="rounded-2xl border-[1.5px] p-4"
-          style={{ background: styles.card, borderColor: styles.border }}
+          className="rounded-2xl border border-clay-rim bg-card p-4"
         >
           <SkeletonRows rows={1} rowClassName="h-10 rounded-lg" />
         </div>
       ) : root === null ? (
         <div
-          className="rounded-2xl border-[1.5px] p-4 text-[12px]"
-          style={{ background: styles.card, borderColor: styles.border, color: styles.textSecondary }}
+          className="rounded-2xl border border-clay-rim bg-card p-4 text-[12px] text-muted"
         >
           No registered projects yet — register one from the dashboard to customize its prompts.
         </div>
       ) : (
         <div
-          className="flex flex-col gap-1.5 rounded-2xl border-[1.5px] p-4"
-          style={{ background: styles.card, borderColor: styles.border }}
+          className="flex flex-col gap-1.5 rounded-2xl border border-clay-rim bg-card p-4"
           aria-label="Project picker"
         >
           <label
@@ -1238,8 +1192,8 @@ export function PromptsTab() {
             onChange={(e) => setSelectedRoot(e.target.value)}
             aria-label="Project whose prompt sections are customized"
             data-testid="prompts-project-select"
-            className="h-8 w-full max-w-[380px] rounded-lg border-[1.5px] px-2.5 font-mono text-[12px] outline-none"
-            style={{ background: styles.bg, borderColor: styles.border, color: styles.text }}
+            /* R126-3f-3: THE WELL + rim (TOKENS §10). */
+            className="h-8 w-full max-w-[380px] rounded-lg border border-clay-rim bg-well px-2.5 font-mono text-[12px] text-ink outline-none"
           >
             {projects.data?.map((p) => (
               <option key={p.id} value={p.rootPath}>

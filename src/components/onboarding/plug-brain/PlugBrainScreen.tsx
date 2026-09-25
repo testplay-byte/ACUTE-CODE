@@ -1,5 +1,6 @@
 import { useOnboardingStore } from "../onboarding-store";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
+import { SEMANTIC_COLORS } from "../../../lib/semantics";
 import { ProviderSelector } from "./ProviderSelector";
 import { ConnectionCard } from "./ConnectionCard";
 import { ModelTuningCard } from "./ModelTuningCard";
@@ -38,16 +39,17 @@ export function PlugBrainScreen() {
             Connect a provider, paste a key, tune it how you like.
           </p>
         </div>
+        {/* R126-3g: the secure pill = a clay chrome chip; the status dot
+            rides the pipeline's flat success hue (dots-only, TOKENS §11) —
+            the hardcoded #27C93F retired. */}
         <div
-          className="flex items-center gap-2 px-3 py-1.5 rounded-full border text-[11px] font-bold"
-          style={{
-            background: s.card,
-            borderColor: s.border,
-            color: s.text,
-            boxShadow: s.softShadow,
-          }}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-full border text-[11px] font-bold border-clay-rim ac-clay-sm bg-card"
+          style={{ color: s.text }}
         >
-          <span className="w-2 h-2 rounded-full bg-[#27C93F] animate-pulse" />
+          <span
+            className="w-2 h-2 rounded-full animate-pulse"
+            style={{ background: SEMANTIC_COLORS.success }}
+          />
           Secure &bull; Encrypted &bull; Local
         </div>
       </div>
@@ -58,20 +60,16 @@ export function PlugBrainScreen() {
       <div className="mt-4 md:mt-6 short:mt-3 grid gap-5 md:gap-8 items-start lg:grid-cols-[minmax(0,1fr)_clamp(360px,30vw,540px)] lg:pr-2 xl:pr-8">
         {/* LEFT SECTION — provider, connection, tuning */}
         <div className="min-w-0 flex flex-col gap-4 md:gap-5">
-          {/* Provider card */}
+          {/* Provider card — R126-3g: the SectionCard-style clay card
+              (clayRim hairline + .ac-clay, the wizard's 24px signature
+              radius kept). */}
           <div
-            className="rounded-[24px] border-[1.5px] p-4 md:p-5"
-            style={{
-              background: s.card,
-              borderColor: s.border,
-              boxShadow: s.softShadow,
-            }}
+            className="rounded-[24px] border p-4 md:p-5 border-clay-rim ac-clay bg-card"
           >
             <div className="flex items-center justify-between">
               <span className="font-bold tracking-tight" style={{ color: s.text }}>Provider</span>
               <span
-                className="text-[10px] font-bold px-2 py-1 rounded-full"
-                style={{ background: s.pillBg, color: s.pillText }}
+                className="text-[10px] font-bold px-2 py-1 rounded-full bg-badge-neutral text-badge-neutral-fg"
               >
                 STEP 1
               </span>

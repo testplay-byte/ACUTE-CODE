@@ -1,16 +1,21 @@
-import { motion } from "framer-motion";
-import { Wrench } from "lucide-react";
 import type { DetailedUsageToolCall } from "../../lib/api";
 import type { ThemeStyles } from "../../lib/themes";
-import { scaleIn } from "../../lib/motion";
-import { withAlpha } from "../dashboard/helpers";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
+import { Kicker } from "../ui/Kicker";
+import { CLAY_CARD } from "./usage-helpers";
+import { cn } from "../../lib/utils";
 
 /**
  * ROUND-52 (R52-b): tool leaderboard — the /usage screen's companion card to
  * the activity chart (the owner-approved DASHBOARD usage page's "Every tool
  * call, ranked" section). Top 8 tools; horizontal bars relative to the
- * most-used tool; failures render in the semantic danger color when > 0.
+ * most-used tool; failures render in the danger tier when > 0.
+ *
+ * ROUND-126 (R126-3b, the Clay Companion redesign): the rows go FLAT — no
+ * per-row cards; separation is the 1px inset hairline between rows (the
+ * usage.html structural reference's suite-row grammar); the bar fill is the
+ * two-tier accent's DEEP leg (`bg-accent-deep`), its track the recessed
+ * WELL (`bg-well`); FAILED counts ride the status TEXT tier
+ * (`text-danger-deep`, TOKENS §11) instead of the flat semantic red.
  */
 export function ToolsLeaderboard({
   tools,
@@ -19,24 +24,15 @@ export function ToolsLeaderboard({
   tools: DetailedUsageToolCall[];
   styles: ThemeStyles;
 }) {
-  const { card, border, text, textSecondary, textTertiary, accent, softShadow } = styles;
+  const { text, textSecondary } = styles;
   const top = tools.slice(0, 8);
   const max = Math.max(1, ...top.map((t) => t.count));
 
   return (
-    <motion.div
-      variants={scaleIn}
-      className="rounded-2xl border-[1.5px] p-4 md:p-5 flex flex-col"
-      style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
-    >
-      <div className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Wrench size={13} style={{ color: accent, opacity: 0.7 }} />
-          <span className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
-            Tool Leaderboard
-          </span>
-        </div>
-        <span className="text-[11px] tabular-nums" style={{ color: textSecondary }}>
+    <div className={cn(CLAY_CARD, "flex flex-col p-4 md:p-5")}>
+      <div className="mb-3 flex shrink-0 items-center justify-between">
+        <Kicker>Tool Leaderboard</Kicker>
+        <span className="text-[11px] font-medium leading-none tabular-nums" style={{ color: textSecondary }}>
           {tools.length} {tools.length === 1 ? "tool" : "tools"}
         </span>
       </div>
@@ -49,9 +45,13 @@ export function ToolsLeaderboard({
           No tool calls yet — they rank here as soon as agents start working.
         </p>
       ) : (
-        <ol className="flex flex-col gap-2.5">
+        <ol className="flex flex-col">
           {top.map((tool, i) => (
-            <li key={tool.tool} className="min-w-0">
+            <li
+              key={tool.tool}
+              className={cn("min-w-0 py-2", i > 0 && "border-t border-clay-rim")}
+              aria-label={`${tool.tool}: ${tool.count} calls${tool.failures > 0 ? `, ${tool.failures} failed` : ""}`}
+            >
               <div className="flex items-baseline justify-between gap-2">
                 <span
                   className="truncate font-mono text-[12px] font-medium"
@@ -64,8 +64,7 @@ export function ToolsLeaderboard({
                   {tool.count.toLocaleString()}
                   {tool.failures > 0 ? (
                     <span
-                      className="ml-1.5 font-semibold tabular-nums"
-                      style={{ color: SEMANTIC_COLORS.danger }}
+                      className="ml-1.5 font-semibold tabular-nums text-danger-deep"
                       title={`${tool.failures} failed ${tool.failures === 1 ? "call" : "calls"}`}
                     >
                       {tool.failures.toLocaleString()} ✕
@@ -74,8 +73,7 @@ export function ToolsLeaderboard({
                 </span>
               </div>
               <div
-                className="mt-1 h-[6px] overflow-hidden rounded-full"
-                style={{ backgroundColor: withAlpha(accent, 0.12) }}
+                className="mt-1 h-[6px] overflow-hidden rounded-full bg-well"
                 role="progressbar"
                 aria-valuenow={tool.count}
                 aria-valuemin={0}
@@ -83,18 +81,14 @@ export function ToolsLeaderboard({
                 aria-label={`${tool.tool} calls relative to the most-used tool`}
               >
                 <div
-                  className="h-full rounded-full"
-                  style={{
-                    width: `${Math.max(4, Math.round((tool.count / max) * 100))}%`,
-                    backgroundColor: accent,
-                    opacity: i === 0 ? 1 : 0.75,
-                  }}
+                  className="h-full rounded-full bg-accent-deep"
+                  style={{ width: `${Math.max(4, Math.round((tool.count / max) * 100))}%` }}
                 />
               </div>
             </li>
           ))}
         </ol>
       )}
-    </motion.div>
+    </div>
   );
 }

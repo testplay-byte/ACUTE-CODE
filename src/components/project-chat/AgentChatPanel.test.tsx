@@ -272,6 +272,19 @@ describe("AgentChatPanel layout contract (Round 43)", () => {
     await waitFor(() => expect(document.querySelector("[data-chat-load-error]")).toBeTruthy());
     expect(document.querySelector("[data-empty-state]")).toBeNull();
     expect(screen.getByRole("alert")).toBeTruthy();
+    // R126-3d-2: the card is the badge-tone danger container (TOKENS §11)
+    // with the outlined-danger Retry species (COMPONENTS §4).
+    const errorCard = document.querySelector("[data-chat-load-error]") as HTMLElement;
+    expect(errorCard.className).toContain("bg-badge-danger");
+    expect(errorCard.className).toContain("text-badge-danger-fg");
+    const retryButton = screen.getByRole("button", { name: "Retry loading the conversation" });
+    expect(retryButton.className).toContain("border-danger-deep");
+    expect(retryButton.className).toContain("text-danger-deep");
+    expect(retryButton.className).toContain("active:scale-[0.98]");
+    // R126-3d-2: the description line INHERITS the badge fg (the deep-on-tint
+    // pair — the inline textSecondary leg died with the status grammar).
+    const description = errorCard.querySelector("p") as HTMLElement;
+    expect(description.getAttribute("style")).toBeNull();
 
     // Retry re-drives the fetch: flip list() back to a resolving backend and
     // click — the greeting then renders (the recovered ready state).
@@ -1147,6 +1160,13 @@ describe("AgentChatPanel response ratings (ROUND-59 R59-D)", () => {
       expect(el.getAttribute("title")).toContain("ignored my file-path constraint");
       return el;
     }, SLOW);
+    // R126-3d-2 re-pin: the chip is the §2 status-chip spelling — the
+    // NEUTRAL badge tone container (bg-badge-neutral +
+    // text-badge-neutral-fg, TOKENS §11's neutral row; the inline tertiary
+    // ink leg died with it).
+    expect(chip.className).toContain("bg-badge-neutral");
+    expect(chip.className).toContain("text-badge-neutral-fg");
+    expect(chip.getAttribute("style")).toBeNull();
 
     // Clicking the chip reopens the editor with the saved note pre-filled.
     fireEvent.click(chip);
@@ -1396,6 +1416,16 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
     // The identity marks are decorative (aria-hidden); the model chip is
     // metadata, not a persona name header (the R37 verdict).
     expect(headers[0].querySelector('[aria-hidden="true"]')).not.toBeNull();
+    // R126-3d-2: the 6px marker dot rides the DEEP accent tier; the model
+    // identity chip is the NEUTRAL badge tone (TOKENS §1d/§11 — the class
+    // legs; no inline style backgrounds).
+    const dot = headers[0].querySelector("span.rounded-full") as HTMLElement;
+    expect(dot.className).toContain("bg-accent-deep");
+    expect(dot.getAttribute("style")).toBeNull();
+    const modelChip = headers[0].querySelector("span.rounded-md") as HTMLElement;
+    expect(modelChip.className).toContain("bg-badge-neutral");
+    expect(modelChip.className).toContain("text-badge-neutral-fg");
+    expect(modelChip.getAttribute("style")).toBeNull();
     // timestampsMode "hidden" (the default) → no timestamp in the header.
     expect(headers[0].querySelector("[data-chat-timestamp]")).toBeNull();
 
@@ -1474,8 +1504,12 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
     // R100-D re-pin (§C4.3 — the input-row idiom): the messenger tail is
     // DELETED (uniform rounded-xl 12px — the lookup below matches the
     // bubble's unique class combo) and the row's cap tightens 75% → 65%.
+    // R126-3d-2 re-pin (COMPONENTS §7's sanctioned shape): the radius is
+    // 16px + the 5px br tail hint (rounded-2xl + rounded-br-[5px] — the
+    // scale utilities, never arbitrary px), so the lookup matches the new
+    // combo. The cap/padding/typography are structure and stay pinned.
     const bubble = Array.from(document.querySelectorAll("div")).find((el) =>
-      el.className.includes("rounded-xl px-3.5 py-2.5 text-[13px]"),
+      el.className.includes("rounded-2xl rounded-br-[5px] px-3.5 py-2.5 text-[13px]"),
     );
     expect(bubble).toBeTruthy();
     const row = bubble!.parentElement;
@@ -1483,9 +1517,14 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
     expect(row!.className).toContain("max-w-[min(65%,640px)]");
     // The squish tier keeps its wider relative room (R89-D2).
     expect(row!.className).toContain("@max-[420px]:max-w-[92%]");
+    // R126-3d-2: the clay mix fill — mix(card, accent, 0.16) on the
+    // color-mix CLASS leg (the shell wave's arbitrary-utility spelling) +
+    // the 0.34 accent edge on the JS withAlpha leg (the mobile recipe).
+    expect(bubble!.className).toContain("bg-[color-mix(in_srgb,var(--ac-card)_84%,var(--ac-accent))]");
+    expect(bubble!.getAttribute("style")).toContain("0.34");
   });
 
-  it("the empty-state suggestions are pill-cards (1.5px border, CSS-var hover leg) that fill the composer on click", async () => {
+  it("the empty-state suggestions are pill-cards (chip grammar, CSS-var hover leg) that fill the composer on click", async () => {
     const projects = await getFixtureProjects().list();
     customBackend.backend = createFixtureSessions([]);
     renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
@@ -1494,13 +1533,16 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
     const cards = screen.getAllByTestId("suggestion-card");
     expect(cards).toHaveLength(4);
     for (const card of cards) {
-      // Real buttons with the pill-card grammar: 1.5px border-line + the
-      // accent hover entirely on the CSS-var leg (no JS hover handlers).
+      // R126-3d-2 re-pin (the brief's material spec — the chip grammar):
+      // resting bg-well + the clay rim hairline + 12px/600 text-secondary;
+      // hover border-accent + bg-accent-tint on the CSS-var legs (no JS
+      // hover handlers); the 1.5px bento border died with TOKENS §5.
       expect(card.tagName).toBe("BUTTON");
-      expect(card.className).toContain("border-[1.5px]");
-      expect(card.className).toContain("border-line");
+      expect(card.className).toContain("border-clay-rim");
+      expect(card.className).toContain("bg-well");
+      expect(card.className).toContain("font-semibold");
       expect(card.className).toContain("hover:border-accent");
-      expect(card.className).toContain("hover:bg-accent-soft");
+      expect(card.className).toContain("hover:bg-accent-tint");
       // The universal press contract.
       expect(card.className).toContain("active:scale-95");
     }
@@ -1510,7 +1552,7 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
     await waitFor(() => expect(composer.value).toContain("Explore this project: list the top-level structure"));
   });
 
-  it("the STREAMING CARET: a thin 2px ac-caret-pulse bar while the answer streams — gone the moment it settles", async () => {
+  it("the STREAMING CARET: the house 8×15 ac-caret-pulse accent bar while the answer streams — gone the moment it settles", async () => {
     const projects = await getFixtureProjects().list();
     customBackend.backend = createFixtureSessions([
       {
@@ -1563,15 +1605,19 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
       },
     });
 
-    // While streaming: the caret rides the answer's end — 2px wide, the
-    // soft pulse keyframe, decorative.
+    // While streaming: the caret rides the answer's end — the R126-3d-2
+    // re-pin (MOTION §4's house live caret): the mobile LiveCaret's 8×15
+    // accent bar, radius 2, on the scale utilities (w-2 + the one 15px
+    // height arbitrary) + the shared pulse keyframe, decorative.
     const caret = await waitFor(() => {
       const el = document.querySelector('[data-testid="streaming-caret"]');
       expect(el).not.toBeNull();
       return el as HTMLElement;
     }, SLOW);
     expect(caret.className).toContain("ac-caret-pulse");
-    expect(caret.className).toContain("w-[2px]");
+    expect(caret.className).toContain("w-2");
+    expect(caret.className).toContain("h-[15px]");
+    expect(caret.className).toContain("bg-accent");
     expect(caret.getAttribute("aria-hidden")).toBe("true");
     // The LIVE turn also carries its header (the effective model chip).
     const header = document.querySelector('[data-testid="turn-header"]');
@@ -2263,12 +2309,13 @@ describe("AgentChatPanel message timeline (ROUND-120 R120-C-PC)", () => {
     expect(bars).toHaveLength(2);
     expect(bars[0].getAttribute("data-current")).toBe("false");
     expect(bars[1].getAttribute("data-current")).toBe("true");
-    // The current bar's visual bar rides the accent fill; the resting one
+    // The current bar's visual bar rides the DEEP accent marker fill (the
+    // R126-3d-2 re-pin — bg-accent-deep, TOKENS §1d); the resting one
     // the quiet muted neutral.
     const restFill = bars[0].querySelector("span") as HTMLElement;
     const currentFill = bars[1].querySelector("span") as HTMLElement;
     expect(restFill.className).toContain("bg-muted");
-    expect(currentFill.className).toContain("bg-accent");
+    expect(currentFill.className).toContain("bg-accent-deep");
     // Every bar is an honest, labeled button (the timeline is perceivable
     // without the visuals).
     for (const bar of bars) {
@@ -2640,6 +2687,19 @@ describe("AgentChatPanel ROUND-75 retry ladder surfaces", () => {
     // A STATUS, not an alert — the turn is alive and handling itself.
     expect(card.getAttribute("role")).toBe("status");
     expect(screen.queryByRole("alert")).toBeNull();
+    // R126-3d-2: the badge-tone warning container (TOKENS §11) — the
+    // withAlpha amber wash + flat-hue text died with the status grammar.
+    expect(card.className).toContain("bg-badge-warning");
+    expect(card.className).toContain("text-badge-warning-fg");
+    // The class chip is the NEUTRAL badge tone (never a chip in a chip).
+    const classChip = card.querySelector("[title^='provider error class']") as HTMLElement;
+    expect(classChip.className).toContain("bg-badge-neutral");
+    // R126-3d-2: the class-message line INHERITS the badge fg (the
+    // deep-on-tint pair — no inline textSecondary on the tinted container).
+    const classMessage = Array.from(card.querySelectorAll("span")).find(
+      (el) => el.textContent === "rate limited — the provider is throttling requests",
+    ) as HTMLElement;
+    expect(classMessage.getAttribute("style")).toBeNull();
     expect(card.textContent).toContain("Retrying — attempt 2 of 6");
     expect(card.textContent).toContain("rate limit");
     expect(card.textContent).toContain("rate limited — the provider is throttling requests");
@@ -2682,10 +2742,35 @@ describe("AgentChatPanel ROUND-75 retry ladder surfaces", () => {
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("Generation failed");
     expect(alert.textContent).toContain("after 6 attempts");
+    // R126-3d-2: the attempts span rides tabular-nums (COMPONENTS §7's
+    // numbers discipline — every count the chat renders holds its digit
+    // widths while values grow).
+    const attemptsSpan = Array.from(alert.querySelectorAll("span")).find((el) =>
+      el.textContent?.startsWith("after "),
+    ) as HTMLElement;
+    expect(attemptsSpan.className).toContain("tabular-nums");
     expect(alert.textContent).toContain("rate limit"); // the class chip (snake_case flattened)
     // The reason line carries the upstream provider error (the card's
     // existing providerError ?? message precedence).
     expect(alert.textContent).toContain("429 Too Many Requests");
+    // R126-3d-2: the card is the badge-tone danger container (TOKENS §11);
+    // the inner class chip is the NEUTRAL badge tone (never a chip inside a
+    // chip); the Retry is the outlined danger species (COMPONENTS §4).
+    expect(alert.className).toContain("bg-badge-danger");
+    expect(alert.className).toContain("text-badge-danger-fg");
+    const classChip = alert.querySelector("[title^='provider error class']") as HTMLElement;
+    expect(classChip.className).toContain("bg-badge-neutral");
+    expect(classChip.className).toContain("text-badge-neutral-fg");
+    const retryButton = alert.querySelector("button[aria-label='Retry the failed message']") as HTMLElement;
+    expect(retryButton.className).toContain("border-danger-deep");
+    expect(retryButton.className).toContain("text-danger-deep");
+    expect(retryButton.className).toContain("active:scale-[0.98]");
+    // R126-3d-2: the reason line INHERITS the badge fg (the deep-on-tint
+    // pair — the inline textSecondary leg died with the status grammar).
+    const reasonLine = Array.from(alert.querySelectorAll("span")).find(
+      (el) => el.textContent === "429 Too Many Requests",
+    ) as HTMLElement;
+    expect(reasonLine.getAttribute("style")).toBeNull();
   });
 });
 
@@ -3331,14 +3416,18 @@ describe("AgentChatPanel queued-message honesty (ROUND-119 R119-C)", () => {
 
     // The BUBBLE idiom: the chip's first child is the reduced-opacity
     // wrapper around the plain UserMessage — a right-aligned row capped at
-    // min(65%, 640px) with the accent-soft rounded-xl bubble inside, exactly
-    // like every sent message (NOT a bordered banner card).
+    // min(65%, 640px) with the accent-clay rounded-2xl bubble inside (the
+    // R126-3d-2 sanctioned shape — 16px + the br-5 tail), exactly like
+    // every sent message (NOT a bordered banner card).
     const wrapper = chip.firstElementChild as HTMLElement;
     expect(wrapper.style.opacity).toBe("0.75");
     const row = wrapper.querySelector("div.flex.justify-end") as HTMLElement | null;
     expect(row).not.toBeNull();
-    const bubble = row?.querySelector("div.rounded-xl") as HTMLElement | null;
+    // R126-3d-2 re-pin: rounded-xl → rounded-2xl (COMPONENTS §7's 16px
+    // sanctioned bubble radius).
+    const bubble = row?.querySelector("div.rounded-2xl") as HTMLElement | null;
     expect(bubble).not.toBeNull();
+    expect(bubble?.className).toContain("rounded-br-[5px]");
     expect(bubble?.className).toContain("text-[13px]");
     // The FULL message rides the bubble — the old banner's line-clamp-2 is
     // gone (the bubble's own clamp owns long text now).

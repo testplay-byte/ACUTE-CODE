@@ -1,17 +1,12 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Activity, MessageSquare, Wrench, Zap } from "lucide-react";
+import { MessageSquare } from "lucide-react";
 import { useNavigate } from "react-router";
 import { useDetailedUsage, useUsageKeyPools } from "../../hooks/use-usage";
 import { formatTokenCount } from "../../lib/format";
-import { fadeInUp, staggerContainer } from "../../lib/motion";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
+import { fadeInUp } from "../../lib/motion";
 import { useThemeStyles } from "../../lib/use-theme-styles";
-// R100-G (research §C2 P3 + §C3): the empty state's framing card rides
-// SectionCard.
-import { SectionCard } from "../ui/SectionCard";
-import { StatCard } from "../dashboard/StatCard";
-import { withAlpha } from "../dashboard/helpers";
+import { cn } from "../../lib/utils";
 import { KeyCards } from "./KeyCards";
 import { ModelCards } from "./ModelCards";
 import { ProjectsDrilldown } from "./ProjectsDrilldown";
@@ -20,62 +15,32 @@ import { UsageActivityChart } from "./UsageActivityChart";
 // R98-I2: the Data & Statistics panel joins the overview — the same shared
 // panel the settings ?tab=data surface hosts.
 import { DataStatsPanel } from "./DataStatsPanel";
+// R126-3b: the segmented-control day-range picker + the ONE-card stat row.
+import { RangeSelector } from "./RangeSelector";
+import { UsageStatRow, type StatCell } from "./UsageStatRow";
+import { CLAY_CARD, formatCompactTokens } from "./usage-helpers";
 
 /**
  * ROUND-52 (R52-b): the in-app Usage screen (/usage) — the owner-approved
  * DASHBOARD usage page layout rebuilt in the app's working-UI design
- * language (DashboardScreen's container ladder, StatCard/TokenBarChart
- * patterns, useThemeStyles colors, framer-motion entrance). Sections: the
- * range toolbar, overview stat cards, activity chart + tool leaderboard,
- * model cards, and the projects → sessions drill-down with nested
- * sub-agent runs. Overview/drill-down rollups are whole-history; `days`
- * scopes the chart.
+ * language. Sections: the range toolbar, overview stat row, activity chart +
+ * tool leaderboard, model cards, API-key cards, and the projects → sessions
+ * drill-down with nested sub-agent runs. Overview/drill-down rollups are
+ * whole-history; `days` scopes the chart.
  *
  * R113-d (owner: the page headers are "unnecessary, unneeded, and not
  * required"): the Kicker + 24px "Usage" title + description hero is DELETED
  * — the chart's day-range selector survives as the ONE functional toolbar
- * row at the top (decoration dies, controls stay). Top padding snaps to the
- * app's panel tier (py-4/py-6, the DashboardScreen rhythm).
+ * row at the top (decoration dies, controls stay).
+ *
+ * ROUND-126 (R126-3b, the Clay Companion redesign): the screen rides the
+ * Instrument archetype's clay materials (SCREENS §3) — the segmented-control
+ * range grammar, the ONE-clay-card stat row (no icon chips), clay chart
+ * cards + tooltips, `bg-well` skeletons, and the mobile minimal-center empty
+ * state (one icon tile + one line + one action, PC-densified).
  */
 
 const RANGE_OPTIONS = [7, 14, 30, 90] as const;
-
-function RangeSelector({
-  days,
-  onChange,
-  styles,
-}: {
-  days: number;
-  onChange: (days: number) => void;
-  styles: ReturnType<typeof useThemeStyles>;
-}) {
-  const { card, border, accent, accentText, textSecondary, softShadow } = styles;
-  return (
-    <div
-      role="group"
-      aria-label="Activity chart day range"
-      className="flex shrink-0 items-center gap-1 rounded-xl border-[1.5px] p-1"
-      style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
-    >
-      {RANGE_OPTIONS.map((option) => {
-        const active = option === days;
-        return (
-          <button
-            key={option}
-            type="button"
-            onClick={() => onChange(option)}
-            aria-pressed={active}
-            aria-label={`Last ${option} days`}
-            className="cursor-pointer rounded-lg px-2.5 py-1.5 text-[12px] font-semibold tabular-nums transition-colors duration-200"
-            style={{ backgroundColor: active ? accent : "transparent", color: active ? accentText : textSecondary }}
-          >
-            {option}d
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 export function UsageScreen() {
   const navigate = useNavigate();
@@ -118,49 +83,61 @@ export function UsageScreen() {
       <div className="mx-auto w-full max-w-[1280px] xl:max-w-[1480px] 2xl:max-w-[1640px] px-5 md:px-8 2xl:px-14 py-4 md:py-6 pb-16">
         {/* R113-d: the hero is GONE (owner directive — see the file header);
             the day-range picker stays as the one functional toolbar row at
-            the top of the page, right-aligned where it always lived. */}
+            the top of the page, right-aligned where it always lived.
+            R126-3b: the picker is the SEGMENTED-CONTROL grammar (bg-well
+            track + the gliding bg-accent-deep knob on TAB_SPRING). */}
         <div className="mb-4 md:mb-6 flex justify-end">
-          <RangeSelector days={days} onChange={setDays} styles={styles} />
+          <RangeSelector
+            options={RANGE_OPTIONS}
+            selected={days}
+            onChange={setDays}
+            groupLabel="Activity chart day range"
+            optionAriaLabel={(option) => `Last ${option} days`}
+            testId="usage-range-selector"
+          />
         </div>
 
         {loading ? (
-          /* Loading skeletons — the dashboard's pulse-card recipe */
+          /* Loading skeletons — R126-3b (TOKENS §10 law 4): skeleton blocks
+             ride the WELL (bg-well + the rim hairline), never bg-subtle; the
+             stat skeleton mirrors the ONE-card 4-cell ready geometry. */
           <>
-            <div aria-label="Loading usage overview" className="mb-4 md:mb-6 grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+            <div
+              aria-label="Loading usage overview"
+              className={cn(CLAY_CARD, "mb-4 md:mb-6 grid grid-cols-2 md:grid-cols-4")}
+            >
               {[0, 1, 2, 3].map((i) => (
                 <div
                   key={i}
-                  className="h-[92px] w-full animate-pulse rounded-2xl border-[1.5px]"
-                  style={{ backgroundColor: styles.subtle, borderColor: styles.borderSubtle }}
+                  className={cn(
+                    "h-[92px] animate-pulse border-clay-rim bg-well",
+                    i === 1 || i === 3 ? "border-l" : "",
+                    i >= 2 ? "border-t md:border-t-0" : "",
+                  )}
                 />
               ))}
             </div>
             <div
               aria-label="Loading usage activity"
-              className="mb-4 md:mb-6 h-[248px] w-full animate-pulse rounded-2xl border-[1.5px]"
-              style={{ backgroundColor: styles.subtle, borderColor: styles.borderSubtle }}
+              className={cn(CLAY_CARD, "mb-4 md:mb-6 h-[248px] w-full animate-pulse bg-well")}
             />
             <div className="flex flex-col gap-3">
               {[0, 1, 2].map((i) => (
-                <div
-                  key={i}
-                  className="h-[64px] w-full animate-pulse rounded-2xl border-[1.5px]"
-                  style={{ backgroundColor: styles.subtle, borderColor: styles.borderSubtle }}
-                />
+                <div key={i} className={cn(CLAY_CARD, "h-[64px] w-full animate-pulse bg-well")} />
               ))}
             </div>
           </>
         ) : usage.isError ? (
+          /* R126 (TOKENS §11): the retryable error banner is the danger
+             BADGE-TONE container — tinted container + deep-on-tint ink,
+             never a flat-hue danger text on an alpha wash (the pre-R126
+             withAlpha grammar died with §11); the Retry button is the
+             outlined danger species (COMPONENTS §4). */
           <div
             role="alert"
-            className="mb-4 md:mb-6 rounded-2xl border-[1.5px] px-4 py-3 text-[12px] font-medium flex flex-wrap items-center gap-x-3 gap-y-1"
-            style={{
-              borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.3),
-              background: withAlpha(SEMANTIC_COLORS.danger, 0.08),
-              color: SEMANTIC_COLORS.danger,
-            }}
+            className="mb-4 md:mb-6 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-badge-danger px-4 py-3 text-[12px] font-medium text-badge-danger-fg"
           >
-            <span>
+            <span className="min-w-0">
               Could not load usage analytics — check that the sidecar is running,
               then reload.
             </span>
@@ -171,67 +148,83 @@ export function UsageScreen() {
               type="button"
               onClick={() => void usage.refetch()}
               aria-label="Retry loading usage analytics"
-              className="shrink-0 h-7 px-3 rounded-lg text-[12px] font-semibold border transition-opacity hover:opacity-85"
-              style={{ borderColor: withAlpha(SEMANTIC_COLORS.danger, 0.45), color: SEMANTIC_COLORS.danger }}
+              className="h-7 shrink-0 cursor-pointer rounded-lg border border-danger-deep px-3 text-[12px] font-semibold text-danger-deep transition-opacity duration-100 hover:opacity-85 active:scale-[0.98]"
             >
               Retry
             </button>
           </div>
         ) : !hasData ? (
           <>
-            {/* Empty state — the whole ledger is blank (R100-G: SectionCard
-                framing + the ladder's section tier for the title). */}
-            <SectionCard ariaLabel="Usage empty state" size="lg" className="py-10 text-center">
+            {/* Empty state — R126-3b: the mobile minimal-center shape
+                PC-densified (one icon tile + one line + one action) on the
+                clay card. */}
+            <div className={cn(CLAY_CARD, "mb-4 md:mb-6 flex flex-col items-center gap-3 px-6 py-10 text-center")}>
+              <span
+                aria-hidden
+                className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-tint text-accent-deep"
+              >
+                <MessageSquare size={18} strokeWidth={2} />
+              </span>
               <p className="text-[13px] font-semibold" style={{ color: styles.text }}>
                 No usage yet — start a conversation
               </p>
-              <p className="mt-1.5 text-[12px]" style={{ color: styles.textSecondary }}>
-                Tokens, tool calls and sub-agent runs land here the moment your
-                first session makes a model call.
-              </p>
-            </SectionCard>
+              {/* R126-3b: the ONE action is the quiet-solid clay primary
+                  (COMPONENTS §4 — h-9, rounded-lg, 13px/600, the accentText
+                  pair via the JS leg, press = 0.98). */}
+              <button
+                type="button"
+                onClick={() => void navigate("/")}
+                className="h-9 cursor-pointer rounded-lg bg-accent-deep px-4 text-[13px] font-semibold transition-transform active:scale-[0.98]"
+                style={{ color: styles.accentText }}
+              >
+                Open a chat
+              </button>
+            </div>
             {/* ROUND-64 (R64-e): configured keys still show with "not used yet". */}
             {keyCardsSection}
           </>
         ) : (
           <>
-            {/* Overview stat cards — wizard recipe (StatCard, dashboard's row) */}
-            <motion.div
-              variants={staggerContainer}
-              initial="initial"
-              animate="animate"
-              className="mb-4 md:mb-6 grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4"
-            >
-              <StatCard
-                value={formatTokenCount(totalTokens)}
-                label="Tokens"
-                icon={Zap}
-                title={`All-time input + output tokens — ${(totals?.tokens.input ?? 0).toLocaleString()} in / ${(totals?.tokens.output ?? 0).toLocaleString()} out${(totals?.tokens.cached ?? 0) > 0 ? ` · ${(totals?.tokens.cached ?? 0).toLocaleString()} cached` : ""}`}
-                styles={styles}
-                highlight
+            {/* Overview stat row — R126-3b (SCREENS §3): ONE clay card, four
+                cells with 1px inset border-strong dividers, kicker labels,
+                22px/600 tabular values, one supporting line, NO icon chips. */}
+            <div className="mb-4 md:mb-6">
+              <UsageStatRow
+                testId="usage-stat-row"
+                ariaLabel="Usage overview"
+                cells={
+                  [
+                    {
+                      value: formatTokenCount(totalTokens),
+                      label: "Tokens",
+                      sub: `${formatCompactTokens(totals?.tokens.input ?? 0)} in · ${formatCompactTokens(totals?.tokens.output ?? 0)} out`,
+                      title: `All-time input + output tokens — ${(totals?.tokens.input ?? 0).toLocaleString()} in / ${(totals?.tokens.output ?? 0).toLocaleString()} out${(totals?.tokens.cached ?? 0) > 0 ? ` · ${(totals?.tokens.cached ?? 0).toLocaleString()} cached` : ""}`,
+                    },
+                    {
+                      value: (totals?.requests ?? 0).toLocaleString(),
+                      label: "Turns",
+                      sub:
+                        totals?.providerCalls !== undefined
+                          ? `${totals.providerCalls.toLocaleString()} provider calls`
+                          : "one row per turn",
+                      title: `All-time turns in the usage ledger${totals?.providerCalls !== undefined ? ` · ${(totals.providerCalls).toLocaleString()} provider calls (ROUND-83: the real SDK-call count — a multi-iteration turn is 1 turn · N calls)` : " (one row per turn since R24)"}`,
+                    },
+                    {
+                      value: String((totals?.sessions ?? 0) + (totals?.subagentSessions ?? 0)),
+                      label: "Sessions",
+                      sub: `${totals?.sessions ?? 0} main + ${totals?.subagentSessions ?? 0} sub-agents`,
+                      title: `${totals?.sessions ?? 0} main sessions + ${totals?.subagentSessions ?? 0} sub-agent runs (delegated via delegate_task)`,
+                    },
+                    {
+                      value: (totals?.toolCalls ?? 0).toLocaleString(),
+                      label: "Tool calls",
+                      sub: `across ${usage.data?.tools.length ?? 0} tools`,
+                      title: `All-time tool invocations across ${usage.data?.tools.length ?? 0} distinct tools`,
+                    },
+                  ] satisfies StatCell[]
+                }
               />
-              <StatCard
-                value={(totals?.requests ?? 0).toLocaleString()}
-                label="Turns"
-                icon={Activity}
-                title={`All-time turns in the usage ledger${totals?.providerCalls !== undefined ? ` · ${(totals.providerCalls).toLocaleString()} provider calls (ROUND-83: the real SDK-call count — a multi-iteration turn is 1 turn · N calls)` : " (one row per turn since R24)"}`}
-                styles={styles}
-              />
-              <StatCard
-                value={String((totals?.sessions ?? 0) + (totals?.subagentSessions ?? 0))}
-                label="Sessions"
-                icon={MessageSquare}
-                title={`${totals?.sessions ?? 0} main sessions + ${totals?.subagentSessions ?? 0} sub-agent runs (delegated via delegate_task)`}
-                styles={styles}
-              />
-              <StatCard
-                value={(totals?.toolCalls ?? 0).toLocaleString()}
-                label="Tool calls"
-                icon={Wrench}
-                title={`All-time tool invocations across ${usage.data?.tools.length ?? 0} distinct tools`}
-                styles={styles}
-              />
-            </motion.div>
+            </div>
 
             {/* Activity chart + tool leaderboard */}
             <div className="mb-4 md:mb-6 grid grid-cols-1 lg:grid-cols-3 gap-3 md:gap-4">

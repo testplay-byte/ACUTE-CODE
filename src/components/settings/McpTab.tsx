@@ -4,13 +4,10 @@ import { ListTree, PlugZap, Plus, Trash2, Zap } from "lucide-react";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { isTauri } from "../../lib/sidecar";
-import { withAlpha } from "../dashboard/helpers";
 import { ClampedText } from "../shared/ClampedText";
-// R100-E2: the round-100 primitives + the semantic status home (USAGE.md §3,
-// TOKENS.md §7 — the inline status hexes retired).
+// R100-E2: the round-100 primitives (USAGE.md §3).
 import { Kicker } from "../ui/Kicker";
 import { SectionCard } from "../ui/SectionCard";
-import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { ToggleSwitch } from "../ui/toggle-switch"; // R93-A4: the shared contrast-aware switch
 import {
   createMcpServer,
@@ -105,8 +102,8 @@ function McpServerRow({
   return (
     <div
       data-mcp-server={server.id}
-      className="border-b last:border-b-0"
-      style={{ borderColor: styles.borderSubtle }}
+      /* R126-3f-3: the row hairline on the class leg. */
+      className="border-b border-line last:border-b-0"
     >
       <div className="flex items-center gap-2 px-3 py-2 flex-wrap">
         <span
@@ -117,8 +114,7 @@ function McpServerRow({
           {server.name}
         </span>
         <span
-          className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0"
-          style={{ background: styles.subtle, color: styles.textTertiary }}
+          className="text-[10px] font-medium uppercase tracking-wider rounded-full px-1.5 py-0.5 shrink-0 bg-badge-neutral text-badge-neutral-fg"
           title={
             envCount > 0
               ? `${server.args.length} args · ${envCount} env vars (sanitized before launch)`
@@ -133,8 +129,8 @@ function McpServerRow({
           disabled={probe.isPending}
           aria-label={`Probe server ${server.name}`}
           title="Probe: spawn the server and list its tools"
-          className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 flex items-center gap-1 disabled:opacity-50"
-          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          /* R126-3f-3: the accent-tint action spelling. */
+          className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 flex items-center gap-1 bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-50"
         >
           <Zap size={11} strokeWidth={2.5} /> {probe.isPending ? "Probing…" : "Probe"}
         </button>
@@ -143,11 +139,9 @@ function McpServerRow({
           aria-label={`Show tools for server ${server.name}`}
           aria-expanded={toolsOpen}
           title={toolsOpen ? "Hide the tool listing" : "List this server's tools"}
-          className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 flex items-center gap-1"
-          style={{
-            background: toolsOpen ? withAlpha(styles.accent, 0.12) : styles.subtle,
-            color: toolsOpen ? styles.accent : styles.textSecondary,
-          }}
+          className={`h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 flex items-center gap-1 transition-colors duration-100 ${
+            toolsOpen ? "bg-accent-tint text-accent-deep" : "border border-clay-rim bg-well text-muted"
+          } hover:bg-hover`}
         >
           <ListTree size={11} /> Tools
         </button>
@@ -156,9 +150,10 @@ function McpServerRow({
           aria-label={`Delete server ${server.name}`}
           title="Stop and remove this server"
           /* R100-E2: the JS hover-red pair retired — the standard
-             hover:bg-hover wash (TOKENS.md §6). */
+             hover:bg-hover wash (TOKENS.md §6). R126-3f-3: the armed state
+             rides the §11 danger-deep ink. */
           className="w-6 h-6 grid place-items-center rounded-lg shrink-0 transition-colors hover:bg-hover cursor-pointer"
-          style={{ color: confirmDelete ? SEMANTIC_COLORS.danger : styles.textTertiary }}
+          style={{ color: confirmDelete ? styles.dangerDeep : styles.textTertiary }}
         >
           <Trash2 size={11} />
         </button>
@@ -181,15 +176,13 @@ function McpServerRow({
         <div className="px-3 pb-2" data-testid={`probe-result-${server.id}`}>
           {probeResult.ok ? (
             <span
-              className="text-[11px] font-medium rounded-full px-2 py-0.5"
-              style={{ background: withAlpha(SEMANTIC_COLORS.success, 0.12), color: SEMANTIC_COLORS.success }}
+              className="text-[11px] font-medium rounded-full px-2 py-0.5 bg-badge-success text-badge-success-fg tabular-nums"
             >
               reachable · {probeResult.toolCount ?? "?"} tools · {probeResult.ms ?? "?"}ms
             </span>
           ) : (
             <span
-              className="text-[11px] font-medium"
-              style={{ color: SEMANTIC_COLORS.danger }}
+              className="text-[11px] font-medium text-danger-deep"
               role="alert"
             >
               {probeResult.error ?? "probe failed"}
@@ -199,8 +192,7 @@ function McpServerRow({
       )}
       {toolsOpen && (
         <div
-          className="px-3 pb-3 border-t"
-          style={{ borderColor: styles.borderSubtle }}
+          className="px-3 pb-3 border-t border-line"
           data-testid={`tools-panel-${server.id}`}
         >
           <div className="text-[11px] font-medium uppercase tracking-wider mt-2 mb-1" style={{ color: styles.textTertiary }}>
@@ -211,13 +203,13 @@ function McpServerRow({
               listing tools…
             </span>
           ) : toolsQuery.isError ? (
-            <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+            <p className="text-[11px] text-danger-deep" role="alert">
               {toolsQuery.error instanceof Error
                 ? toolsQuery.error.message
                 : String(toolsQuery.error)}
             </p>
           ) : toolsQuery.data?.error ? (
-            <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+            <p className="text-[11px] text-danger-deep" role="alert">
               {toolsQuery.data.error}
             </p>
           ) : (toolsQuery.data?.tools ?? []).length === 0 ? (
@@ -225,12 +217,14 @@ function McpServerRow({
               No tools listed (the server may be disabled or not started yet).
             </span>
           ) : (
-            <div className="rounded-lg border-[1.5px] overflow-hidden max-h-56 overflow-y-auto" style={{ borderColor: styles.border }}>
+            <div
+              /* R126-3f-3: the rim hairline container (TOKENS §5). */
+              className="rounded-lg border border-clay-rim overflow-hidden max-h-56 overflow-y-auto"
+            >
               {toolsQuery.data?.tools.map((t) => (
                 <div
                   key={t.name}
-                  className="px-2.5 py-1.5 border-b last:border-b-0"
-                  style={{ borderColor: styles.borderSubtle }}
+                  className="px-2.5 py-1.5 border-b border-line last:border-b-0"
                 >
                   <div className="font-mono text-[11px] font-medium truncate" style={{ color: styles.text }}>
                     {t.name}
@@ -251,23 +245,22 @@ function McpServerRow({
           className="flex items-center gap-2 px-3 pb-2 flex-wrap"
           data-testid={`confirm-delete-${server.id}`}
         >
-          <span className="text-[11px] font-medium" style={{ color: SEMANTIC_COLORS.danger }}>
+          <span className="text-[11px] font-medium text-danger-deep">
             Stop and remove this MCP server? The child process is killed.
           </span>
           <button
             onClick={() => remove.mutate()}
             disabled={remove.isPending}
             aria-label={`Confirm delete server ${server.name}`}
-            className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 disabled:opacity-50"
-            style={{ background: withAlpha(SEMANTIC_COLORS.danger, 0.12), color: SEMANTIC_COLORS.danger }}
+            /* R126-3f-3: the outlined danger action. */
+            className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 border border-danger-deep text-danger-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-50"
           >
             {remove.isPending ? "Removing…" : "Remove"}
           </button>
           <button
             onClick={() => setConfirmDelete(false)}
             aria-label={`Cancel delete server ${server.name}`}
-            className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0"
-            style={{ background: styles.subtle, color: styles.textSecondary }}
+            className="h-7 px-2.5 rounded-lg text-[11px] font-semibold shrink-0 border border-clay-rim bg-well text-muted transition-colors duration-100 hover:bg-hover"
           >
             Cancel
           </button>
@@ -275,8 +268,7 @@ function McpServerRow({
       )}
       {rowError && (
         <p
-          className="px-3 pb-2 text-[11px] font-medium"
-          style={{ color: SEMANTIC_COLORS.danger }}
+          className="px-3 pb-2 text-[11px] font-medium text-danger-deep"
           role="alert"
           data-testid={`row-error-${server.id}`}
         >
@@ -314,16 +306,10 @@ function AddServerForm({ onDone }: { onDone: () => void }) {
     onError: (err: Error) => setError(err.message),
   });
 
-  const inputStyle = {
-    background: styles.bg,
-    borderColor: styles.border,
-    color: styles.text,
-  };
-
   return (
     <div
-      className="flex flex-col gap-2.5 px-3 py-3 border-t"
-      style={{ borderColor: styles.borderSubtle, background: withAlpha(styles.accent, 0.03) }}
+      /* R126-3f-3: the add-form region = the well recess (TOKENS §10). */
+      className="flex flex-col gap-2.5 px-3 py-3 border-t border-line bg-well"
       data-testid="add-server-form"
     >
       <div>
@@ -340,8 +326,8 @@ function AddServerForm({ onDone }: { onDone: () => void }) {
           onChange={(e) => setName(e.target.value)}
           placeholder="e.g. filesystem"
           aria-label="New server name"
-          className="h-8 w-full rounded-lg border-[1.5px] px-2.5 font-mono text-[12px] outline-none"
-          style={inputStyle}
+          /* R126-3f-3: THE WELL + rim (TOKENS §10) — the form inputs. */
+          className="h-8 w-full rounded-lg border border-clay-rim bg-card px-2.5 font-mono text-[12px] text-ink outline-none"
         />
       </div>
       <div>
@@ -358,8 +344,7 @@ function AddServerForm({ onDone }: { onDone: () => void }) {
           onChange={(e) => setCommand(e.target.value)}
           placeholder="e.g. npx"
           aria-label="New server command"
-          className="h-8 w-full rounded-lg border-[1.5px] px-2.5 font-mono text-[12px] outline-none"
-          style={inputStyle}
+          className="h-8 w-full rounded-lg border border-clay-rim bg-card px-2.5 font-mono text-[12px] text-ink outline-none"
         />
       </div>
       <div>
@@ -376,8 +361,7 @@ function AddServerForm({ onDone }: { onDone: () => void }) {
           onChange={(e) => setArgs(e.target.value)}
           placeholder="e.g. -y @modelcontextprotocol/server-filesystem /tmp"
           aria-label="New server args"
-          className="h-8 w-full rounded-lg border-[1.5px] px-2.5 font-mono text-[12px] outline-none"
-          style={inputStyle}
+          className="h-8 w-full rounded-lg border border-clay-rim bg-card px-2.5 font-mono text-[12px] text-ink outline-none"
         />
       </div>
       <div>
@@ -395,14 +379,12 @@ function AddServerForm({ onDone }: { onDone: () => void }) {
           placeholder={"API_TOKEN=abc123\nOTHER_FLAG=1"}
           aria-label="New server env"
           rows={3}
-          className="w-full rounded-lg border-[1.5px] px-2.5 py-2 font-mono text-[11px] leading-relaxed outline-none resize-y"
-          style={inputStyle}
+          className="w-full rounded-lg border border-clay-rim bg-card px-2.5 py-2 font-mono text-[11px] leading-relaxed text-ink outline-none resize-y"
         />
       </div>
       {error && (
         <p
-          className="text-[11px] font-medium"
-          style={{ color: SEMANTIC_COLORS.danger }}
+          className="text-[11px] font-medium text-danger-deep"
           role="alert"
           data-testid="add-server-error"
         >
@@ -414,16 +396,15 @@ function AddServerForm({ onDone }: { onDone: () => void }) {
           onClick={() => create.mutate()}
           disabled={!name.trim() || !command.trim() || create.isPending}
           aria-label="Create server"
-          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 disabled:opacity-50"
-          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          /* R126-3f-3: the accent-tint action spelling. */
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98] disabled:opacity-50"
         >
           {create.isPending ? "Adding…" : "Add server"}
         </button>
         <button
           onClick={onDone}
           aria-label="Cancel add server"
-          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0"
-          style={{ background: styles.subtle, color: styles.textSecondary }}
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 border border-clay-rim bg-card text-muted transition-colors duration-100 hover:bg-hover"
         >
           Cancel
         </button>
@@ -468,15 +449,16 @@ function McpCard() {
     /* R100-E2: the SectionCard primitive (aria-label passthrough). */
     <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="MCP servers">
       <div className="flex items-center gap-2 flex-wrap">
-        <PlugZap size={13} style={{ color: styles.accent, opacity: 0.8 }} />
+        <PlugZap size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
           MCP servers
         </span>
         <span className="flex-1" />
         {msg && (
           <span
-            className="text-[11px] font-medium"
-            style={{ color: msgIsError ? SEMANTIC_COLORS.danger : SEMANTIC_COLORS.success }}
+            className={`text-[11px] font-medium ${
+              msgIsError ? "text-danger-deep" : "text-success-deep"
+            }`}
           >
             {msg}
           </span>
@@ -485,8 +467,8 @@ function McpCard() {
           onClick={() => setShowAdd((v) => !v)}
           aria-label="Add server"
           title="Add an MCP server"
-          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 flex items-center gap-1"
-          style={{ background: withAlpha(styles.accent, 0.12), color: styles.accent }}
+          /* R126-3f-3: the accent-tint action spelling. */
+          className="h-8 px-3 rounded-lg text-[11px] font-semibold shrink-0 flex items-center gap-1 bg-accent-tint text-accent-deep transition-colors duration-100 hover:bg-hover active:scale-[0.98]"
         >
           <Plus size={11} strokeWidth={2.5} /> Add server
         </button>
@@ -500,7 +482,7 @@ function McpCard() {
       </p>
 
       {serversQuery.isError ? (
-        <p className="text-[11px]" style={{ color: SEMANTIC_COLORS.danger }} role="alert">
+        <p className="text-[11px] text-danger-deep" role="alert">
           {coreUnreachableHint} to manage MCP servers.
         </p>
       ) : serversQuery.isLoading || serversQuery.data === undefined ? (
@@ -510,8 +492,8 @@ function McpCard() {
       ) : (
         <>
           <div
-            className="rounded-lg border-[1.5px] overflow-hidden"
-            style={{ borderColor: styles.border }}
+            /* R126-3f-3: the rim hairline container (TOKENS §5). */
+            className="rounded-lg border border-clay-rim overflow-hidden"
           >
             {serversQuery.data.length === 0 && (
               <div className="px-3 py-2.5 text-[11px]" style={{ color: styles.textTertiary }}>

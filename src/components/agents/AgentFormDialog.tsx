@@ -391,7 +391,9 @@ export function AgentFormDialog({
                 app's input chrome; it is the main thing an agent IS. */}
             <Field label="System prompt" className="col-span-2">
               <textarea
-                className={`${inputClass} min-h-[160px] resize-y rounded-[14px] font-mono text-xs leading-relaxed`}
+                // R126-3h: the off-ladder rounded-[14px] override dies —
+                // inputClass's rounded-lg (the input step) owns the radius.
+                className={`${inputClass} min-h-[160px] resize-y font-mono text-xs leading-relaxed`}
                 value={form.systemPrompt}
                 onChange={(e) => set("systemPrompt", e.target.value)}
                 placeholder="You write precise, minimal diffs…"
@@ -415,12 +417,19 @@ export function AgentFormDialog({
             </Field>
 
             <SectionLabel>Capabilities</SectionLabel>
-            <Field label="Allowed tools" hint="Empty = all tools (ADR-0019)" className="col-span-2">
+            <Field
+              label="Allowed tools"
+              hint="Empty = all tools (ADR-0019)"
+              className="col-span-2"
+            >
               <div className="grid grid-cols-3 gap-1.5">
                 {TOOL_CATALOG.map((tool) => (
                   <label
                     key={tool}
-                    className="flex cursor-pointer items-center gap-2 rounded-lg border-[1.5px] border-line bg-input px-2.5 py-1.5 text-[11px] font-medium"
+                    // R126-3h: the tool toggle rides the chip grammar (the
+                    // well + clay rim — TOKENS §10; the 1.5px border-line +
+                    // bg-input bento spelling dies) with the CSS hover pair.
+                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-clay-rim bg-well px-2.5 py-1.5 text-[11px] font-medium transition-colors duration-100 hover:border-accent hover:bg-accent-tint"
                   >
                     <input
                       type="checkbox"
@@ -435,7 +444,7 @@ export function AgentFormDialog({
             </Field>
 
             <Field label="Skills" className="col-span-2">
-              <div className="flex flex-wrap items-center gap-1.5 rounded-lg border-[1.5px] border-line bg-input px-2 py-1.5">
+              <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-clay-rim bg-well px-2 py-1.5">
                 {form.skills.map((skill) => (
                   <Badge key={skill} tone="accent">
                     {skill}
@@ -485,12 +494,17 @@ export function AgentFormDialog({
           </div>
 
           {error ? (
-            <p role="alert" className="mx-5 mb-2 rounded-lg bg-red-500/10 px-3 py-2 text-[11px] text-red-500">
+            <p
+              role="alert"
+              // R126-3h: the §11 danger badge tone (TOKENS §11 — the tinted
+              // container + the deep-tier ink; the red-500/10 wash dies).
+              className="mx-5 mb-2 rounded-lg px-3 py-2 text-[11px] font-medium bg-badge-danger text-danger-deep"
+            >
               {error}
             </p>
           ) : null}
 
-          <div className="flex justify-end gap-2 border-t-[1.5px] border-line px-5 py-3.5">
+          <div className="flex justify-end gap-2 border-t border-line px-5 py-3.5">
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>

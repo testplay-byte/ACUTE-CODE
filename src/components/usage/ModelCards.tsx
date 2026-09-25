@@ -3,24 +3,33 @@ import { Cpu } from "lucide-react";
 import type { DetailedUsageModel } from "../../lib/api";
 import type { ThemeStyles } from "../../lib/themes";
 import { staggerContainer, staggerItem } from "../../lib/motion";
-import { withAlpha } from "../dashboard/helpers";
-import { formatCompactTokens, formatCost } from "./usage-helpers";
+import { Kicker } from "../ui/Kicker";
+import { UsageMiniStat } from "./UsageStatRow";
+import { CLAY_CARD_SM, formatCompactTokens, formatCost } from "./usage-helpers";
+import { cn } from "../../lib/utils";
 
 /**
  * ROUND-52 (R52-b): model mix cards — the /usage screen's "Models" section
  * (the DASHBOARD usage page's model cards): model id in mono, calls, token
  * mix (in/out/cached) and cost, sorted by total tokens. A calls bar relative
  * to the busiest model keeps the visual ranking glanceable.
+ *
+ * ROUND-126 (R126-3b, the Clay Companion redesign): each card is the compact
+ * clay tile (rim + `.ac-clay-sm`); the four stats render as ONE mini stat row
+ * separated by 1px hairline dividers (the stat-row grammar at table density —
+ * 10px labels, 12px/600 tabular values); the calls bar fills the DEEP accent
+ * leg (`bg-accent-deep`) over the recessed well track.
  */
+
+
 function ModelCard({ model, maxCalls, styles }: { model: DetailedUsageModel; maxCalls: number; styles: ThemeStyles }) {
-  const { card, border, text, textSecondary, textTertiary, accent, softShadow } = styles;
+  const { text, textSecondary } = styles;
   const share = maxCalls > 0 ? Math.max(4, Math.round((model.calls / maxCalls) * 100)) : 4;
 
   return (
     <motion.article
       variants={staggerItem}
-      className="rounded-2xl border-[1.5px] p-4"
-      style={{ backgroundColor: card, borderColor: border, boxShadow: softShadow }}
+      className={cn(CLAY_CARD_SM, "p-4")}
       aria-label={`Model ${model.model}`}
     >
       <div className="flex items-baseline justify-between gap-2">
@@ -31,82 +40,58 @@ function ModelCard({ model, maxCalls, styles }: { model: DetailedUsageModel; max
         >
           {model.model}
         </span>
-        <span className="shrink-0 text-[11px] font-semibold" style={{ color: textSecondary }}>
+        <span className="shrink-0 text-[11px] font-semibold tabular-nums" style={{ color: textSecondary }}>
           {model.calls.toLocaleString()} {model.calls === 1 ? "call" : "calls"}
         </span>
       </div>
       <div
-        className="mt-2 h-[5px] overflow-hidden rounded-full"
-        style={{ backgroundColor: withAlpha(accent, 0.12) }}
+        className="mt-2 h-[5px] overflow-hidden rounded-full bg-well"
         role="progressbar"
         aria-valuenow={model.calls}
         aria-valuemin={0}
         aria-valuemax={maxCalls}
         aria-label={`${model.model} calls relative to the busiest model`}
       >
-        <div className="h-full rounded-full" style={{ width: `${share}%`, backgroundColor: accent }} />
+        <div className="h-full rounded-full bg-accent-deep" style={{ width: `${share}%` }} />
       </div>
-      <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <div className="min-w-0">
-          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
-            Sent
-          </dt>
-          <dd
-            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
-            style={{ color: text }}
-            title={`${model.tokens.input.toLocaleString()} tokens`}
-          >
-            {formatCompactTokens(model.tokens.input)}
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
-            Received
-          </dt>
-          <dd
-            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
-            style={{ color: text }}
-            title={`${model.tokens.output.toLocaleString()} tokens`}
-          >
-            {formatCompactTokens(model.tokens.output)}
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
-            Cached
-          </dt>
-          <dd
-            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
-            style={{ color: text }}
-            title={`${model.tokens.cached.toLocaleString()} tokens`}
-          >
-            {formatCompactTokens(model.tokens.cached)}
-          </dd>
-        </div>
-        <div className="min-w-0">
-          <dt className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
-            Cost
-          </dt>
-          <dd
-            className="mt-0.5 truncate text-[12px] font-semibold tabular-nums"
-            style={{ color: text }}
-            title={
-              model.costKnown === false
-                ? "Unpriced model — no input/output prices configured for the provider×model rows that served it; $0.00 is a placeholder, not free"
-                : undefined
-            }
-          >
-            {formatCost(model.costUsd)}
-            {/* ROUND-83 (R83) §2.11: the honest marker — an unpriced model
-                shows "(unpriced)", never a silent free lunch. */}
-            {model.costKnown === false ? (
-              <span className="font-normal text-[10px]" style={{ color: textTertiary }}>
-                {" "}(unpriced)
-              </span>
-            ) : null}
-          </dd>
-        </div>
-      </dl>
+      {/* R126-3b: the mini stat row — ONE row, hairline dividers between the
+          four cells (never four floating dl blocks). */}
+      <div className="mt-3 grid grid-cols-2 gap-y-2 sm:grid-cols-4 sm:gap-y-0">
+        <UsageMiniStat
+          divider="none"
+          label="Sent"
+          value={formatCompactTokens(model.tokens.input)}
+          title={`${model.tokens.input.toLocaleString()} tokens`}
+          styles={styles}
+        />
+        <UsageMiniStat
+          divider="always"
+          label="Received"
+          value={formatCompactTokens(model.tokens.output)}
+          title={`${model.tokens.output.toLocaleString()} tokens`}
+          styles={styles}
+        />
+        <UsageMiniStat
+          divider="sm"
+          label="Cached"
+          value={formatCompactTokens(model.tokens.cached)}
+          title={`${model.tokens.cached.toLocaleString()} tokens`}
+          styles={styles}
+        />
+        <UsageMiniStat
+          divider="always"
+          label="Cost"
+          value={
+            model.costKnown === false ? `${formatCost(model.costUsd)} (unpriced)` : formatCost(model.costUsd)
+          }
+          title={
+            model.costKnown === false
+              ? "Unpriced model — no input/output prices configured for the provider×model rows that served it; $0.00 is a placeholder, not free"
+              : undefined
+          }
+          styles={styles}
+        />
+      </div>
     </motion.article>
   );
 }
@@ -118,7 +103,7 @@ export function ModelCards({
   models: DetailedUsageModel[];
   styles: ThemeStyles;
 }) {
-  const { textSecondary, textTertiary, accent } = styles;
+  const { textSecondary } = styles;
   // Sorted by total tokens (input+output) — the heaviest context consumers
   // first; the API returns call-count order for the leaderboard instead.
   const sorted = [...models].sort(
@@ -132,13 +117,10 @@ export function ModelCards({
   return (
     <section aria-label="Models" className="mb-4 md:mb-6">
       <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Cpu size={13} style={{ color: accent, opacity: 0.7 }} />
-          <h2 className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: textTertiary }}>
-            Models
-          </h2>
-        </div>
-        <span className="text-[11px] tabular-nums" style={{ color: textSecondary }}>
+        <Kicker as="h2" icon={Cpu}>
+          Models
+        </Kicker>
+        <span className="text-[11px] font-medium leading-none tabular-nums" style={{ color: textSecondary }}>
           {models.length} {models.length === 1 ? "model" : "models"}
         </span>
       </div>

@@ -1,7 +1,6 @@
 import { FileText, X } from "lucide-react";
 import { fmtBytes } from "../../../lib/format";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
-import { withAlpha } from "../../dashboard/helpers";
 import type { ComposerAttachment } from "./composer-utils";
 
 /** The staged image MIME by extension (the display set — the bytes route's
@@ -64,22 +63,19 @@ export function AttachmentChips({
               ? `${a.path} · ${fmtBytes(a.size)}${a.text === null ? " · no readable text" : ""}`
               : `${a.name} · ${fmtBytes(a.size)}${a.text === null ? " · no readable text" : ""}`
           }
-          className="inline-flex items-center gap-1.5 h-7 pl-2 pr-1 rounded-lg border max-w-full"
-          style={{
-            borderColor: withAlpha(styles.accent, styles.isDark ? 0.28 : 0.2),
-            background: withAlpha(styles.accent, styles.isDark ? 0.1 : 0.06),
-          }}
+          className="inline-flex items-center gap-1.5 h-7 pl-2 pr-1 rounded-lg border border-clay-rim bg-well max-w-full"
         >
           {preview !== null ? (
             <img
               data-testid="staged-attachment-preview"
               src={preview}
               alt={a.name}
-              className="w-5 h-5 rounded object-cover shrink-0"
-              style={{ border: `1px solid ${withAlpha(styles.accent, 0.18)}` }}
+              // R126-3d-4: the thumb's NEUTRAL hairline frame (the clay rim —
+              // the old withAlpha accent edge retired).
+              className="w-5 h-5 rounded object-cover shrink-0 border border-clay-rim"
             />
           ) : (
-            <FileText size={11} className="shrink-0" style={{ color: styles.accent }} />
+            <FileText size={11} className="shrink-0 text-accent" />
           )}
           <span
             className="text-[11px] font-medium truncate max-w-[180px]"
@@ -92,8 +88,10 @@ export function AttachmentChips({
           </span>
           {a.truncated ? (
             <span
-              className="font-mono text-[10px] font-medium px-1 rounded-md shrink-0"
-              style={{ background: styles.subtle, color: styles.textTertiary }}
+              // R126-3d-4: the NEUTRAL badge tone (TOKENS §11 — the well
+              // fill + secondary ink pair; the old subtle/tertiary JS legs
+              // retired).
+              className="font-mono text-[10px] font-medium px-1 rounded-md shrink-0 bg-badge-neutral text-badge-neutral-fg"
               title="Only the first 128KB was read"
             >
               truncated
@@ -101,8 +99,7 @@ export function AttachmentChips({
           ) : null}
           {a.text === null ? (
             <span
-              className="font-mono text-[10px] font-medium px-1 rounded-md shrink-0"
-              style={{ background: styles.subtle, color: styles.textTertiary }}
+              className="font-mono text-[10px] font-medium px-1 rounded-md shrink-0 bg-badge-neutral text-badge-neutral-fg"
               title="Binary or unreadable — the model sees a placeholder note"
             >
               no text

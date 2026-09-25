@@ -37,10 +37,13 @@ describe("R100-C: SettingsRow (the label + control row)", () => {
     expect(block?.className).toContain("min-w-[200px]");
   });
 
-  it("renders the optional description at 11px tertiary ink (the JS leg, no hex)", () => {
+  it("renders the optional description at 11px tertiary ink, ONE LINE (R126: truncate — the 36px row never inflates)", () => {
     render(<SettingsRow label="Auto-retry" description="Retry failed tool calls" testId="row" />);
     const desc = screen.getByText("Retry failed tool calls");
     expect(desc.className).toContain("text-[11px]");
+    // R126-3f-1: the description ellipsizes instead of wrapping (the IDE
+    // row stays 36px; the full text stays in the DOM).
+    expect(desc.className).toContain("truncate");
     expect((desc as HTMLElement).style.color).not.toBe("");
   });
 

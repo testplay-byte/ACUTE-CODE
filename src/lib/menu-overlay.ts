@@ -38,9 +38,24 @@
 
 import { isTauri } from "./sidecar";
 import { nativeWindowMetrics } from "./native-browser";
+// R126-3h: the payload-theme builder below reads the derived ThemeStyles
+// (type-only — this module stays side-effect-free for the overlay page).
+import type { ThemeStyles } from "./themes";
 
 /** The theme fields the overlay page paints with (a subset of
- * useThemeStyles — JSON-safe strings + the dark flag). */
+ * useThemeStyles — JSON-safe strings + the dark flag).
+ *
+ * R126-3h (the flagged-debt ledger — 3d-4's + 3e's caveats): the payload
+ * now carries the deep-tier/badge-tone/clay values the overlay window
+ * paints with (the payload IS data — the page cannot read the CSS vars of
+ * the main window's DOM): accentDeep/accentTint (the code-chip + selected-row
+ * selection grammar), the success/running/warning/danger deep pairs (the
+ * status-text + ring legs — the flat SEMANTIC hexes the page resolved are
+ * retired), badgeNeutralBg/Fg (the role chip's §11 neutral container), and
+ * clayRim/claySheetShadow (the card chrome's rim hairline + the UPWARD clay
+ * sheet shadow — the pre-R126 border/softShadow legs the cards painted).
+ * The legacy card/border/softShadow/text/accent/subtleHover legs stay: the
+ * panes/tables/icons still paint them (they are not flat status hues). */
 export interface MenuTheme {
   card: string;
   border: string;
@@ -51,6 +66,17 @@ export interface MenuTheme {
   accent: string;
   subtleHover: string;
   isDark: boolean;
+  /** R126-3h: the deep/badge-tone/clay legs (see the docblock above). */
+  accentDeep: string;
+  accentTint: string;
+  clayRim: string;
+  claySheetShadow: string;
+  badgeNeutralBg: string;
+  badgeNeutralFg: string;
+  successDeep: string;
+  runningDeep: string;
+  warningDeep: string;
+  dangerDeep: string;
 }
 
 /** The lucide icons the overlay page knows by name (quick-menu items +
@@ -344,6 +370,37 @@ export interface UsageCardPayload {
 
 /** Everything the overlay window can be asked to show (the menu kinds +
  * R96-G's usage rich card). */
+
+/** R126-3h: THE one payload-theme builder — every main-window leg that opens
+ * the overlay (RightSidebar's quick-menu + sub-agent picker payloads,
+ * useNativeOptionsMenu's options payloads, ContextDonut's usage card) sends
+ * the SAME theme fields, now including the deep-tier/badge-tone/clay values
+ * the page paints the status/selection/chrome legs with. Pure data — no
+ * logic; the page's rendering is unchanged in kind. */
+export function menuThemeFromStyles(styles: ThemeStyles): MenuTheme {
+  return {
+    card: styles.card,
+    border: styles.border,
+    softShadow: styles.softShadow,
+    text: styles.text,
+    textSecondary: styles.textSecondary,
+    textTertiary: styles.textTertiary,
+    accent: styles.accent,
+    subtleHover: styles.subtleHover,
+    isDark: styles.isDark,
+    // R126-3h: the deep/badge-tone/clay legs.
+    accentDeep: styles.accentDeep,
+    accentTint: styles.accentTint,
+    clayRim: styles.clayRim,
+    claySheetShadow: styles.clayShadowSheet,
+    badgeNeutralBg: styles.badgeTones.neutral.bg,
+    badgeNeutralFg: styles.badgeTones.neutral.fg,
+    successDeep: styles.successDeep,
+    runningDeep: styles.runningDeep,
+    warningDeep: styles.warningDeep,
+    dangerDeep: styles.dangerDeep,
+  };
+}
 export type MenuOverlayPayload = MenuPayload | UsageCardPayload;
 
 /** R96-G: the usage card's LAYOUT CONTRACT (px) — the OS window's height must

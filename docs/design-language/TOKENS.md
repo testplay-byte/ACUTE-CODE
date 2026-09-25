@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-24 round-126 -->
 # Tokens — the color, type, and spacing language
 
 Serves DESIGN-SYSTEM §1 (source of truth), §2 (spacing), §3 (typography).
@@ -8,6 +8,18 @@ sound-but-unapplied with two token-level defects (a crowded type ladder
 with no weight law, and no radius/border enforcement). Every revision
 below is marked **ROUND-100 (R100-C)** and is enforced by
 `scripts/design-audit.mjs` (`pnpm design:audit` — see USAGE §2).
+
+**ROUND-126 (the Clay Companion redesign — the PC adopts the Android app's
+design language, adapted):** clay is now the DEFAULT identity theme (a
+one-time nova→clay migration), the identity faces are **Manrope + JetBrains
+Mono** (the mobile app's faces — one product family; Space Grotesk is
+retired from `--font-sans`), and the mobile constitution's **surface
+ladder** (§10), **status grammar** (§11), and **two-tier accent** (§1d)
+joined the pipeline. Every R126 change is marked **ROUND-126** and mirrors
+`mobile/src/design/tokens.ts` (the mobile constitution,
+`docs/design-language/android/`) — where the two documents disagree on a
+shared surface, THIS file wins for the desktop, and the disagreement gets
+an amendment note on both sides (never a silent edit).
 
 ## 1. The color pipeline (how a color reaches a pixel)
 
@@ -74,33 +86,53 @@ Accent discipline (ROUND-100, research §C1.3): the accent marks
 **selection + the one primary action**; nothing else in working UI is
 accent-colored at rest.
 
-### 1b. The theme catalog — ROUND-107 (R107-g) adds Clay Studio
+### 1b. The theme catalog — ROUND-126 (R126): **Clay Studio is the default**
 
-Six themes: Nova Cream (the default), Bento Blue, Midnight Lab, Sunset
-Pop, Mono Stone, and **Clay Studio** (round-107 — the owner's "go with the
-Clay Studio aesthetic" direction). Clay Studio is the clay SUBSTRATE: warm
-sand neutrals (`#F4EEE5` bg / `#FDFBF7` card light; brown-tinted charcoal
-`#26211C` / `#2F2924` dark — never a blue-black), warm ink
-(`#2A2018` / `#F2EBE1`), and a muted terracotta accent
-(`#C4653F` light / `#D98A63` dark) — the warm family the owner asked for
-(indigo/blue accents remain banned as defaults house-wide). Measured
-contrast sits inside the envelope the other five themes already tolerate:
-accent-on-bg 3.45:1 light (nova: 2.75), accentDark-on-bgDark 5.90:1 (over
-the ~4.5:1 accent-dark bar), ink 13–15:1 both modes.
+Six themes: **Clay Studio (the default — ROUND-126, R126)**, Nova Cream,
+Bento Blue, Midnight Lab, Sunset Pop, Mono Stone. Clay Studio is the clay
+SUBSTRATE and the app's identity language: the mobile clay entry VERBATIM
+(bg `#ECEEE8` / card `#FDFDFB` light — the round-117 surface-ladder
+amendment, card-vs-bg 1.15:1; bg `#211B16` / card `#332C26` dark, 1.24:1),
+warm ink (`#2A2018` / `#F2EBE1`), the two-tier terracotta accent (§1d),
+and the taupe `accent2 #8A6A55`. A one-time migration walks existing
+profiles off the never-re-designed nova default (theme-store.ts — both the
+local persist leg and the server hydration leg); indigo/blue accents
+remain banned as defaults house-wide. The other five themes ride the same
+formulas (every §10/§11 token is computed, never clay-only) — a theme is
+a palette choice, not a different material.
 
 ### 1c. The `--ac-*` var families (summary)
 
 | Family | Vars | Used for |
 |---|---|---|
 | Surfaces | `--ac-bg`, `--ac-card`, `--ac-sidebar-bg` | app background, cards, chrome |
+| Surface ladder (R126) | `--ac-surface-well`, `--ac-surface-header`, `--ac-accent-tint`, `--ac-clay-rim`, `--ac-clay-top-edge`, `--ac-mono-bg/border/text` | §10 — the Clay Companion elevation grammar |
 | Text | `--ac-text`, `--ac-text-secondary`, `--ac-text-tertiary` | ink hierarchy (the ramp above) |
-| Accent | `--ac-accent`, `--ac-accent-text`, `--ac-accent-faded`, `--ac-accent-soft` | brand moments, user bubbles, primary buttons |
-| Lines | `--ac-border`, `--ac-border-strong`, `--ac-border-subtle` | bento borders, hairlines |
+| Accent | `--ac-accent`, `--ac-accent-deep`, `--ac-accent-text`, `--ac-accent-faded`, `--ac-accent-soft`, `--ac-accent-tint` | brand moments, user bubbles, primary buttons (§1d) |
+| Lines | `--ac-border`, `--ac-border-strong`, `--ac-border-subtle` | hairlines |
 | Subtle | `--ac-subtle`, `--ac-subtle-hover` | quiet fills, hover washes |
 | Inputs | `--ac-input-bg`, `--ac-input-border`, `--ac-input-focus-border` | fields, steppers |
 | Shadows | `--ac-soft-shadow`, `--ac-bento-shadow` | depth (see MOTION.md for entry motion) |
-| Clay depth (R108-e) | `--ac-clay-shadow`, `--ac-clay-shadow-sm` | the clay material's layered soft shadows — §9 below |
+| Clay depth (R108-e, R126) | `--ac-clay-shadow`, `--ac-clay-shadow-sm`, `--ac-clay-shadow-pressed`, `--ac-clay-shadow-sheet` | the clay material's layered soft shadows — §9 |
+| Status (R126) | `--ac-success-deep`, `--ac-warning-deep`, `--ac-danger-deep`, `--ac-running-deep`, `--ac-badge-{tone}-{bg,fg}` | §11 — the status grammar (text + badge containers) |
 | Chrome (R107-g) | `--ac-chrome-hi/mid/lo`, `--ac-chrome-sheen` | the liquid-chrome ramp — §8 below |
+
+### 1d. The two-tier accent — ROUND-126 (R126, mobile AMENDMENT 3)
+
+The accent is ONE family, two depths — never a second accent:
+
+- **`accent`** (clay: terracotta `#C4653F` light / salmon `#D98A63` dark):
+  markers, icons, tint fills, chart mass, dots.
+- **`accentDeep`** (clay: ember `#B45330` light; collapses to the dark
+  accent in dark mode): accent-as-TEXT and CTA fills — the tier that must
+  hold ~4.5:1 as ink.
+- **`accentText`**: clay's explicit pair — white on the ember light
+  (4.98:1), warm ink `#211B16` on the salmon dark (6.30:1).
+
+"One accent per screen" still holds: `accentDeep` is the same hue deepened
+for contrast duty. Themes without an `accentDeep` field resolve it to
+their own accent (identity). `text-accent-deep` / `bg-accent-deep` are the
+Tailwind spellings; `styles.accentDeep` the JS leg.
 
 ## 2. The type scale (the canonical ladder) — ROUND-100 (R100-C, research §C1.1)
 
@@ -136,8 +168,13 @@ onboarding). The ladder is now cliff-shaped and weight-governed:
   `font-extrabold` outside `src/components/onboarding/` + the StatCard
   value is a bug (audit rule R4 counts them; ~26+ files today).
 
-Fonts: keep Space Grotesk app-wide (the owner-approved identity — the
-wizard proves it), mono stack unchanged. One reading size per surface;
+Fonts: **ROUND-126 (R126): Manrope is the identity face + JetBrains Mono
+the machine face** — the mobile app's pair (one product family), bundled
+locally in `src/assets/fonts/` (static TTFs, OFL). Space Grotesk (the
+pre-R126 face) stays `@font-face`'d for the wizard's confetti reference
+only and is retired from `--font-sans`. Manrope's weight axis maps exactly
+onto the weight law above (400/500/600/700 + 800 for the wizard's display
+tier — the one place 800 is legal). One reading size per surface;
 hierarchy comes from weight/color (`text` → `text-secondary` →
 `text-tertiary`), never from inventing a 9.75px. The chat's text-size
 ladder (S/M/L, ±12%, `--ac-chat-scale`) scales the three reading surfaces
@@ -194,17 +231,28 @@ exception** (WIZARD-DNA §4). Kill every other arbitrary radius
 (`rounded-[7px]`, `[9px]`, `[10px]`, `[14px]`, `[18px]`, `[20px]` — the
 40× in ModelsProvidersTab etc. all snap to the scale).
 
-## 5. Borders + elevation — ROUND-100 (R100-C, research §C1.4)
+## 5. Borders + elevation — ROUND-100 (R100-C) — **ROUND-126 (R126): the clay rim supersedes the bento border on cards**
 
 - **1px hairlines** for dividers, inside-panel lines, table rows.
-- **1.5px** only on top-level bento cards (the owner-approved
-  border-forward look).
+- **ROUND-126 (R126, mobile AMENDMENT 1): the default card edge is the
+  warm `clayRim` hairline on all four sides** (`border-clay-rim` /
+  `.ac-clay-rim`; light: 10% ink into card — `#E8E7E4` on clay; dark:
+  10% white) + the dark-mode-only matte top edge
+  (`.ac-clay-edge-dark`, 14% white — light mode never paints it). The
+  **1.5px bento border on top-level cards is RETIRED** with the redesign
+  (the border-forward bento look was the nova-era dialect; the clay
+  material's edge is the rim + the §9 shadow form). Existing 1.5px borders
+  ride until each screen's redesign pass converts them — the audit counts
+  only go down.
 - **2–2.5px** borders are wizard-only.
-- Elevation: `softShadow` for floating surfaces (popovers, menus, the chat
-  window card); `bentoShadow` (hard offset) + gradient fills are
-  **wizard + primary CTA only** (WIZARD-DNA §7) — remove from
-  UsageScreen/DashboardScreen heroes (`UsageScreen.tsx:126-138`,
-  `DashboardScreen.tsx:85-90`).
+- Elevation: **ROUND-126**: the clay shadow family (§9) is THE elevation
+  grammar for carded surfaces (`--ac-clay-shadow` cards/heroes,
+  `-sm` compact tiles, `-pressed` the press collapse, `-sheet` upward
+  docks/toasts); `softShadow` survives for floating overlays that need
+  neutrality (menus, the ⌘K palette) — both are pipeline tokens. The
+  `bentoShadow` hard offset is **wizard + primary CTA only** (WIZARD-DNA
+  §7) and is progressively retired from working screens (Dashboard /
+  Usage heroes first).
 
 ## 6. Interaction states — ROUND-100 (R100-C, research §C1.5)
 
@@ -285,7 +333,7 @@ Rules:
    half as bright as the R107-g original; if it draws attention to
    itself, cut it further, never louder.
 
-## 9. The clay shadow material — ROUND-108 (R108-e)
+## 9. The clay shadow material — ROUND-108 (R108-e) — **ROUND-126 (R126): retuned to the mobile v2 strings**
 
 Owner verdict on R107-g's execution (v1.0.3): "You implemented clay but it
 was not implemented properly. At the very top you implemented some glow
@@ -297,8 +345,22 @@ top-lights, washes, or light fades drawn over a card (the deleted
 
 | Var | Light mode | Dark mode | Role |
 |---|---|---|---|
-| `--ac-clay-shadow` | `0 2px 4px rgba(42,32,24,0.08), 0 16px 40px -8px rgba(42,32,24,0.13)` | `0 2px 4px rgba(0,0,0,0.35), 0 16px 40px -8px rgba(0,0,0,0.45)` | the clay card: tight directional contact shadow + large very soft ambient |
-| `--ac-clay-shadow-sm` | `0 1px 2px rgba(42,32,24,0.08), 0 8px 20px -4px rgba(42,32,24,0.10)` | `0 1px 2px rgba(0,0,0,0.30), 0 8px 20px -4px rgba(0,0,0,0.40)` | the small-surface step (compact tiles) |
+**ROUND-126 (R126): the strings are the mobile v2 two-leg grammar
+VERBATIM** (mobile tokens.ts:494-512) — alphas that actually draw (contact
+10–14%, ambient 14–24%; the pre-R126 8–14% ambient legs were below the
+perception floor), warm ink moved to the mobile value `rgba(38,34,28,…)`
+(R114-c's half-step cooler warm ink — never reads ORANGE against the
+#ECEEE8-class whites, never the forbidden cold blue-black). Two NEW steps
+joined: `-pressed` (the press collapse — the contact leg alone) and
+`-sheet` (the UPWARD shadow for docks/toasts — anything that rises casts
+its shadow up).
+
+| Var | Light mode | Dark mode | Role |
+|---|---|---|---|
+| `--ac-clay-shadow` | `0px 2px 4px rgba(38,34,28,0.14), 0px 12px 32px -8px rgba(38,34,28,0.24)` | `0px 2px 4px rgba(0,0,0,0.45), 0px 14px 36px -8px rgba(0,0,0,0.60)` | the clay card: tight contact + large soft ambient |
+| `--ac-clay-shadow-sm` | `0px 1px 2px rgba(38,34,28,0.10), 0px 3px 10px -4px rgba(38,34,28,0.14)` | `0px 1px 2px rgba(0,0,0,0.35), 0px 4px 12px -4px rgba(0,0,0,0.45)` | the small-surface step (compact tiles, chips) |
+| `--ac-clay-shadow-pressed` | `0px 1px 2px rgba(38,34,28,0.12)` | `0px 1px 2px rgba(0,0,0,0.40)` | the press collapse target |
+| `--ac-clay-shadow-sheet` | `0px -2px 6px rgba(38,34,28,0.12), 0px -12px 32px -8px rgba(38,34,28,0.22)` | `0px -2px 6px rgba(0,0,0,0.50), 0px -14px 36px -8px rgba(0,0,0,0.65)` | upward: docks, toasts, rising surfaces |
 
 Rules:
 
@@ -325,3 +387,63 @@ Rules:
    law is the MOBILE surface's own rule (MOBILE-ARCHITECTURE), never the
    desktop's. The chat route keeps its borderless/no-shadow language
    (COMPONENTS §3 species 2) — clay depth belongs to CARDED surfaces.
+
+## 10. The surface ladder — ROUND-126 (R126, mobile round-117-elevation)
+
+The Clay Companion elevation grammar: a card is not "white on gray" — it is
+ONE step UP from the background (the §9 shadow form + the §5 rim), and the
+surfaces INSIDE a card step DOWN into recesses. Every token is computed in
+`deriveThemeStyles()` (mode-aware, theme-derived — all six themes get them
+free) and rides the `--ac-*` bridge + the Tailwind `@theme` leg.
+
+| Token | Light (on clay) | Dark (on clay) | Tailwind / class | Role |
+|---|---|---|---|---|
+| `surfaceWell` | `#F4F1EE` (8% taupe `#8A6A55` into card) | `#3D3731` (5% white) | `bg-well` / `.ac-well` | THE recess: accordions, activity wells, input fills, skeletons, recent-activity rows. Supersedes the invisible 2% `subtle`-as-recess. |
+| `surfaceHeader` | `#E0E2DC` (bg +6% warm ink) | `#17130F` (bg +30% black) | `bg-header-surface` | in-flow chrome shade — header columns, the chat top strip, column headers pulled through insets. |
+| `accentTint` | `#F6EBE4` (12% accent into card) | `#513D31` (18%) | `bg-accent-tint` | hue without loudness — icon chips, the selected-marker fill, hero tiles. |
+| `clayRim` | `#E8E7E4` (10% ink into card) | `rgba(255,255,255,0.10)` | `border-clay-rim` / `.ac-clay-rim` | the default card edge, all four sides (§5). |
+| `clayTopEdge` | *(light value unused)* | `#504A44` (14% white) | `.ac-clay-edge-dark` | the matte top-edge highlight — a DARK-MODE-ONLY device (mobile AMENDMENT 1; the class suppresses it in light mode). |
+| `monoBg/Border/Text` | `#F0F0ED` / `rgba(42,32,24,0.10)` / `#3A2E22` | `rgba(0,0,0,0.22)` / `rgba(255,255,255,0.08)` / `rgba(242,235,225,0.92)` | `bg-mono-block` + `text-mono-ink` / `.ac-mono-block` | the recessed mono surface — terminal output, command blocks, code output tails. |
+
+**The ladder laws (mobile round-117, binding):**
+
+1. **Card-vs-bg must be a VISIBLE luminance step** — 1.15:1 light / 1.24:1
+   dark (the round-117 amendment restored these from the mathematically
+   invisible 1.08/1.11). If a card reads as its background, the ladder is
+   broken.
+2. **One step per rung.** bg → card (up, shadow+rim) → well (down, rim
+   hairline) → mono block (down, own ink). Never two steps in one jump,
+   never a "raised" tint on a card (the 2% `surfaceRaised` was killed on
+   mobile for a reason).
+3. **The well is the workhorse recess.** Anything that reads as "content
+   sunk into the card" (activity wells, input fills, terminal bodies,
+   skeleton blocks) uses `surfaceWell` + the rim hairline — not `bg-subtle`,
+   not alpha hacks.
+4. **Skeletons ride the well** (`bg-well` at 0.45↔0.85 opacity pulse —
+   MOTION §4), never plain `bg-subtle`.
+
+## 11. The status grammar — ROUND-126 (R126, mobile R117-g1 §2.2)
+
+**Flat hues are for DOTS ONLY.** Status TEXT and every Badge/chip ride the
+**deep/bright pairs** on **tinted containers** — never white-on-saturated
+fills, never flat-hue text on card:
+
+| Tone | Container (light) | Ink (light) | Ink (dark) | Tailwind |
+|---|---|---|---|---|
+| success | `#E3F6E8` | `#166534` | `#4ADE80` | `bg-badge-success` + `text-badge-success-fg` |
+| warning | `#FCF2DE` | `#92400E` | `#FBBF24` | `bg-badge-warning` + `text-badge-warning-fg` |
+| danger | `#FBE7E5` | `#B91C1C` | `#FCA5A5` | `bg-badge-danger` + `text-badge-danger-fg` |
+| running | `#E6EEFA` | `#1D4ED8` | `#93C5FD` | `bg-badge-running` + `text-badge-running-fg` |
+| accent | `accentDeep` fill | `accentText` | `accentText` | `bg-badge-accent` + `text-badge-accent-fg` |
+| neutral | `surfaceWell` | `textSecondary` | `textSecondary` | `bg-badge-neutral` + `text-badge-neutral-fg` |
+
+- Containers = 12% of the flat hue into the card (light) / 20% (dark);
+  every pair holds ≥4.5:1 in both modes (the mobile contrast floor).
+- **Status TEXT** (without a container) uses `text-success-deep` /
+  `text-warning-deep` / `text-danger-deep` / `text-running-deep` — the same
+  deep/bright pairs (`#15803D`/`#4ADE80`, `#B45309`/`#FBBF24`,
+  `#DC2626`/`#F87171`, `#1D4ED8`/`#93C5FD`).
+- The JS leg: `styles.badgeTones[tone]` (`{bg, fg}`) and
+  `styles.successDeep` etc. from `useThemeStyles()`.
+- The expiry/attention ladder: warning first, danger only for hard failure
+  (an expired pairing window is a warning, not an error — mobile law).

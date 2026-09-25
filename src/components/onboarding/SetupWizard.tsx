@@ -40,8 +40,9 @@ export function SetupWizard() {
       style={{
         backgroundColor: s.bg,
         color: s.text,
-        fontFamily:
-          "'Space Grotesk', 'General Sans', ui-sans-serif, system-ui, sans-serif",
+        // R126-3g: Space Grotesk retired from the wizard root — the stage
+        // now rides the R126 identity face (Manrope, --font-sans) the body
+        // already paints; the tight tracking is the DNA's own (kept).
         letterSpacing: "-0.01em",
       }}
     >
@@ -53,24 +54,23 @@ export function SetupWizard() {
           backgroundSize: "28px 28px",
         }}
       />
+      {/* R126-3g: the ambient stage keeps its full theatrical structure
+          (sizes, blurs, positions, the three alphas) — WIZARD-DNA §1 — but
+          every glow hue now re-derives from the ONE accent family
+          (var(--ac-accent), the CSS-var leg) at the existing alphas: the
+          pre-R126 accent2 second-hue wash + any hardcoded stage orange
+          retire; clay reads as one warm terracotta light source. */}
       <div
         className="absolute -top-24 -right-24 w-[420px] h-[420px] rounded-full blur-[80px] opacity-20 pointer-events-none"
-        style={{ background: s.accent }}
+        style={{ background: "var(--ac-accent)" }}
       />
       <div
         className="absolute -bottom-32 -left-32 w-[520px] h-[520px] rounded-full blur-[90px] opacity-[0.08] pointer-events-none"
-        style={{ background: s.accent }}
+        style={{ background: "var(--ac-accent)" }}
       />
-      {/* R108-e: the third ambient glow is back to the SECOND ACCENT at its
-          original 6% (the round-98 owner-approved wizard stage — three warm
-          washes; WIZARD-DNA §1). R107-g had swapped it for a platinum/chrome
-          wash (--ac-chrome-hi at 18%, a blurred WHITE light); that read as
-          the "glow fade… and other stuff like that" the owner rejected in
-          round-108, so the wizard's stage light is warm again — the chrome
-          lives in the hero block + CTA sheen, never in ambient light. */}
       <div
         className="absolute top-[35%] right-[10%] w-[220px] h-[220px] rounded-full blur-[70px] opacity-[0.06] pointer-events-none"
-        style={{ background: s.theme.accent2 }}
+        style={{ background: "var(--ac-accent)" }}
       />
 
       <Header />
