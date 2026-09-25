@@ -16,7 +16,9 @@ as described. Read this fully before doing anything.
 
 ## 0. Credentials (provided separately by the owner — insert where marked)
 
-- GitHub repo: `https://github.com/testplay-byte/ACUTE-CODE` (PRIVATE)
+- GitHub repo: `https://github.com/testplay-byte/ACUTE-CODE` (public since the owner's R93
+  directive — unlimited free CI; he may flip it back at will, so never commit
+  secrets regardless of the current state)
 - GitHub PAT: `<GITHUB_PAT>`
 - OpenRouter API key (dev): `<OPENROUTER_KEY>` — the ONLY allowed model on
   this key is `stealth/ox-alpha` ("ox Alpha"). Never test other models.
@@ -28,8 +30,10 @@ as described. Read this fully before doing anything.
    repo, logs, transcripts, error messages, or REST bodies (one exception:
    the shell-only `/internal/providers/keys` handoff). Print key LENGTHS
    only, never values.
-2. **Closed source**: no LICENSE file, nothing published to public registries,
-   and the GitHub repo must stay PRIVATE — verify before your first push.
+2. **Closed source**: no LICENSE file, nothing published to public registries. The GitHub
+   repo is PUBLIC (the owner's R93 directive — free CI; he may flip it back at will), so the
+   both-states safety contract applies to every round: never commit secrets, noreply emails
+   only, no shared-secret strings in docs. Verify visibility before your first push.
 3. **Dependency licenses**: MIT / Apache-2.0 / BSD / ISC / MPL-2.0 ONLY.
    GPL family forbidden. `pnpm license:audit` gates every CI run.
 4. **Quality over speed** — the owner repeats this constantly. Verify every
@@ -65,7 +69,8 @@ printf "protocol=https\nhost=github.com\nusername=testplay-byte\npassword=<GITHU
 git clone https://testplay-byte@github.com/testplay-byte/ACUTE-CODE.git
 cd ACUTE-CODE
 
-# 3. Verify the repo is PRIVATE (closed-source product!)
+# 3. Verify the repo's visibility via the API (it is PUBLIC per the owner's R93
+#    directive — the both-states safety contract: never commit secrets either way)
 curl -s -H "Authorization: Bearer <GITHUB_PAT>" https://api.github.com/repos/testplay-byte/ACUTE-CODE | grep '"private"'
 
 # 4. Store the OpenRouter key in Credential Manager (never in the repo)

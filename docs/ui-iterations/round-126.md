@@ -125,6 +125,16 @@ direction.
   `WORKFLOW.md` §3 + `ORCHESTRATOR-METHOD.md` §4 both carry the wave-mode revision pointing at
   the playbook — the 2026-08-23 "implementation inline" rule and the R126 wave rule are now ONE
   coherent contract instead of a silent contradiction.
+- **THE HANDOFF TRUTH-SYNC** (found while wiring: HANDOFF §3/§9 — the first file a new agent
+  reads — still described R86/v0.84.0, 40 rounds stale): §"Last updated" rewritten to the R126
+  close-out (the old nested prior-state mega-paragraph retired — the history lives in the
+  ORCHESTRATION-WORKLOG, where it belongs); §1's reading order gained the playbook; §3 rewritten
+  (R126 state, the 274/4,840 + agent-core 2,903 + mobile 1,049 test counts, the tip 2faec8f,
+  the R127+ queue); §9 rewritten (the improvement pass + device pass + ZCode queue + standing
+  queue). Plus the visibility truth-sync: the repo is PUBLIC (the owner's R93 directive,
+  API-verified) — AGENTS.md's hard rule, its infrastructure note, and the bootstrap prompt's
+  three PRIVATE references all carried the pre-R93 state; all now state the R93 ruling + the
+  both-states safety contract (never commit secrets either way).
 - **The release**: all five workflows GREEN on the R126 commit 402e1df (CI 36112145951, Rust
   Checks 36112146038, Mobile CI 36112145977, Release + Mobile APK on the v0.119.0 tag); the
   v0.119.0 draft (396435995, 7/7 assets) PUBLISHED with the CHANGELOG's 0.119.0 section as

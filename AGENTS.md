@@ -18,7 +18,7 @@ Stack (fixed, changes need owner approval): Tauri 2 (Rust) shell · React 18 + T
 
 ## Hard rules
 
-- License allowlist for dependencies: MIT, Apache-2.0, BSD, ISC, MPL-2.0. GPL/AGPL/LGPL forbidden (closed-source product). No open-source LICENSE file in the repo; nothing published to public registries.
+- License allowlist for dependencies: MIT, Apache-2.0, BSD, ISC, MPL-2.0. GPL/AGPL/LGPL forbidden (closed-source product). No open-source LICENSE file in the repo; nothing published to public registries. **Repo visibility: PUBLIC since the owner's R93 directive** (unlimited free CI on public repos; he may flip it back at will — every round stays safe in both states: never commit secrets, noreply emails only, no shared-secret strings in docs). Verify visibility via the API before your first push.
 - Secrets live only in the custody surface appropriate to the context (packaged app: Windows Credential Manager/DPAPI; owner launcher: local `credentials.txt` + isolated 0600 store; dev sandbox: 0600 files outside any repo) — never in the repo, logs, transcripts, error messages, or REST bodies. Details: `docs/runbooks/SECURITY.md`.
 - The human-in-the-loop approval engine is the security boundary (no sandbox in v1): it must be complete, unbypassable, and never offers "always allow" for destructive categories.
 - No telemetry or crash reporting unless the owner opts in.
@@ -33,5 +33,5 @@ Product repo: `acute-code/` (this workspace). Documentation index: `docs/README.
 ## Notifications & infrastructure
 
 - **After every completed task or key milestone, notify the owner via ntfy.sh**: `curl -d "<short message, no secrets>" https://ntfy.sh/TASKISDONE`.
-- **Heavy lifting goes to GitHub Actions** (ADR-0012): repo `testplay-byte/ACUTE-CODE` (PRIVATE), token in Windows Credential Manager via wincred helper (`git:https://testplay-byte@github.com`), remote URL embeds the username. Local cargo/builds only for debugging CI failures; `pnpm verify` locally is the fast pre-push gate.
+- **Heavy lifting goes to GitHub Actions** (ADR-0012): repo `testplay-byte/ACUTE-CODE` (public since the owner's R93 directive — see the hard-rules visibility note), token in Windows Credential Manager via wincred helper (`git:https://testplay-byte@github.com`), remote URL embeds the username. Local cargo/builds only for debugging CI failures; `pnpm verify` locally is the fast pre-push gate.
 - Provider API keys live in Windows Credential Manager under `ACUTE-CODE/provider/<providerId>`; dev testing uses OpenRouter (the free default `z-ai/glm-5.2:free`, R43+ — `stealth/ox-alpha` is dead).
