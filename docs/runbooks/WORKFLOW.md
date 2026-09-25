@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-25 round-126 -->
 # WORKFLOW — the session spine
 
 **Normative.** `AGENTS.md` = the rules, `HANDOFF.md` = the state; this file
@@ -44,7 +44,13 @@ workflow … not blindly"), codifying what rounds 9–16 actually proved.
 - Delete the work branch (local + remote) after merge.
 - Sub-agents: OPTIONAL, never default (owner revision 2026-08-23) — use for
   genuinely parallel research/audit sweeps; verify their findings before
-  acting on them; implementation is done inline.
+  acting on them; implementation is done inline. **Wave-mode revision (R126,
+  owner-directed):** for large multi-surface efforts the orchestrator MAY
+  delegate implementation to review-gated sub-agent waves — one surface per
+  wave, the full brief + strict diff review + the interrupted-run successor
+  pattern per `AI-AGENT-PLAYBOOK.md` §4. Proven zero-defect on the R126
+  twelve-wave redesign; the gates and review discipline are what make it
+  legal.
 
 ## 4. Implementation loop (per feature/fix)
 

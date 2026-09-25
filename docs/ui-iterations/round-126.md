@@ -94,3 +94,41 @@ worklog discipline (the interrupted-run successor pattern: audit → tighten →
    TOKENS §1b/§5, the README's mobile-relationship rule); no rule was silently edited.
 4. The jump-to-latest pill and the queued-bubble veil keep their pre-R126 spellings (documented
    keeps by 3d-2); the bell's open-tint rides the shell's inline pattern (neighbor coherence).
+
+## §5 The close-out (the owner's mid-release direction: document the method)
+
+The owner stopped the release mid-flight for one more deliverable (verbatim): *"you did all the
+things properly… you properly verified the things along the way. You properly followed the
+workflow… you managed the to-do list properly. You properly utilized the sub-agents properly… I
+would like you to document, plan, and create proper workflows for yourself based on this… in the
+setup section or the readme files for behavior… so that if any new AI agent apparently decides to
+work on this project, then that new AI agent will already know and would already have all the
+necessary details which it would need to perform in a similar way."* Also on record: the owner
+reviewed the shipped UI himself — *"overall the experience was good and proper, but still it was
+lacking in a few areas which we can improve properly"* — the improvement queue below is that
+direction.
+
+- **THE PLAYBOOK** (`docs/runbooks/AI-AGENT-PLAYBOOK.md`, NEW, normative): the behavior contract
+  distilled from this session + R28 — the cold-start reading order; the ten behavior laws
+  (quality-over-speed, plan-before-code, extract-every-requirement into a live todo list,
+  one-surface-at-a-time, only-fix-what-is-100%-certain, verify-everything-yourself,
+  record-as-you-go, honest reporting, never-infer-approval, never-silently-truncate); the session
+  arc (backup branch FIRST → inventory → constitution-before-code → waves → integration);
+  **the wave protocol** (when waves are legal, the nine-part wave-brief template that produced
+  zero sent-back defects, the orchestrator's strict review gate — read the full diff, audit
+  item-by-item, re-run the gates, roll back on error — and the interrupted-run successor
+  pattern); the gate stack with baseline-count discipline; the live-verification standard
+  (computed styles vs TOKENS literals verbatim, both modes, VLM pass); and the release ritual.
+- **The wiring (a new agent cannot miss it)**: `AGENTS.md` gained the Behavior line + the
+  R126 wave-mode revision of the sub-agent protocol; `docs/README.md` indexes it beside WORKFLOW;
+  `AGENT-BOOTSTRAP-PROMPT.md` §3 slots it into the cold-start reading order (item 3);
+  `WORKFLOW.md` §3 + `ORCHESTRATOR-METHOD.md` §4 both carry the wave-mode revision pointing at
+  the playbook — the 2026-08-23 "implementation inline" rule and the R126 wave rule are now ONE
+  coherent contract instead of a silent contradiction.
+- **The release**: all five workflows GREEN on the R126 commit 402e1df (CI 36112145951, Rust
+  Checks 36112146038, Mobile CI 36112145977, Release + Mobile APK on the v0.119.0 tag); the
+  v0.119.0 draft (396435995, 7/7 assets) PUBLISHED with the CHANGELOG's 0.119.0 section as
+  name + body; `/releases/latest` answers v0.119.0.
+- **The improvement queue (the owner's "lacking in a few areas" — for the next round's plan,
+  untouched this round)**: the PC design-language refinements + the general polish pass the
+  owner will point at after his next walkthrough.

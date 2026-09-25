@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-25 round-126 -->
 # ACUTE-CODE — New-Agent Bootstrap Prompt
 
 > **For the owner:** fill in the three `<...>` placeholders below (GitHub PAT,
@@ -97,19 +97,25 @@ real review time — accuracy first, always.
 1. `HANDOFF.md` — state, rules, environment, gotchas (READ FULLY).
 2. `AGENTS.md` (repo root) — the workspace operating rules (phase gates,
    question protocol, hard rules) this prompt summarizes.
-3. `docs/architecture/PROJECT-MAP.md` — the living map: what ACUTE-CODE is,
+3. `docs/runbooks/AI-AGENT-PLAYBOOK.md` — **the behavior contract (R126)**:
+   the ten behavior laws, the session arc, the sub-agent wave protocol +
+   review gate, the gate stack, live verification, the release ritual. This
+   is how agents on this project are expected to behave; read it before the
+   rest of the docs so the methods below have their frame.
+4. `docs/architecture/PROJECT-MAP.md` — the living map: what ACUTE-CODE is,
    how the four layers link, naming conventions, data model, future pillars.
-4. `docs/runbooks/plan-agentic-mvp.md` — the CURRENT task.
-5. `docs/ui-iterations/README.md` — per-screen owner-approval status board +
+5. `docs/runbooks/plan-agentic-mvp.md` — the CURRENT task.
+6. `docs/ui-iterations/README.md` — per-screen owner-approval status board +
    round history 01–08.
-6. `docs/specs/SPEC.md`, `docs/architecture/ARCHITECTURE.md` + `api/API.md`,
+7. `docs/specs/SPEC.md`, `docs/architecture/ARCHITECTURE.md` + `api/API.md`,
    `docs/decisions/` (ADRs 0001–0013).
-7. `.agents/skills/` — workflow skills (ADR writing, research dispatch,
+8. `.agents/skills/` — workflow skills (ADR writing, research dispatch,
    phase reports) that become invocable when this repo is your workspace.
-8. `design/demos/` — the owner's three design demos. `acute-agent-ui` (the
+9. `design/demos/` — the owner's three design demos. `acute-agent-ui` (the
    wizard) is COMPLETE and approved; `acute-agent-dashboard` guides the
    dashboard; `project-chat` is the NORMATIVE spec for the coding UI you are
-   about to port.
+   about to port. (UI work also reads `docs/design-language/` — the
+   constitution the R126 redesign wrote; it outranks personal taste.)
 
 **Product vision (owner, 2026-08-22):** ACUTE-CODE is three products in one —
 (a) an agentic CODING environment (Cline/Kilo Code/OpenCode class), (b) a

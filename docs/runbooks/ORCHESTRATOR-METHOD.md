@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-25 round-126 -->
 
 # ORCHESTRATOR-METHOD — how the orchestrator agent thinks and works
 
@@ -154,7 +154,7 @@ flaws."* A round that skips planning is a round that gets sent back.
 
 ---
 
-## 4. Sub-agent discipline (owner revision 2026-08-23, reaffirmed R28)
+## 4. Sub-agent discipline (owner revision 2026-08-23, reaffirmed R28; wave mode added R126)
 
 - Sub-agents are **OPTIONAL, never a default.** Before dispatching, ask:
   "would doing this inline be simpler and safer?" If yes, do it inline.
@@ -171,6 +171,17 @@ flaws."* A round that skips planning is a round that gets sent back.
   before the deletion. (6-d caught this exact pattern in R28 review.)
 - If a sub-agent dies at 95%, **finish the integration yourself** rather
   than re-dispatching. Re-dispatch is for total failures, not tail cleanup.
+- **Wave mode (R126 revision, owner-directed):** when the owner directs a
+  large multi-surface effort (a redesign, a breadth sweep), implementation
+  MAY be delegated to sub-agent waves — one surface per wave, each carrying
+  the full brief (Task ID + worklog duty + mandatory reading list +
+  ownership boundaries + the itemized letter of the spec + re-pin rule +
+  gates + live verification) and each passing the orchestrator's STRICT
+  review (read the full diff, audit item-by-item, re-run the gates,
+  roll back on error). The interrupted-run successor pattern (audit the
+  arrived tree item-by-item, complete the cut-off gates/record, credit the
+  interrupted run honestly) is part of the protocol. Full contract:
+  `AI-AGENT-PLAYBOOK.md` §4 — read it before dispatching any wave.
 
 ---
 
