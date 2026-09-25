@@ -299,6 +299,42 @@ return { error: "part must be html, css or scripts" };`;
  * the model calls read_dom again after clicking a section, compares
  * pageState, and re-clicks when the app reverted.
  */
+/** A structural DOMRect subset — the pure visibility predicate's input. */
+export interface DomRectLike {
+  width: number;
+  height: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * R128-W7a: the VIEWPORT-INTERSECTION visibility predicate read_dom's page
+ * script embeds (the `visible` helper inside buildReadDomScript inlines the
+ * SAME expression — keep the two in lockstep; the browser-tool pins assert
+ * both). An element is visible when it has a non-degenerate layout box AND
+ * that box intersects the viewport. The old width/height-only check counted
+ * transform-hidden off-screen elements (a sidebar at translateX(-100%)
+ * keeps its layout box) as interactive — the mouse driver cannot reach them
+ * (they clamp outside the viewport), so they are EXCLUDED from the
+ * interactive list now. Pure — unit-tested directly (browser-tool.test.ts,
+ * R128-W7a).
+ */
+export function domRectIntersectsViewport(
+  rect: DomRectLike,
+  viewport: { width: number; height: number },
+): boolean {
+  return (
+    rect.width > 0 &&
+    rect.height > 0 &&
+    rect.right > 0 &&
+    rect.bottom > 0 &&
+    rect.left < viewport.width &&
+    rect.top < viewport.height
+  );
+}
+
 function buildReadDomScript(include: "interactive" | "all"): string {
   return `const include = ${JSON.stringify(include)};
 const clip = (s, n) => { const t = String(s || "").replace(/\\s+/g, " ").trim(); return t.length > n ? t.slice(0, n) : t; };
@@ -319,7 +355,13 @@ const shortPath = (el) => {
   }
   return parts.join(" > ");
 };
-const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+// R128-W7a: viewport-intersection visibility (domRectIntersectsViewport's
+// in-page twin — keep in lockstep): a non-degenerate box that ALSO
+// intersects the viewport. Transform-hidden off-screen elements (a sidebar
+// at translateX(-100%) keeps its layout box off-screen at negative x) are
+// excluded — the mouse driver clamps to the viewport and can never reach
+// them anyway.
+const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < window.innerWidth && r.top < window.innerHeight; };
 const headings = [];
 for (const h of document.querySelectorAll("h1, h2, h3, h4, h5, h6")) {
   const text = clip(h.textContent, 80);
@@ -497,7 +539,7 @@ export const browserPlugin: PluginDefinition = {
             action: {
               type: "string",
               description:
-                "navigate (open an absolute http(s) URL or a local HTML file — a file:// URL or an absolute local path; docs/source hosts like github.com navigate freely, other hosts ask the owner for permission first) | back | forward | reload (walk that tab's history) | set_viewport (resize the display the user sees — responsive-layout testing) | read (fresh server-side text of the current page; local file:// pages read from disk; works in every mode) | read_dom (structured JSON outline of the LIVE page — title, headings, every visible interactive element with a short CSS selector + text/label/value + x/y/w/h, form field names, and pageState: the URL hash/query + the aria-selected/aria-current tab, so after clicking a section or tab you can re-read and confirm it stuck; include 'all' adds the first 80 text paragraphs) | source (the live page's raw material: html/css/scripts) | click (the cursor visibly travels, hovers, then a full real pointer sequence fires at the element; the result reports where focus moved — a cheap effect check; native desktop mode only) | type (human word-by-word typing with real per-character events — React/Vue inputs register it, a ~1s beat after the focusing click; newlines become real Shift+Enter newlines, never an implicit submit; capped at 600 chars per call — split longer texts; native desktop mode only) | press_key (Enter inside a form triggers native form submission) | mouse (pointer ops at exact page coordinates from read_dom — the cursor visibly travels every path; native desktop mode only) | eval (run JavaScript inside the live page and get the value back — the page's own state, logins and JS included; native desktop mode only) | wait (probe the live page until its conditions hold — always call it after navigate before clicking/typing) | sequence (atomic multi-step chain in ONE call — steps settle automatically between) | screenshot (captures the page at a FIXED 1280×720 capture resolution — independent of the visible browser panel's size, and works even while the tab is hidden or the user is elsewhere in the app; the vision description needs a vision model, the capture alone does not; prefer read/read_dom unless pixels are the question; native desktop mode only) | get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab) | wait_for_verification (bot-wall pause: a countdown card opens in the owner's chat while they solve it, then the page is re-checked honestly)",
+                "navigate (open an absolute http(s) URL or a local HTML file — a file:// URL or an absolute local path; docs/source hosts like github.com navigate freely, other hosts ask the owner for permission first) | back | forward | reload (walk that tab's history) | set_viewport (resize the display the user sees — responsive-layout testing) | read (fresh server-side text of the current page; local file:// pages read from disk; works in every mode) | read_dom (structured JSON outline of the LIVE page — title, headings, every visible interactive element with a short CSS selector + text/label/value + x/y/w/h, form field names, and pageState: the URL hash/query + the aria-selected/aria-current tab, so after clicking a section or tab you can re-read and confirm it stuck; include 'all' adds the first 80 text paragraphs) | source (the live page's raw material: html/css/scripts) | click (the cursor visibly travels, hovers, then a full real pointer sequence fires at the element; the result reports where focus moved — a cheap effect check; native desktop mode only) | type (human word-by-word typing with real per-character events — React/Vue inputs register it, a ~1s beat after the focusing click; newlines become real Shift+Enter newlines, never an implicit submit; capped at 600 chars per call — split longer texts; native desktop mode only) | press_key (Enter inside a form triggers native form submission) | mouse (pointer ops at exact page coordinates from read_dom — the cursor visibly travels every path; native desktop mode only) | eval (run JavaScript inside the live page and get the value back — the page's own state, logins and JS included; native desktop mode only) | wait (probe the live page until its conditions hold — always call it after navigate before clicking/typing) | sequence (atomic multi-step chain in ONE call — steps settle automatically between) | screenshot (captures the page at a FIXED 1280×720 capture resolution — independent of the visible browser panel's size, and works even while the tab is hidden or the user is elsewhere in the app; the vision description needs a vision model, the capture alone does not — pass describe:false for the raw image with no vision pass: use that when you only need the image for the user, or when the vision analysis contradicts DOM evidence, since vision output is advisory, never ground truth; prefer read/read_dom unless pixels are the question; native desktop mode only) | get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab) | wait_for_verification (bot-wall pause: a countdown card opens in the owner's chat while they solve it, then the page is re-checked honestly)",
               enum: [
                 "navigate",
                 "back",
@@ -583,6 +625,16 @@ export const browserPlugin: PluginDefinition = {
               type: "string",
               description:
                 "What to focus on in the vision description (action=screenshot, optional) — e.g. 'describe the checkout form's fields and any validation errors'",
+            },
+            // R128-W7a: the RAW-CAPTURE mode — the ledger's "screenshot
+            // always returns a vision analysis" complaint. describe:false
+            // captures the raster (the chat thumbnail still rides) WITHOUT
+            // the vision pass; the honest note says so. Default true (the
+            // historical behavior).
+            describe: {
+              type: "boolean",
+              description:
+                "action=screenshot: set false to capture WITHOUT the vision description (the image still shows in the owner's chat thumbnail; you get the geometry only) — use it when you only need the image for the user, or when the vision analysis contradicts DOM evidence (vision output is advisory, never ground truth). Default true",
             },
             maxChars: {
               type: "number",
@@ -1757,6 +1809,22 @@ export const browserPlugin: PluginDefinition = {
               // never fabricated, always the honest geometry. R125-A adds
               // the honest SOURCE line ("window capture…" / "screen-region
               // fallback…" — see the staged-path comment above).
+              // ── R128-W7a: the RAW-CAPTURE mode (describe:false) — the ──
+              // ledger's "screenshot always returns a vision analysis"
+              // complaint: the model sometimes needs ONLY the raster (the
+              // image is for the user) or distrusts the vision pass (it
+              // contradicted read_dom evidence — vision output is advisory,
+              // never ground truth). describe:false returns right here:
+              // the geometry + the raster reference + the honest note that
+              // the image was NOT described. relayVision is NEVER called on
+              // this path (pinned).
+              const describe = input.describe !== false; // default true — the historical behavior
+              if (!describe) {
+                return {
+                  ok: true,
+                  output: `Browser panel screenshot captured (${captureNote}, ${raster.width}×${raster.height}px, page ${state.currentUrl}) — shown to the owner in the chat thumbnail, but NOT described (describe:false — the raw capture without a vision pass). Use read / read_dom for the page text; call screenshot with describe:true (the default) when a vision description is wanted.`,
+                };
+              }
               if (!sessionHasVisionPath(toolDeps.db, toolDeps.mainModel)) {
                 return {
                   ok: true,
@@ -1769,9 +1837,13 @@ export const browserPlugin: PluginDefinition = {
                   : "Describe the embedded browser panel in this screenshot: which page/site is open, its visible headline content, main interactive elements, and anything actionable for the task.";
               const vision = await relayVision(toolDeps.db, toolDeps.keyring, toolDeps.mainModel, raster.pngBase64, instruction);
               if (vision.ok) {
+                // R128-W7a: the ADVISORY line — the ledger's entries where the
+                // vision description contradicted read_dom evidence. One
+                // honest line, no redesign: the DOM is ground truth; the
+                // vision pass is advice.
                 return {
                   ok: true,
-                  output: `Browser panel screenshot (${captureNote}, ${raster.width}×${raster.height}px, page ${state.currentUrl}) — vision (${vision.model}) says:\n${vision.text}`,
+                  output: `Browser panel screenshot (${captureNote}, ${raster.width}×${raster.height}px, page ${state.currentUrl}) — vision (${vision.model}) says:\n(advisory vision description — verify against read_dom evidence when it matters)\n${vision.text}`,
                 };
               }
               return {
@@ -1790,16 +1862,55 @@ export const browserPlugin: PluginDefinition = {
               // the tool mints one above (browser-open frame) — so the agent
               // always sees exactly its own tab.
               const state = browserGetStateCommand(sessionId);
+              // ── R128-W7a: RECONCILE the store against the LIVE page ──────
+              // The server-side history only knows what it was TOLD:
+              // navigate pushes entries with title:null, hash navigations
+              // and eval-driven location changes never update it, and native
+              // mode never posts titles — so currentUrl/title could be stale
+              // or null while the user stares at a different page. When a
+              // live panel is mounted (toolDeps.emit — the same gate every
+              // bridge action uses), ONE bounded eval reads the page's own
+              // truth (the navigate wall-probe's 5s pattern) and OVERRIDES
+              // the store's answer; on failure/timeout (no panel mounted, a
+              // wedged page) the store's answer stands verbatim — today's
+              // behavior, never a hang.
+              let currentUrl = state.currentUrl;
+              let title = state.title;
+              if (currentUrl !== null && toolDeps !== undefined && typeof toolDeps.emit === "function") {
+                try {
+                  const data = await sendBrowserCommand(
+                    toolDeps.emit,
+                    sessionId,
+                    "eval",
+                    { script: "return { url: location.href, title: document.title };" },
+                    5_000,
+                  );
+                  const bridgeReply = (data ?? {}) as { ok?: unknown; value?: unknown };
+                  if (bridgeReply.ok === true) {
+                    const live = (bridgeReply.value ?? {}) as { url?: unknown; title?: unknown };
+                    if (typeof live.url === "string" && live.url !== "") currentUrl = live.url;
+                    if (typeof live.title === "string") title = live.title;
+                  }
+                } catch {
+                  // No panel mounted / the page is wedged / the probe timed
+                  // out — the store's answer stands (the honest fallback).
+                }
+              }
               const known = new Set<string>([sessionId]);
               const payload = {
                 ...state,
+                currentUrl,
+                title,
                 activeTab: sessionId,
                 tabs: browserListSessionsCommand()
                   .filter((t) => known.has(t.sessionId))
                   .map((t) => ({
                     sessionId: t.sessionId,
-                    currentUrl: t.currentUrl,
-                    title: t.title,
+                    // The addressed tab's row carries the RECONCILED truth;
+                    // other rows (none today — the scope is this session's
+                    // own tab) would keep the store's.
+                    currentUrl: t.sessionId === sessionId ? currentUrl : t.currentUrl,
+                    title: t.sessionId === sessionId ? title : t.title,
                     viewport: `${t.viewport.width}×${t.viewport.height} @ ${t.viewport.zoom}×${t.viewport.rotate ? " (rotated)" : ""}`,
                   })),
               };

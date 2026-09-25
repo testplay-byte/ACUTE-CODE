@@ -36,6 +36,13 @@
  *   runStreamedAgentTurn integration test pins the runtime's own anchor
  *   construction (the last usage-bearing assistant event → the event
  *   payload + the live meta.compaction frame).
+ *
+ * ROUND-128 (R128-W8) — the ZCode D3/D5 adoption
+ * (agent-ctx/research/zcode-context-compression.md §D3/§D5): the selection
+ * is ROUND-ALIGNED now (the keep window extends back to the oldest kept
+ * assistant round's start — one pin above RE-PINNED honestly for the new
+ * boundary arithmetic; the D3a/D3b/D5 unit + integration pins live in
+ * tests/r128-compaction-d3d5.test.ts).
  */
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
@@ -417,7 +424,7 @@ describe("planCompaction", () => {
     expect(skip.tokenCount).toBe(skip.estimatedTokens);
   });
 
-  it("over budget → summarizes the head, keeps the newest ~60% window, keeps at least the final message", () => {
+  it("over budget → summarizes the head, keeps the newest ~60% window ROUND-ALIGNED, keeps at least the final message", () => {
     const messages = manyPairs(10); // 20 messages ≈ 108 tokens each ≈ 2160 tokens > 800
     const plan = planCompaction(messages, TIGHT_BUDGET);
     expect(plan.decision).toBe("compact");
@@ -432,10 +439,21 @@ describe("planCompaction", () => {
     expect(plan.keep[plan.keep.length - 1]).toBe(messages[messages.length - 1]); // final message kept
     // targetThroughSeq is the seq of the LAST summarized message.
     expect(plan.targetThroughSeq).toBe(plan.toSummarize[plan.toSummarize.length - 1].throughSeq);
-    // The keep window fits the ~60% target (240 tokens) — the loop stops
-    // BEFORE adding an over-target message.
+    // R128-W8 (D3a, RE-PINNED — the selection is round-aligned now): the
+    // byte cut alone fit the ~60% target (240 tokens), but it split the
+    // assistant round [a17, u18] mid-exchange — the boundary walked BACK to
+    // the round start (index 17), so the keep set is [a17, u18, a19]: it
+    // STARTS at an assistant message (no orphaned tool_result tail) and may
+    // exceed the 60% target within the materiality guard (target × 1.25 =
+    // 300) but never the honest budget math the guard bounds it by.
+    expect(plan.keep[0].role).toBe("assistant");
+    expect(plan.keep[0]).toBe(messages[17]); // the round START, not the byte cut at 18
     const keepTokens = plan.keep.reduce((acc, m) => acc + Math.ceil(m.content.length / 4) + 8, 0);
-    expect(keepTokens).toBeLessThanOrEqual(240);
+    expect(keepTokens).toBeLessThanOrEqual(300);
+    // The additive D3a decision fields: round-aligned, two whole assistant
+    // rounds preserved verbatim ([a17,u18] + [a19]).
+    expect(plan.roundAligned).toBe(true);
+    expect(plan.preservedRounds).toBe(2);
     // Summarize + keep covers everything.
     expect(plan.toSummarize.length + plan.keep.length).toBe(messages.length);
   });

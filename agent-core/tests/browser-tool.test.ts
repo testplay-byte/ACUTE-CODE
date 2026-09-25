@@ -35,6 +35,35 @@ import {
   resolveBrowserCheckpoint,
 } from "../src/browser-checkpoint.js";
 import { resetActiveComputerRelayForTest } from "../src/tools/plugins/computer-relay.js";
+// ── ROUND-128 (R128-W7a): the hands script builders (pure string functions) ──
+// — the evalJob return-style law's pins run their exact output through the
+// simulated Rust wrap; also the read_dom visibility predicate.
+import {
+  buildHandsClickScript,
+  buildHandsInstallScript,
+  buildHandsMouseScript,
+  buildHandsPressKeyScript,
+  buildHandsTypeScript,
+} from "../src/tools/plugins/browser-hands.js";
+import { domRectIntersectsViewport } from "../src/tools/plugins/browser.js";
+// R128-W7a: the vision relay fake — the screenshot describe/advisory pins
+// need a CONTROLLED relay (a SUCCESSFUL vision pass is otherwise unreachable
+// without a real model call). The default reply is the honest no-key failure
+// shape the existing pins expect; tests flip visionState.reply for success.
+import * as computerUseModule from "../src/tools/plugins/computer-use.js";
+const visionState = vi.hoisted(() => ({
+  reply: null as { ok: boolean; text?: string; model?: string; mode?: string; ms?: number; error?: string } | null,
+}));
+vi.mock("../src/tools/plugins/computer-use.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/tools/plugins/computer-use.js")>();
+  return {
+    ...actual,
+    relayVision: vi.fn(async () =>
+      visionState.reply ?? { ok: false, error: "no keyring entry for the vision provider" },
+    ),
+  };
+});
+const relayVisionMock = vi.mocked(computerUseModule.relayVision);
 // ── ROUND-98 (R98-G1): the browser screenshot's DECOUPLED capture engine ──
 // The tool no longer borrows the computer-use relay; it calls
 // getCaptureBackend() directly. These tests fake the FACTORY (the same
@@ -143,6 +172,9 @@ beforeEach(async () => {
   resetActiveComputerRelayForTest();
   resetBrowserCheckpointsForTest();
   webFetchMock.mockReset();
+  // R128-W7a: the vision relay fake resets to the honest no-key failure.
+  visionState.reply = null;
+  relayVisionMock.mockClear();
   // R98-G1: fresh capture-engine fake per test (regions/display/errors).
   captureState.regions.length = 0;
   captureState.displayCaptures.length = 0;
@@ -1966,5 +1998,258 @@ describe("browser_control — sequence (R94-F: multi-stage steps in one tool cal
     const result = await bc.execute({ action: "wait", readyState: false, ms: 250, sessionId: "tab-seq-plain" });
     expect(result.ok).toBe(true);
     expect(result.output).toContain("paused 250ms");
+  });
+});
+
+// ── ROUND-128 (R128-W7a): the browser tools wave's pins ───────────────────
+// The owner's 18-entry ledger carried FIVE entries on one failure: every
+// hands action (click/type/press_key/mouse) died with "evalJob: unexpected
+// start payload (no job started) — got: {}" while eval/read_dom/navigate
+// worked fine. Root cause: the hands script builders emitted IIFE
+// EXPRESSION statements, but the Rust browser_tab_eval wrapper turns the
+// script into a FUNCTION BODY and captures only the inner function's RETURN
+// value — an expression statement's value is discarded, the envelope
+// answered value:null, and the panel's `start.value ?? {}` collapsed it to
+// {} before the error. The pins below make the return-style law
+// un-regressable, and pin the wave's other fixes: the raw screenshot mode,
+// the get_state live reconcile, read_dom's viewport-aware visibility, and
+// the advisory vision line.
+
+describe("browser_control — R128-W7a: the return-style script law (the evalJob fix)", () => {
+  it("every hands script builder emits a RETURN-styled script — /^return\\s*\\(function/ (the Rust wrap discards expression-statement values)", () => {
+    expect(buildHandsInstallScript()).toMatch(/^return\s*\(function/);
+    expect(buildHandsClickScript("#a", "", 1)).toMatch(/^return\s*\(function/);
+    expect(buildHandsTypeScript("#q", "hi", false)).toMatch(/^return\s*\(function/);
+    expect(buildHandsPressKeyScript("Enter", "")).toMatch(/^return\s*\(function/);
+    expect(buildHandsMouseScript("click", 10, 20, null, null, null, null)).toMatch(/^return\s*\(function/);
+    // Each still parses as a function BODY (the Rust wrap's contract — the
+    // leading return is only legal in exactly that shape).
+    for (const script of [
+      buildHandsInstallScript(),
+      buildHandsClickScript("#a", "", 1),
+      buildHandsTypeScript("#q", "hi", false),
+      buildHandsPressKeyScript("Enter", ""),
+      buildHandsMouseScript("click", 10, 20, null, null, null, null),
+    ]) {
+      expect(() => new Function(script)).not.toThrow();
+    }
+  });
+
+  it("THE ROUND-TRIP PIN: the click action script, wrapped exactly the way browser.rs wraps it, answers {needInstall:true} on a bare page — NEVER value:null", () => {
+    const script = buildHandsClickScript("#a", "", 1);
+    // The wrap, verbatim from src-tauri/src/browser.rs browser_tab_eval:
+    // function-body semantics, __acute_r capture, JSON envelope.
+    const wrapped = `(function(){try{var __acute_r=(function(){${script}})();return JSON.stringify({ok:true,value:(__acute_r===undefined?null:__acute_r)});}catch(e){return JSON.stringify({ok:false,error:String((e&&(e.message||e))||e)});}})()`;
+    // Node has no DOM — the fake `window` parameter is the minimal global
+    // stub (a page without the hands runtime).
+    const bare: { __acuteHands?: unknown } = {};
+    const envelope = JSON.parse(new Function("window", `return ${wrapped}`)(bare) as string) as { ok: boolean; value?: unknown };
+    expect(envelope).toEqual({ ok: true, value: { needInstall: true } });
+  });
+
+  it("THE ROUND-TRIP PIN (installed page): with a stub runtime the same wrap answers {started:true} — the handshake the pre-R128 shape could never deliver", () => {
+    const script = buildHandsClickScript("#a", "", 1);
+    const wrapped = `(function(){try{var __acute_r=(function(){${script}})();return JSON.stringify({ok:true,value:(__acute_r===undefined?null:__acute_r)});}catch(e){return JSON.stringify({ok:false,error:String((e&&(e.message||e))||e)});}})()`;
+    const handsInstalled: { __acuteHands?: unknown } = {
+      __acuteHands: { startJob: () => {} },
+    };
+    const envelope = JSON.parse(new Function("window", `return ${wrapped}`)(handsInstalled) as string) as { ok: boolean; value?: unknown };
+    expect(envelope).toEqual({ ok: true, value: { started: true } });
+  });
+
+  it("the INSTALLER's round-trip: the install script through the same wrap answers {installed:true} on a page that already has the runtime (the idempotent branch)", () => {
+    const script = buildHandsInstallScript();
+    const wrapped = `(function(){try{var __acute_r=(function(){${script}})();return JSON.stringify({ok:true,value:(__acute_r===undefined?null:__acute_r)});}catch(e){return JSON.stringify({ok:false,error:String((e&&(e.message||e))||e)});}})()`;
+    // The runtime's first line short-circuits on an existing __acuteHands —
+    // the idempotent branch needs no DOM, so the fake window suffices.
+    const already: { __acuteHands?: unknown } = { __acuteHands: { startJob: () => {} } };
+    const envelope = JSON.parse(new Function("window", `return ${wrapped}`)(already) as string) as { ok: boolean; value?: unknown };
+    expect(envelope).toEqual({ ok: true, value: { installed: true, adopted: true } });
+  });
+
+  it("THE ANTI-PIN: the OLD IIFE shape through the same wrap answers value:null — the exact discarded-value mechanism behind the ledger's five failures", () => {
+    // The pre-R128 shape (an expression statement, no leading return) —
+    // kept as the negative control that explains the bug: the inner
+    // function's return value never becomes the wrapper's __acute_r.
+    const oldScript = `(function () {\n  try {\n    if (!window.__acuteHands) return { needInstall: true };\n    return { started: true };\n  } catch (e) { return { error: String((e && e.message) || e) }; }\n})();`;
+    const wrapped = `(function(){try{var __acute_r=(function(){${oldScript}})();return JSON.stringify({ok:true,value:(__acute_r===undefined?null:__acute_r)});}catch(e){return JSON.stringify({ok:false,error:String((e&&(e.message||e))||e)});}})()`;
+    const bare: { __acuteHands?: unknown } = {};
+    const envelope = JSON.parse(new Function("window", `return ${wrapped}`)(bare) as string) as { ok: boolean; value?: unknown };
+    expect(envelope).toEqual({ ok: true, value: null });
+  });
+});
+
+describe("browser_control — R128-W7a: the screenshot's RAW-CAPTURE mode (describe:false) + the advisory line", () => {
+  /** The legacy-path emit: every browser-command resolves with the panel's
+   * screenshot_meta region reply (non-capture-contract replies fall through
+   * to the legacy path — the r98 suite's idiom). */
+  const makeRegionEmit = (region: { x: number; y: number; w: number; h: number }): ((event: unknown) => void) => {
+    return (event: unknown) => {
+      const frame = event as { commandId?: string };
+      if (typeof frame.commandId === "string") {
+        queueMicrotask(() =>
+          resolveBrowserCommand(frame.commandId!, {
+            ok: true,
+            data: { supported: true, region, scaleFactor: 1, mode: "native" },
+          }),
+        );
+      }
+    };
+  };
+
+  it("describe:false captures WITHOUT the vision pass — relayVision is NEVER called; the honest note says NOT described", async () => {
+    // A live vision path is configured (the gate would pass) — the pin is
+    // that describe:false returns BEFORE the relay regardless.
+    const tools = await buildTools(tempDir, { emit: makeRegionEmit({ x: 0, y: 0, w: 640, h: 480 }) });
+    setVisionSettings(db, { mode: "separate", provider: "prov-w7a-raw", modelId: "vision-x" });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/w7a-raw", sessionId: "tool-tab-w7a-raw" });
+    const result = await bc.execute({ action: "screenshot", describe: false, sessionId: "tool-tab-w7a-raw" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("panel region 640×480");
+    expect(result.output).toContain("NOT described");
+    expect(result.output).toContain("describe:false");
+    expect(result.output).toContain("read / read_dom");
+    expect(relayVisionMock).not.toHaveBeenCalled();
+    expect(captureState.regions).toEqual([{ x: 0, y: 0, w: 640, h: 480 }]);
+    expect(captureState.displayCaptures).toEqual([]);
+  });
+
+  it("describe omitted (the default) keeps the vision path as today — the relay runs and the ADVISORY line rides a successful description", async () => {
+    visionState.reply = {
+      ok: true,
+      text: "A checkout form with two filled fields and a disabled Continue button.",
+      model: "vision-x",
+      mode: "separate",
+      ms: 12,
+    };
+    const tools = await buildTools(tempDir, { emit: makeRegionEmit({ x: 0, y: 0, w: 640, h: 480 }) });
+    setVisionSettings(db, { mode: "separate", provider: "prov-w7a-adv", modelId: "vision-x" });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/w7a-adv", sessionId: "tool-tab-w7a-adv" });
+    const result = await bc.execute({ action: "screenshot", sessionId: "tool-tab-w7a-adv" });
+    expect(result.ok).toBe(true);
+    expect(relayVisionMock).toHaveBeenCalledTimes(1);
+    // ITEM 5: the advisory line rides every successful vision description.
+    expect(result.output).toContain("(advisory vision description — verify against read_dom evidence when it matters)");
+    expect(result.output).toContain("vision (vision-x) says:");
+    expect(result.output).toContain("checkout form");
+  });
+});
+
+describe("browser_control — R128-W7a: get_state reconciles the store against the LIVE page", () => {
+  it("emit present + a live page answer → ONE bounded eval overrides the store's stale currentUrl and null title", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { type?: string; commandId?: string };
+      if (frame.type === "browser-command" && typeof frame.commandId === "string") {
+        queueMicrotask(() =>
+          resolveBrowserCommand(frame.commandId!, {
+            ok: true,
+            data: { ok: true, value: { url: "https://en.wikipedia.org/wiki/Checkout#step-2", title: "Checkout — Step 2" } },
+          }),
+        );
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    // navigate pushes the store entry with title:null — the stale state.
+    // (en.wikipedia.org is on the default documentation allowlist — no
+    // approval channel rides these tests.)
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/wiki/Checkout", sessionId: "tool-tab-w7a-gs" });
+    const state = JSON.parse((await bc.execute({ action: "get_state", sessionId: "tool-tab-w7a-gs" })).output) as {
+      currentUrl: string;
+      title: string | null;
+      tabs: Array<{ currentUrl: string; title: string | null }>;
+    };
+    // The LIVE page's truth won: the hash navigation the store never saw,
+    // plus the real title (navigate's entries carry title:null).
+    expect(state.currentUrl).toBe("https://en.wikipedia.org/wiki/Checkout#step-2");
+    expect(state.title).toBe("Checkout — Step 2");
+    expect(state.tabs[0]?.currentUrl).toBe("https://en.wikipedia.org/wiki/Checkout#step-2");
+    expect(state.tabs[0]?.title).toBe("Checkout — Step 2");
+  });
+
+  it("emit ABSENT (no panel mounted) → the store's answer stands verbatim — today's behavior, never a hang", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/wiki/Plain", sessionId: "tool-tab-w7a-gs2" });
+    const state = JSON.parse((await bc.execute({ action: "get_state", sessionId: "tool-tab-w7a-gs2" })).output) as {
+      currentUrl: string;
+      title: string | null;
+    };
+    expect(state.currentUrl).toBe("https://en.wikipedia.org/wiki/Plain");
+    expect(state.title).toBeNull();
+  });
+
+  it("a probe that answers a NON-string url keeps the store's answer (the honest fallback, never a guessed override)", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { type?: string; commandId?: string };
+      if (frame.type === "browser-command" && typeof frame.commandId === "string") {
+        queueMicrotask(() =>
+          resolveBrowserCommand(frame.commandId!, { ok: true, data: { ok: true, value: { markers: [] } } }),
+        );
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/wiki/Fallback", sessionId: "tool-tab-w7a-gs3" });
+    const state = JSON.parse((await bc.execute({ action: "get_state", sessionId: "tool-tab-w7a-gs3" })).output) as {
+      currentUrl: string;
+      title: string | null;
+    };
+    expect(state.currentUrl).toBe("https://en.wikipedia.org/wiki/Fallback");
+    expect(state.title).toBeNull();
+  });
+});
+
+describe("browser_control — R128-W7a: read_dom's viewport-aware visibility", () => {
+  it("domRectIntersectsViewport (the pure predicate): a transform-hidden off-screen rect (x:-270 sidebar) is EXCLUDED; on-screen and edge-straddling rects pass", () => {
+    const viewport = { width: 1280, height: 720 };
+    // The ledger's exact shape: a sidebar at translateX(-100%) keeps its
+    // layout box fully left of the viewport (right edge still ≤ 0).
+    expect(
+      domRectIntersectsViewport({ width: 200, height: 600, left: -270, top: 60, right: -70, bottom: 660 }, viewport),
+    ).toBe(false);
+    // A plain on-screen rect.
+    expect(
+      domRectIntersectsViewport({ width: 200, height: 40, left: 100, top: 100, right: 300, bottom: 140 }, viewport),
+    ).toBe(true);
+    // Straddling the right edge — still partially visible → interactive.
+    expect(
+      domRectIntersectsViewport({ width: 200, height: 40, left: 1200, top: 10, right: 1400, bottom: 50 }, viewport),
+    ).toBe(true);
+    // Fully below the fold → excluded (the driver scrolls first; read_dom
+    // reports it after the scroll re-runs).
+    expect(
+      domRectIntersectsViewport({ width: 200, height: 40, left: 100, top: 800, right: 300, bottom: 840 }, viewport),
+    ).toBe(false);
+    // Degenerate boxes stay excluded (the old law).
+    expect(
+      domRectIntersectsViewport({ width: 0, height: 40, left: 10, top: 10, right: 10, bottom: 50 }, viewport),
+    ).toBe(false);
+  });
+
+  it("the read_dom page script inlines the SAME viewport-intersection terms (the lockstep pin)", async () => {
+    const scripts: string[] = [];
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload: { script?: string } };
+      scripts.push(String(frame.payload.script ?? ""));
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { title: "T", url: "https://example.com/", headings: [], interactive: [], forms: [] } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "read_dom", sessionId: "tab-w7a-vis" });
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]).toContain("r.right > 0");
+    expect(scripts[0]).toContain("r.bottom > 0");
+    expect(scripts[0]).toContain("r.left < window.innerWidth");
+    expect(scripts[0]).toContain("r.top < window.innerHeight");
+    // The script still parses as a function body (the Rust wrap's contract).
+    expect(() => new Function(scripts[0])).not.toThrow();
   });
 });

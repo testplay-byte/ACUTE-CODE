@@ -473,6 +473,7 @@ describe("AboutTab R99-C/R104: the two-stage update hand-shake", () => {
         expect(invoke).toHaveBeenCalledWith("run_update_installer", {
           path: "C:\\Temp\\ACUTE-CODE_0.87.0_x64-setup.exe",
           silent: true,
+          version: "0.87.0",
         });
       },
       { timeout: 6_000 },
@@ -485,6 +486,12 @@ describe("AboutTab R99-C/R104: the two-stage update hand-shake", () => {
       { timeout: 6_000 },
     );
     expect(screen.getByTestId("update-launched").textContent).toContain("your data is kept");
+    // R128-W1: the honest supervisor line under the terminal copy — the
+    // owner's "it did not auto-start at all" incident is answered by a
+    // process OUTSIDE the app, and the card says so plainly.
+    expect(screen.getByTestId("update-supervisor-line").textContent).toBe(
+      "An external supervisor guarantees the restart — even if the window closes.",
+    );
     // R101-B: the hand-off flag armed BEFORE the invoke (the ConnectionGate
     // shows the Restarting splash from the moment the kill starts) — and it
     // STAYS armed: the app is exiting, nothing clears it on the success leg.
@@ -492,6 +499,60 @@ describe("AboutTab R99-C/R104: the two-stage update hand-shake", () => {
     // One download for the whole journey — the confirm reuses the staged
     // file, never re-streaming it.
     expect(vi.mocked(startUpdateDownload)).toHaveBeenCalledTimes(1);
+  });
+
+  it("R128-W1: the INSTALLING state carries the supervisor line too (the belt copy is on the card before the invoke even answers)", async () => {
+    mockAvailableRelease();
+    mockDownloadSequence();
+    // A DEFERRED invoke — the card is pinned while the Rust command is
+    // still running (the exact window the supervisor line addresses: the
+    // app may close at ANY moment of the install, not just after launch).
+    let releaseInvoke: () => void = () => {};
+    const invoke = vi.fn().mockImplementation(
+      () => new Promise<void>((resolve) => (releaseInvoke = resolve)),
+    );
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = { core: { invoke } };
+    renderWithProviders(<AboutTab />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("update-download-button")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("update-download-button"));
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-staged").textContent).toContain("ready to install");
+      },
+      { timeout: 6_000 },
+    );
+    fireEvent.click(screen.getByTestId("update-install-button"));
+
+    // The invoke is pending — the card sits in the INSTALLING state and
+    // the honest supervisor subline is ALREADY there (the same single
+    // sentence the launched leg carries; silent installs only).
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-installing")).toBeTruthy();
+      },
+      { timeout: 6_000 },
+    );
+    expect(screen.getByTestId("update-supervisor-line").textContent).toBe(
+      "An external supervisor guarantees the restart — even if the window closes.",
+    );
+    expect(invoke).toHaveBeenCalledWith("run_update_installer", {
+      path: "C:\\Temp\\ACUTE-CODE_0.87.0_x64-setup.exe",
+      silent: true,
+      version: "0.87.0",
+    });
+    // Release the invoke — the card advances to the launched line (no
+    // dangling pending state for the next test's cleanup).
+    releaseInvoke();
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("update-launched").textContent).toContain("Restarting into v0.87.0");
+      },
+      { timeout: 6_000 },
+    );
   });
 
   it("R104: the Linux AppImage leg — the staged aarch64.AppImage invokes the same command, and a REJECTED replace shows the honest error with NO wizard fallback", async () => {
@@ -553,6 +614,7 @@ describe("AboutTab R99-C/R104: the two-stage update hand-shake", () => {
         expect(invoke).toHaveBeenCalledWith("run_update_installer", {
           path: "/tmp/ACUTE-CODE_0.87.0_aarch64.AppImage",
           silent: true,
+          version: "0.87.0",
         });
       },
       { timeout: 6_000 },
@@ -605,6 +667,7 @@ describe("AboutTab R99-C/R104: the two-stage update hand-shake", () => {
         expect(invoke).toHaveBeenCalledWith("run_update_installer", {
           path: "/tmp/ACUTE-CODE_" + NEWER_VERSION + "_x64-setup.exe",
           silent: true,
+          version: NEWER_VERSION,
         });
       },
       { timeout: 6_000 },
@@ -774,6 +837,7 @@ describe("AboutTab R99-C/R104: the two-stage update hand-shake", () => {
         expect(invoke).toHaveBeenCalledWith("run_update_installer", {
           path: "C:\\Temp\\ACUTE-CODE_0.87.0_x64-setup.exe",
           silent: false,
+          version: "0.87.0",
         });
       },
       { timeout: 6_000 },

@@ -565,7 +565,11 @@ function VersionCard() {
       // A refusing storage quota never blocks the install itself.
     }
     try {
-      await invoke("run_update_installer", { path, silent });
+      // R128-W1: `version` rides down to the Rust command so the external
+      // supervisor's log lines + completion toast can name the release it
+      // is restarting into (Option<String> on the Rust side — a caller
+      // without a version simply omits it).
+      await invoke("run_update_installer", { path, silent, version });
       setInstall({ kind: "launched", version, silent });
     } catch (err) {
       // The engine died for nothing — bring it back before anything else.
@@ -1048,26 +1052,56 @@ function VersionCard() {
                  silent install's long quiet stretch now READS as working
                  (the overlay flow keeps the Restarting splash alive for the
                  whole install on Windows; this line is the card's own
-                 belt while the splash takes over). */
-              <span
-                className="text-[11px] font-medium inline-flex items-center gap-1.5"
-                style={{ color: styles.textSecondary }}
-                data-testid="update-installing"
-              >
-                <Loader2 size={13} className="animate-spin text-accent-deep" />
-                {install.silent
-                  ? "Installing — the app restarts itself when ready"
-                  : "Launching the setup wizard — it closes this app and takes over"}
-              </span>
+                 belt while the splash takes over). R128-W1: + the honest
+                 supervisor subline (see the launched state's copy). */
+              <div className="flex flex-col gap-1">
+                <span
+                  className="text-[11px] font-medium inline-flex items-center gap-1.5"
+                  style={{ color: styles.textSecondary }}
+                  data-testid="update-installing"
+                >
+                  <Loader2 size={13} className="animate-spin text-accent-deep" />
+                  {install.silent
+                    ? "Installing — the app restarts itself when ready"
+                    : "Launching the setup wizard — it closes this app and takes over"}
+                </span>
+                {install.silent && (
+                  <span
+                    className="text-[11px]"
+                    style={{ color: styles.textTertiary }}
+                    data-testid="update-supervisor-line"
+                  >
+                    An external supervisor guarantees the restart — even if the window closes.
+                  </span>
+                )}
+              </div>
             ) : install.kind === "launched" ? (
-              <span
-                className="text-[11px] font-semibold text-success-deep"
-                data-testid="update-launched"
-              >
-                {install.silent
-                  ? `Restarting into v${install.version} — your data is kept.`
-                  : `Installer launched — the setup wizard will close this app and install v${install.version}. Your data is kept.`}
-              </span>
+              <div className="flex flex-col gap-1">
+                <span
+                  className="text-[11px] font-semibold text-success-deep"
+                  data-testid="update-launched"
+                >
+                  {install.silent
+                    ? `Restarting into v${install.version} — your data is kept.`
+                    : `Installer launched — the setup wizard will close this app and install v${install.version}. Your data is kept.`}
+                </span>
+                {/* R128-W1: the honest supervisor line — the owner's v0.120.0
+                    incident ("it closed properly… but then it did not
+                    auto-start at all") is answered by a process OUTSIDE the
+                    app, so the copy says so: even a closed window leaves the
+                    restart guaranteed. The quiet meta voice (textTertiary),
+                    silent-installs only — the interactive wizard is the
+                    owner's own hands-on flow. */}
+                {install.silent && (
+                  <span
+                    className="text-[11px]"
+                    style={{ color: styles.textTertiary }}
+                    data-testid="update-supervisor-line"
+                  >
+                    An external supervisor guarantees the restart — even if the window closes.
+                  </span>
+                )}
+              </div>
             ) : (
               <div className="flex flex-col gap-2">
                 <span

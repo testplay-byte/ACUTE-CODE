@@ -19,7 +19,13 @@
 import { jsonSchema } from "ai";
 import { readdirSync } from "node:fs";
 import { searchCode, searchFiles } from "../fs-ops.js";
-import { getIndexedAt, parseSqliteTs, reindexProject, searchIndexSymbols } from "../../storage/index.js";
+import {
+  getIndexedAt,
+  parseSqliteTs,
+  reindexProject,
+  searchIndexSymbols,
+  type IndexSymbolSearchResult,
+} from "../../storage/index.js";
 import { AUTO_INDEX_STALE_MS } from "../../storage/auto-index.js";
 import type { PluginDefinition, ToolDefinition } from "../registry.js";
 
@@ -151,7 +157,7 @@ export const searchPlugin: PluginDefinition = {
         // Honest staleness language in the RESULT (not the description): the
         // built-at timestamp + the index_project pointer when stale.
         description:
-          "Search the project's SYMBOL INDEX for WHERE things are DEFINED (not file contents — that is search_code): query is a case-insensitive PREFIX of a symbol name; optional kind filter (function | class | const | variable | import | type | interface); each row shows path:line [kind] symbol — signature (the defining source line). Try this BEFORE search_code when hunting a definition or recall — the index answers without walking the tree. The result carries the index's built-at timestamp and an honest stale note; call index_project to force a full refresh (the index also refreshes automatically in the background and per-file after edits).",
+          "Search the project's SYMBOL INDEX for WHERE things are DEFINED (not file contents — that is search_code): query is a case-insensitive PREFIX of a symbol name (when no symbol starts with it, a substring fallback runs and the result says so); optional kind filter (function | class | const | variable | import | type | interface); each row shows path:line [kind] symbol — signature (the defining source line). Try this BEFORE search_code when hunting a definition or recall — the index answers without walking the tree. The result carries the index's built-at timestamp and an honest stale note; call index_project to force a full refresh (the index also refreshes automatically in the background and per-file after edits).",
         inputSchema: jsonSchema({
           type: "object",
           properties: {
@@ -184,7 +190,16 @@ export const searchPlugin: PluginDefinition = {
           const limitRaw = typeof input.limit === "number" ? input.limit : 50;
           const limit =
             Number.isInteger(limitRaw) && limitRaw >= 1 ? Math.min(200, limitRaw) : 50;
-          const rows = searchIndexSymbols(toolDeps.db, toolDeps.projectId, query, limit, kind);
+          const rows: IndexSymbolSearchResult = searchIndexSymbols(toolDeps.db, toolDeps.projectId, query, limit, kind);
+          // R128-W7b (FIX 9): the match-mode truth — prefix hits render exactly
+          // as before (no note); contains-fallback hits say so on ONE line so
+          // the mode is honest; a still-empty contains fallback gets the
+          // teaching hint instead of a bare "(no matching symbols)".
+          const matchMode = rows.matchMode;
+          const containsNote =
+            matchMode === "contains" && rows.length > 0
+              ? `(${rows.length} symbol${rows.length === 1 ? "" : "s"} match by substring — symbol search is prefix-first)\n`
+              : "";
           // The HONEST freshness header: the built-at timestamp from the rows
           // themselves (MAX(ts)), plus the stale/empty note when the index is
           // older than the auto-index horizon or has nothing for this project
@@ -225,8 +240,22 @@ export const searchPlugin: PluginDefinition = {
               `note: the index is stale (built at ${indexedAtMs !== null ? new Date(indexedAtMs).toISOString() : indexedAt}, ` +
               `more than 10 minutes ago) — call index_project to refresh it; edits re-index touched files automatically`;
           }
-          const body = lines.length > 0 ? lines.join("\n") : "(no matching symbols)";
-          return { ok: true, output: note !== "" ? `${header}\n${body}\n${note}` : `${header}\n${body}` };
+          // R128-W7b (FIX 9): the still-empty body teaches the matching model
+          // (prefix-first + the contains fallback) and points at search_code
+          // for CONTENT search — the ledger's "0 matches, no hint" complaint.
+          const body =
+            lines.length > 0
+              ? lines.join("\n")
+              : matchMode === "contains"
+                ? "(no matching symbols — matching is PREFIX-first with a contains fallback; for content search use search_code)"
+                : "(no matching symbols)";
+          return {
+            ok: true,
+            output:
+              note !== ""
+                ? `${header}\n${containsNote}${body}\n${note}`
+                : `${header}\n${containsNote}${body}`,
+          };
         },
       },
     ];

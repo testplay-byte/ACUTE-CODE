@@ -2,7 +2,9 @@
 /**
  * ROUND-98 (R98-J) — the desktop-notification BRIDGE unit pins:
  *  · web-mode no-op (no window.__TAURI__ ⇒ nothing is ever invoked);
- *  · the VISIBILITY rule (visible document ⇒ no fire; hidden ⇒ fire);
+ *  · the VISIBILITY rule (visible document ⇒ no fire; hidden ⇒ fire) —
+ *    with the R128-W1 EXCEPTION: update_installed (a completion
+ *    confirmation) is allowed through while visible;
  *  · the permission flow (granted fires; denied skips without throwing;
  *    null requests ONCE and honors the result);
  *  · the SETTINGS gate (the in-memory enabled flag suppresses everything);
@@ -20,7 +22,7 @@ interface BridgeModule {
   notifyDesktop: (input: {
     title: string;
     body?: string;
-    kind: "task_complete" | "task_failed" | "permission_request";
+    kind: "task_complete" | "task_failed" | "permission_request" | "update_installed";
   }) => Promise<void>;
   initDesktopNotifications: () => void;
   setDesktopNotificationsEnabled: (value: boolean) => void;
@@ -102,6 +104,24 @@ describe("R98-J: the desktop-notifications bridge", () => {
 
     stubTauri(invoke, "hidden");
     await bridge.notifyDesktop({ title: "Task complete", body: "done", kind: "task_complete" });
+    expect(notifyCalls).toHaveLength(1);
+  });
+
+  it("R128-W1: update_installed is the ONE kind allowed through while VISIBLE (a completion confirmation, not an interruption nudge)", async () => {
+    const bridge = await freshBridge();
+    const { invoke, notifyCalls } = makeInvoke();
+    stubTauri(invoke, "visible");
+
+    await bridge.notifyDesktop({
+      title: "ACUTE-CODE updated",
+      body: "Now running v0.121.0 — your data is kept",
+      kind: "update_installed",
+    });
+    expect(notifyCalls).toEqual([
+      { options: { title: "ACUTE-CODE updated", body: "Now running v0.121.0 — your data is kept" } },
+    ]);
+    // The exception is NARROW: the task kinds stay gated while visible.
+    await bridge.notifyDesktop({ title: "Task complete", kind: "task_complete" });
     expect(notifyCalls).toHaveLength(1);
   });
 

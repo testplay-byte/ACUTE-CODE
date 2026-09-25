@@ -34,6 +34,14 @@ const connectionMock = vi.hoisted(() => ({
 
 vi.mock("../../lib/sidecar-connection", () => connectionMock);
 
+// R128-W1: the update's OS-level completion confirmation — mocked so the
+// real plugin bridge never runs inside these DOM tests.
+const notificationsMock = vi.hoisted(() => ({
+  notifyDesktop: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../../lib/desktop-notifications", () => notificationsMock);
+
 // AcuteLogo lives in Sidebar (a heavy module) — stub the import.
 vi.mock("./Sidebar", () => ({
   AcuteLogo: () => <div data-testid="acute-logo" />,
@@ -289,6 +297,62 @@ describe("ConnectionGate — R118-F the update-restart marker", () => {
     );
     expect(screen.queryByTestId("update-setup-splash")).toBeNull();
     expect(screen.getByRole("status").textContent).toContain("Connecting to agent-core");
+  });
+
+  it("R128-W1: consuming a VALID marker fires the update_installed OS notification ONCE — and later reconnects never refire it", async () => {
+    writeMarker(APP_VERSION);
+    useConfigStore.setState({ connection: "connecting" });
+    const { rerender } = render(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    // The sidecar answers → the marker is consumed → the completion
+    // confirmation goes to the OS (the owner's "it did not show me any
+    // system or anything" report) with the exact pinned copy.
+    useConfigStore.setState({ connection: "connected" });
+    rerender(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    await waitFor(() => {
+      expect(notificationsMock.notifyDesktop).toHaveBeenCalledTimes(1);
+    });
+    expect(notificationsMock.notifyDesktop).toHaveBeenCalledWith({
+      kind: "update_installed",
+      title: "ACUTE-CODE updated",
+      body: `Now running v${APP_VERSION} — your data is kept`,
+    });
+    // A later offline→connected cycle never refires (the one-shot marker +
+    // the mount-scoped state can both only ever reach consumption once).
+    useConfigStore.setState({ connection: "connecting" });
+    rerender(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    useConfigStore.setState({ connection: "connected" });
+    rerender(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    expect(notificationsMock.notifyDesktop).toHaveBeenCalledTimes(1);
+  });
+
+  it("R128-W1: a marker that never VALIDATES (the install failed — this build is not the version it names) fires NO notification", () => {
+    writeMarker("0.0.0-old");
+    render(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+    // The bad key is removed at mount (the validation's own removal) and
+    // the consumption effect never sees a marker — no toast over a failed
+    // install (that would be a lie).
+    expect(window.localStorage.getItem(MARKER_KEY)).toBeNull();
+    expect(notificationsMock.notifyDesktop).not.toHaveBeenCalled();
   });
 
   it("a marker for a DIFFERENT version is removed + ignored (a stale marker means the install failed)", () => {

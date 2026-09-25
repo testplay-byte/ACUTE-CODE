@@ -99,18 +99,90 @@ function walkDir(absBase: string, relative: string, depth: number): TreeNode[] {
 /**
  * Resolve a user/model-supplied relative path inside the root.
  * Returns the absolute path, or an error string when containment fails.
+ *
+ * ROUND-128 (R128-W7b, FIX 1): an ABSOLUTE path (posix `/…` or a Windows
+ * drive-letter `C:\…`/`C:/…`) that lives INSIDE the root is now REBASED to
+ * its root-relative form instead of being rejected outright — the owner's
+ * ledger complaint was the agent repeatedly handing `read_file` the full
+ * Windows path of a file it had just seen in a tool result ("path must be
+ * RELATIVE to the project root (got 'C:\Users\…')"). The containment law is
+ * UNCHANGED in strength: a rebased path still walks the exact
+ * `..`-escape check below, and an absolute path that lands OUTSIDE the root
+ * is still refused — now with an error that NAMES the root (and shows a
+ * rebased example of the relative shape) instead of the bare scold. The
+ * comparison is case-insensitive (Windows paths are, and the root and the
+ * supplied path always come from the same OS).
  */
 export function resolveInsideRoot(root: string, relative: string): { abs: string } | { error: string } {
   const cleaned = relative.trim().replaceAll("\\", "/");
   if (cleaned === "" || cleaned === ".") return { abs: root };
   if (isAbsolute(cleaned) || /^[a-zA-Z]:/.test(cleaned)) {
-    return { error: `path must be RELATIVE to the project root (got '${relative}')` };
+    // R128-W7b: try to REBASE the absolute path onto the root before
+    // rejecting — `C:\root\src\a.ts` with root `C:\root` resolves to
+    // `src/a.ts` and reads fine.
+    const rebased = rebaseAbsoluteUnderRoot(root, cleaned);
+    if (rebased !== null) {
+      const normalized = posix.normalize(rebased);
+      if (!(normalized.startsWith("..") || normalized === ".." || normalized.includes("../"))) {
+        if (normalized === "." || normalized === "") return { abs: root };
+        return { abs: join(root, ...normalized.split("/")) };
+      }
+    }
+    return { error: absolutePathError(root, relative, cleaned) };
   }
   const normalized = posix.normalize(cleaned);
   if (normalized.startsWith("..") || normalized === ".." || normalized.includes("../")) {
     return { error: `path escapes the project root (got '${relative}')` };
   }
   return { abs: join(root, ...normalized.split("/")) };
+}
+
+/** R128-W7b (FIX 1): the root's own normalized, comparable form — forward
+ * slashes, trailing separators trimmed, case PRESERVED (the slice below must
+ * keep the supplied path's casing; only the CONTAINMENT test lowercases). */
+function normalizedRootPath(root: string): string {
+  let norm = root.replaceAll("\\", "/");
+  while (norm.length > 1 && norm.endsWith("/")) norm = norm.slice(0, -1);
+  return norm;
+}
+
+/** R128-W7b (FIX 1): rebase an absolute (posix or drive-letter) path onto
+ * the root. Returns the ROOT-RELATIVE path when the absolute path is inside
+ * the root (case-insensitive prefix match on the `/` boundary), "" when it
+ * IS the root, and null when it is outside (or on a different drive). */
+function rebaseAbsoluteUnderRoot(root: string, cleaned: string): string | null {
+  const rootNorm = normalizedRootPath(root);
+  if (rootNorm === "") return null; // a degenerate root cannot rebase
+  const rootLower = rootNorm.toLowerCase();
+  const pathLower = cleaned.toLowerCase();
+  if (pathLower === rootLower) return "";
+  if (pathLower.startsWith(`${rootLower}/`)) return cleaned.slice(rootNorm.length + 1);
+  return null;
+}
+
+/** R128-W7b (FIX 1): the improved refusal for an absolute path that is NOT
+ * inside the root — it NAMES the root so the model can rebase by itself,
+ * and shows a rebased EXAMPLE of the relative shape when one is computable
+ * (same drive / both posix); otherwise the historic PREFIX stands with the
+ * root still named (successor-audit amendment — the letter wants the root
+ * named on EVERY refusal, and a different-drive escape is exactly when the
+ * model most needs to see where "inside" starts). */
+function absolutePathError(root: string, relative: string, cleaned: string): string {
+  let example: string | null = null;
+  const rootNorm = normalizedRootPath(root);
+  const sameShape =
+    (rootNorm.startsWith("/") && cleaned.startsWith("/")) ||
+    (/^[a-z]:\//i.test(rootNorm) && /^[a-z]:\//i.test(cleaned) &&
+      rootNorm.slice(0, 2).toLowerCase() === cleaned.slice(0, 2).toLowerCase());
+  if (sameShape) {
+    const rel = posix.relative(rootNorm.toLowerCase(), cleaned.toLowerCase());
+    const tail = rel.split("/").filter((seg) => seg !== "" && seg !== "." && seg !== "..");
+    const lastTwo = tail.slice(-2).join("/");
+    if (lastTwo !== "") example = lastTwo;
+  }
+  return example !== null
+    ? `path must be INSIDE the project root '${root}' (got '${relative}') — use a path relative to the project root, e.g. '${example}'`
+    : `path must be RELATIVE to the project root '${root}' (got '${relative}')`;
 }
 
 function toRelative(root: string, abs: string): string {
@@ -571,29 +643,87 @@ function applyEditOp(
  * 128KB whole-file budget), and echoes the FIRST LINE of the missed anchor
  * (truncated to ~80 chars, with an honest "…" when clipped) so the miss is
  * diagnosable from the error alone. Shared by the single-edit and batch
- * forms so the recovery language never drifts between them. */
-function notFoundRecipe(relative: string, oldString: string): string {
+ * forms so the recovery language never drifts between them.
+ *
+ * ROUND-128 (R128-W7b, FIX 5): the recipe gained LINE NUMBERS + CONTEXT.
+ * The ledger complaint: "oldString not found — NO changes were applied"
+ * with no location — the model could not tell WHERE the anchor had drifted.
+ * When the caller threads the CURRENT file content in, the recipe appends
+ * the closest-match facts (ADDITIVE — every pinned phrase above is
+ * byte-identical, the new tail only ever follows `you tried to match: "…"`):
+ *   (a) the anchor's first line found verbatim (trimmed) on some file line
+ *       → that line number + the drift explanation;
+ *   (b) else the line with the highest whitespace-token overlap (≥40% of
+ *       the anchor's tokens) → `closest match: line N: "<first 60 chars>"`;
+ *   (c) else the file's line count, so the model can pick a sane offset. */
+function notFoundRecipe(relative: string, oldString: string, content?: string): string {
   const firstLine = oldString.split("\n")[0] ?? "";
   const echo = firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine;
-  return (
+  const base =
     `oldString not found in '${relative}' — the file may have changed since your last read; ` +
     `re-read JUST the region (read_file with offset/limit around where you expected it, or the whole file — ` +
     `files under 128KB return whole in one call) and re-anchor on CURRENT content; ` +
-    `you tried to match: "${echo}"`
+    `you tried to match: "${echo}"`;
+  if (content === undefined) return base;
+  const closest = closestAnchorLine(content, oldString);
+  return closest === null ? base : `${base}\n${closest}`;
+}
+
+/** R128-W7b (FIX 5): the closest-match line fact for the not-found recipe —
+ * (a) exact first-line hit, (b) best token-overlap hit, (c) the line count.
+ * Returns null only when the content is unreadable as lines (never in
+ * practice — the caller read it from disk). */
+function closestAnchorLine(content: string, oldString: string): string | null {
+  const lines = content.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop(); // cat -n semantics
+  const totalLines = lines.length;
+  const firstLine = (oldString.split("\n")[0] ?? "").trim();
+  if (firstLine !== "") {
+    // (a) exact first-line hit: the anchor STARTS right, then drifted.
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim() === firstLine) {
+        return `the file's line ${i + 1} starts with the same first line — the anchor likely drifted below/above it`;
+      }
+    }
+  }
+  // (b) token overlap: the anchor's whitespace tokens vs each line's; the
+  // best line with ≥40% of the anchor's tokens shared is the closest match.
+  const anchorTokens = new Set(
+    oldString.toLowerCase().split(/\s+/).filter((t) => t !== ""),
   );
+  if (anchorTokens.size > 0) {
+    let bestLine = -1;
+    let bestShared = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const lineTokens = new Set(lines[i].toLowerCase().split(/\s+/).filter((t) => t !== ""));
+      let shared = 0;
+      for (const token of anchorTokens) if (lineTokens.has(token)) shared++;
+      if (shared > bestShared) {
+        bestShared = shared;
+        bestLine = i;
+      }
+    }
+    if (bestLine >= 0 && bestShared / anchorTokens.size >= 0.4) {
+      const text = lines[bestLine].trim().slice(0, 60);
+      return `closest match: line ${bestLine + 1}: "${text}"`;
+    }
+  }
+  // (c) nothing close — at least name the file's size so the next read is sane.
+  return `the file has ${totalLines} line${totalLines === 1 ? "" : "s"} — no close match for the anchor was found`;
 }
 
 /** The single-edit diagnostic for a structured anchor error (the R71 pins:
  * "edit failed: oldString not found in 'x'" / "edit failed: oldString matches
  * N times in 'x' — provide a longer unique anchor" — the ambiguous forms
  * stay byte-exact; R127-W6 extends the not-found form with the recovery
- * recipe + the truncated anchor echo, keeping the historic PREFIX). */
-function singleEditError(error: EditOpError, relative: string, oldString: string): string {
+ * recipe + the truncated anchor echo, keeping the historic PREFIX;
+ * R128-W7b adds the closest-match line facts when the content is known). */
+function singleEditError(error: EditOpError, relative: string, oldString: string, content?: string): string {
   switch (error.kind) {
     case "empty-anchor":
       return `edit failed: oldString is empty — copy the exact text to replace (read_file the region first)`;
     case "not-found":
-      return `edit failed: ${notFoundRecipe(relative, oldString)}`;
+      return `edit failed: ${notFoundRecipe(relative, oldString, content)}`;
     case "ambiguous":
       return error.normalized
         ? `edit failed: oldString matches ${error.occurrences} times after whitespace normalization in '${relative}' — provide a longer unique anchor`
@@ -657,8 +787,10 @@ export function editFile(
   if (!applied.ok) {
     // The exact historic PREFIX (pinned by the R71 suites — the streak
     // machinery keys on the "edit failed:" prefix); R127-W6 extends the
-    // not-found body with the recovery recipe + the anchor echo.
-    return { ok: false, output: singleEditError(applied.error, relative, oldString) };
+    // not-found body with the recovery recipe + the anchor echo; R128-W7b
+    // threads the CURRENT content in so the recipe also names the closest
+    // matching line (the no-location ledger complaint).
+    return { ok: false, output: singleEditError(applied.error, relative, oldString, content) };
   }
   writeFileSync(resolved.abs, applied.content, "utf8");
   const linesAdded = lineCount(newString);
@@ -720,12 +852,15 @@ export function editFileMulti(root: string, relative: string, edits: EditOp[]): 
       const others = edits.length - 1;
       // R127-W6: the not-found reason carries the SAME recovery recipe +
       // anchor echo as the single-edit form (notFoundRecipe) so a failed
-      // batch op is as diagnosable as a failed single edit.
+      // batch op is as diagnosable as a failed single edit. R128-W7b: the
+      // EVOLVING batch content threads in too — the closest-match line facts
+      // name where the anchor drifted against the content the batch has
+      // produced so far (every earlier op already applied in `working`).
       const reason =
         applied.error.kind === "empty-anchor"
           ? "oldString is empty — copy the exact text to replace"
           : applied.error.kind === "not-found"
-            ? notFoundRecipe(relative, op.oldString)
+            ? notFoundRecipe(relative, op.oldString, working)
             : applied.error.normalized
               ? `oldString matches ${applied.error.occurrences} times after whitespace normalization in '${relative}' — provide a longer unique anchor`
               : `oldString matches ${applied.error.occurrences} times in '${relative}' — provide a longer unique anchor (or set replaceAll: true)`;
@@ -1125,6 +1260,17 @@ interface SearchFileResult {
   contextBlock: string[] | null;
 }
 
+/** R128-W7b (FIX 8): does a LITERAL-mode needle carry real regex metachar
+ * usage? Detection is deliberately narrow so clean literals never hint: a
+ * BACKSLASH before a metacharacter (`\.`, `\|`, `\(`…) — the regex-dialect
+ * spelling the ledger's query used — or a bare `|` / `[` / `(` in the
+ * needle (constructs that only make sense as a pattern). A plain `a.b` or
+ * `foo-bar` does NOT trip it (those read naturally as literals). */
+function containsRegexMetachars(needle: string): boolean {
+  if (/\\[.*+?^${}()|[\]\\]/.test(needle)) return true;
+  return /[|[(]/.test(needle);
+}
+
 export function searchCode(root: string, query: string, dir?: string, options?: SearchCodeOptions): ToolResult {
   const needle = query.trim();
   if (needle === "") return { ok: false, output: "search_code needs a non-empty 'query'" };
@@ -1222,7 +1368,17 @@ export function searchCode(root: string, query: string, dir?: string, options?: 
   });
 
   if (files.length === 0 || totalMatches === 0) {
-    return { ok: true, output: `no content matches for '${needle}'` };
+    // R128-W7b (FIX 8): a LITERAL-mode zero-match whose needle carries regex
+    // metacharacters gets the honest hint — the ledger's regex-dialect query
+    // (`\.row|\.col`) silently became a literal search and returned 0
+    // matches with no explanation. Detect REAL metachar usage (a backslash
+    // before a metachar, or a bare | [ ( in the needle) so clean literals
+    // ("a.b", "zzz-nothing") stay hint-free.
+    const hint =
+      !useRegex && containsRegexMetachars(needle)
+        ? `\n(hint: your query contains regex metacharacters which were treated as LITERAL text — pass regex:true if you meant a pattern)`
+        : "";
+    return { ok: true, output: `no content matches for '${needle}'${hint}` };
   }
   const totals =
     `${totalMatches} match${totalMatches === 1 ? "" : "es"} in ${matchedFileCount} file${matchedFileCount === 1 ? "" : "s"} for '${needle}'`;

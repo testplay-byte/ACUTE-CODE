@@ -143,9 +143,18 @@ export async function runScheduledUpdateCheck(): Promise<void> {
   try {
     const result = await fetchSystemUpdates();
     if (!result.ok) {
+      // R128-W1: ONE quiet line (the owner saw GitHub rate-limit noise
+      // stacking in logs) — the rate-limited case carries its own hint:
+      // the manual check in Settings → About works, and saving a GitHub
+      // token there raises the anonymous limit. Behavior unchanged: warn
+      // only, no toast, the cadence stamp does NOT advance (the next boot
+      // retries honestly).
+      const reason = result.error ?? result.reason ?? "unknown reason";
       console.warn(
-        "[update-checker] the scheduled update check failed:",
-        result.error ?? result.reason ?? "unknown reason",
+        `[update-checker] the scheduled update check failed — ${reason}` +
+          (result.reason === "rate-limited"
+            ? " (GitHub's anonymous rate limit — the manual check in Settings → About works, and saving a GitHub token there raises it)"
+            : ""),
       );
       return;
     }
@@ -163,7 +172,10 @@ export async function runScheduledUpdateCheck(): Promise<void> {
       );
     }
   } catch (err) {
-    console.warn("[update-checker] the scheduled update check failed:", err);
+    // R128-W1: the same single-line shape (never a stacked arg dump).
+    console.warn(
+      `[update-checker] the scheduled update check failed — ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 

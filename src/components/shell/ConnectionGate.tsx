@@ -4,6 +4,9 @@ import { useConfigStore, type UpdateInFlight } from "../../lib/config-store";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { beginSidecarConnect, retryConnection } from "../../lib/sidecar-connection";
 import { getSidecarLogTail, isTauri, type SidecarLogTail } from "../../lib/sidecar";
+// R128-W1: the update's OS-level completion confirmation (the owner's
+// "it did not show me any system or anything" report).
+import { notifyDesktop } from "../../lib/desktop-notifications";
 import { APP_VERSION } from "../../lib/version";
 import { AcuteLogo } from "./Sidebar";
 
@@ -122,6 +125,17 @@ export function ConnectionGate({ children }: { children: ReactNode }) {
   // lands offline instead stays (the Retry that eventually connects still
   // consumes it) — the offline screen itself is unchanged, honest about a
   // genuinely failed boot.
+  //
+  // R128-W1: THE COMPLETION CONFIRMATION — the successful consumption of a
+  // VALID marker is the one moment the OS-level "updated" notification
+  // belongs (a marker that survived validation proves this boot IS running
+  // the version the update installed — version === APP_VERSION is checked
+  // at read, and the updater only ever installs NEWER versions, so a
+  // consumed marker means the version genuinely CHANGED). Fires ONCE: the
+  // one-shot marker + this state can never reach this effect twice, and a
+  // later reconnect has updateRestart === null. The notifyDesktop call is
+  // void — never awaited — and update_installed is the one kind allowed
+  // through the visibility gate (a completion, not an interruption).
   useEffect(() => {
     if (connection !== "connected" || updateRestart === null) return;
     try {
@@ -129,6 +143,11 @@ export function ConnectionGate({ children }: { children: ReactNode }) {
     } catch {
       /* best-effort */
     }
+    void notifyDesktop({
+      kind: "update_installed",
+      title: "ACUTE-CODE updated",
+      body: `Now running v${updateRestart.version} — your data is kept`,
+    });
     setUpdateRestart(null);
   }, [connection, updateRestart]);
 

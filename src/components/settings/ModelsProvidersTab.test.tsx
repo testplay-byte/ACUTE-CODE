@@ -179,6 +179,11 @@ let modelPatchGate: Promise<void> | null = null;
  * "Testing {model}…" row (release() lets the answer land). Same pattern
  * as modelPatchGate. */
 let modelTestGate: Promise<void> | null = null;
+/** R128-W4: the SLOT-SCOPED answers — when the request body carries a slot
+ * this map holds, that answer wins over the global modelTestAnswer (the
+ * try-next-key flow needs the primary probe failing HTTP 429 while the
+ * slot-2 probe passes). */
+let modelTestSlotAnswers: Map<number, unknown> = new Map();
 // R93-A6: the knob that simulates the backend rejecting the upsert.
 let modelAddFails = false;
 /** R59-C: when true, the reveal route answers HTTP 500 (the error path). */
@@ -363,6 +368,13 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     }
     // R118-F: hold the probe in flight when the busy-band test asks for it.
     if (modelTestGate !== null) await modelTestGate;
+    // R128-W4: a slot-scoped answer wins over the global one (the probe's
+    // {slot} rides the body — the API client only sends it when a specific
+    // key was asked for).
+    const requestedSlot = (body as { slot?: number } | undefined)?.slot;
+    if (requestedSlot !== undefined && modelTestSlotAnswers.has(requestedSlot)) {
+      return jsonResponse(modelTestSlotAnswers.get(requestedSlot));
+    }
     return jsonResponse(modelTestAnswer);
   }
   // ROUND-58 (R58-d): POST /providers/:id/keys/reveal — the full values.
@@ -530,6 +542,7 @@ beforeEach(() => {
   modelTestFailIds = new Set();
   modelPatchGate = null;
   modelTestGate = null;
+  modelTestSlotAnswers = new Map();
   modelAddFails = false;
   providersFail = false;
   modelsConfigFail = false;
@@ -3173,5 +3186,187 @@ describe("Model card + list header — the R93-A7 buttons", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(hiddenToggle().getAttribute("aria-label")).toContain("Show model GLM 5.2 in the chat picker");
     expect(configGets()).toBe(configGetsBefore);
+  });
+});
+
+/* ── R128-W4: the model test's TRY-NEXT-KEY leg ──────────────────────────────
+ *
+ * The owner's ask: "if I had added multiple API keys and I tested a model
+ * and it failed… like HTTP 429, rate limit exceeded… maybe it should give
+ * me an option that I can click that immediately there, and it would try
+ * the second API key in the list… in the actual conversation it properly
+ * switched… but in the Models and Providers maybe we can improve it."
+ *
+ * The conversations already juggle keys automatically; the models list now
+ * offers the SAME lever right in the failing test band: "Try key 2" (the
+ * Key-N ordinal spelling the API keys card uses), the R124 12s fail
+ * dismissal DISARMED while the action exists (the band never vanishes
+ * under the cursor), the busy row naming the key ("Testing key 2…"), and
+ * the walk honest to exhaustion (no button + the dismissal re-armed when
+ * the pool runs out). */
+describe("R128-W4 — the model test's try-next-key leg", () => {
+  it("a primary-key failure offers 'Try key 2' when slot 2 is held — the 12s dismissal is DISARMED, the retry carries {slot:2} on the wire and passes", async () => {
+    vi.useFakeTimers(); // the dismissal timer must be FAKE, or advancing it proves nothing
+    providersList = [PROVIDER];
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" })];
+    // The owner's exact scenario: the primary (slot-absent) probe answers
+    // HTTP 429; the slot-2 probe passes.
+    pool = [
+      { slot: 0, hasKey: true, masked: "sk-o…b4af" },
+      { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
+    ];
+    modelTestAnswer = { ok: false, reason: "provider answered HTTP 429 — rate limit exceeded (test fixture)" };
+    modelTestSlotAnswers.set(2, { ok: true, latencyMs: 210 });
+
+    renderWithProviders(<ModelsProvidersTab />);
+    await tickUntil(() => {
+      screen.getByTestId("model-test-button");
+    });
+    fireEvent.click(screen.getByTestId("model-test-button"));
+    await tickUntil(() => {
+      expect(screen.getByTestId("model-test-result").getAttribute("data-model-test")).toBe("fail");
+    });
+    expect(screen.getByTestId("model-test-reason").textContent).toContain("HTTP 429");
+
+    // The fail band carries the next-key action (slots 0 + 2 held → Key 2 —
+    // the API keys card's ordinal spelling)…
+    await tickUntil(() => {
+      screen.getByTestId("model-test-try-next-key");
+    });
+    const tryNext = screen.getByTestId("model-test-try-next-key");
+    expect(tryNext.textContent).toContain("Try key 2");
+    // …tinted AMBER — the rate-limit shape is the one the next key cures.
+    expect(tryNext.className).toContain("bg-badge-warning");
+
+    // The dismissal is DISARMED while the action exists: the fail landed
+    // under the FAKE clock (so an armed dismissal would be a fake timer),
+    // advanced far past the R124 12s window, then REAL time runs (any exit
+    // animation completes on the real rAF clock — the R118-F pass-fold
+    // test's idiom) — the band + the action are STILL on screen. (An armed
+    // timer would fire at 12s, flip the state to idle, and the exiting
+    // band would be gone within the real window — mutation-checked.)
+    await tick(13_000);
+    vi.useRealTimers();
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(screen.getByTestId("model-test-result").getAttribute("data-model-test")).toBe("fail");
+    expect(screen.getByTestId("model-test-try-next-key").textContent).toContain("Try key 2");
+
+    // Click → the retry probes the next held key (the wire carries the
+    // slot) → the pass band replaces the fail band (and the action is
+    // gone with it — it belongs to the FAILURE, not the verdict).
+    fireEvent.click(screen.getByTestId("model-test-try-next-key"));
+    await waitFor(() => expect(screen.getByTestId("model-test-result").getAttribute("data-model-test")).toBe("pass"));
+    expect(screen.queryByTestId("model-test-try-next-key")).toBeNull();
+    expect(screen.getByTestId("model-test-result").textContent).toContain("responded in 210ms");
+
+    // The wire: the first probe carried NO slot (the primary — the
+    // pre-R128-W4 body, byte-identical); the retry carried {slot: 2}.
+    const posted = calls.filter(
+      (c) => c.method === "POST" && c.url.includes("/api/v1/models/") && c.url.endsWith("/test"),
+    );
+    expect(posted).toHaveLength(2);
+    expect(posted[0]!.body).toEqual({});
+    expect(posted[1]!.body).toEqual({ slot: 2 });
+  });
+
+  it("pool exhausted (only the primary held) — NO try-next-key action and the R124 12s dismissal is STILL ARMED (the band leaves)", async () => {
+    vi.useFakeTimers();
+    providersList = [PROVIDER];
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" })];
+    pool = [{ slot: 0, hasKey: true, masked: "sk-o…b4af" }];
+    modelTestAnswer = { ok: false, reason: "provider answered HTTP 429 — rate limit exceeded (test fixture)" };
+
+    renderWithProviders(<ModelsProvidersTab />);
+    await tickUntil(() => {
+      screen.getByTestId("model-test-button");
+    });
+    fireEvent.click(screen.getByTestId("model-test-button"));
+    await tickUntil(() => {
+      expect(screen.getByTestId("model-test-result").getAttribute("data-model-test")).toBe("fail");
+    });
+
+    // No next key exists → the band behaves exactly as pre-R128-W4: no
+    // action, and the 12s dismissal armed…
+    expect(screen.queryByTestId("model-test-try-next-key")).toBeNull();
+    expect(screen.getByTestId("model-test-reason").textContent).toContain("HTTP 429");
+    // …past the window the timer fires (state → idle, the exit animation
+    // starts frozen under the fake clock)…
+    await tick(12_500);
+    // …and once REAL time runs, the exit completes and the band is GONE
+    // (the R118-F pass-fold test's idiom, applied to the R124 fail path —
+    // the pin the old "NEVER auto-collapses" title could never make).
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.queryByTestId("model-test-result")).toBeNull());
+    expect(screen.queryByTestId("model-test-try-next-key")).toBeNull();
+  });
+
+  it("the retry's busy row names the key — 'Testing key 2…' while the slot-2 probe is in flight (the primary keeps the model-name copy)", async () => {
+    providersList = [PROVIDER];
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" })];
+    pool = [
+      { slot: 0, hasKey: true, masked: "sk-o…b4af" },
+      { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
+    ];
+    modelTestAnswer = { ok: false, reason: "provider answered HTTP 429 — rate limit exceeded (test fixture)" };
+    modelTestSlotAnswers.set(2, { ok: true, latencyMs: 210 });
+
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByText("GLM 5.2")).toBeTruthy());
+    // The primary probe answers immediately…
+    fireEvent.click(screen.getByTestId("model-test-button"));
+    await waitFor(() => expect(screen.getByTestId("model-test-result").getAttribute("data-model-test")).toBe("fail"));
+    // …then the RETRY is held in flight so the busy row is observable.
+    let release!: () => void;
+    modelTestGate = new Promise<void>((res) => {
+      release = res;
+    });
+    fireEvent.click(screen.getByTestId("model-test-try-next-key"));
+
+    const busy = await screen.findByTestId("model-test-busy");
+    expect(busy.textContent).toContain("Testing key 2…");
+    expect(busy.textContent).not.toContain("GLM 5.2");
+    expect(screen.getByTestId("model-test-result").getAttribute("data-model-test")).toBe("testing");
+
+    release();
+    await waitFor(() => expect(screen.getByTestId("model-test-result").getAttribute("data-model-test")).toBe("pass"));
+    expect(screen.queryByTestId("model-test-busy")).toBeNull();
+  });
+
+  it("the config dialog's FOOTER fail band carries the same try-next-key action (the compact variant)", async () => {
+    providersList = [PROVIDER];
+    configured = [modelRow({ modelId: "z-ai/glm-5.2:free", displayName: "GLM 5.2" })];
+    pool = [
+      { slot: 0, hasKey: true, masked: "sk-o…b4af" },
+      { slot: 2, hasKey: true, masked: "sk-o…aaaa" },
+    ];
+    modelTestAnswer = { ok: false, reason: "provider answered HTTP 429 — rate limit exceeded (test fixture)" };
+    modelTestSlotAnswers.set(2, { ok: true, latencyMs: 210 });
+
+    renderWithProviders(<ModelsProvidersTab />);
+    await waitFor(() => expect(screen.getByText("GLM 5.2")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Configure model GLM 5.2" }));
+    const dialog = screen.getByRole("dialog", { name: "Configure model" });
+    fireEvent.click(within(dialog).getByTestId("model-test-button"));
+
+    await waitFor(() =>
+      expect(within(dialog).getByTestId("model-test-result").getAttribute("data-model-test")).toBe("fail"),
+    );
+    // Same action, same spelling, same disarm — the dialog's footer line is
+    // the row band's compact sibling.
+    const tryNext = await within(dialog).findByTestId("model-test-try-next-key");
+    expect(tryNext.textContent).toContain("Try key 2");
+    expect(tryNext.className).toContain("bg-badge-warning");
+
+    fireEvent.click(tryNext);
+    await waitFor(() =>
+      expect(within(dialog).getByTestId("model-test-result").getAttribute("data-model-test")).toBe("pass"),
+    );
+    expect(within(dialog).queryByTestId("model-test-try-next-key")).toBeNull();
+
+    const posted = calls.filter(
+      (c) => c.method === "POST" && c.url.includes("/api/v1/models/") && c.url.endsWith("/test"),
+    );
+    expect(posted).toHaveLength(2);
+    expect(posted[1]!.body).toEqual({ slot: 2 });
   });
 });

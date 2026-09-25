@@ -1859,7 +1859,13 @@ export function modelTestToolsLine(
 
 export type ModelTestState =
   | { kind: "idle" }
-  | { kind: "testing" }
+  | {
+      kind: "testing";
+      /** R128-W4 — the RESOLVED key slot the in-flight probe uses (0 = the
+       * primary; a pool slot for a Try-next-key retry). Drives the busy
+       * row's honest "Testing key N…" copy. */
+      slot?: number;
+    }
   | {
       kind: "pass";
       latencyMs: number;
@@ -1874,30 +1880,79 @@ export type ModelTestState =
       /** R119-P — the tools leg (a tools rejection IS the failure — the
        * line names it distinctly). */
       tools?: ModelTestToolsLeg;
+      /** R128-W4 — the RESOLVED key slot the FAILING probe used (0 = the
+       * primary was tried implicitly). The fail band's Try-next-key walk
+       * starts beyond it. */
+      triedSlot?: number;
     };
+
+/** R128-W4 — the TRY-NEXT-KEY leg's key-pool resolver. Built by
+ * ModelListSection from the shared ["key-pool", providerId] listing (the
+ * same cache entry the Connection card's test-key selector and
+ * ProviderKeysCard read — one fetch, one truth) and handed down to every
+ * model card and the config dialog's footer line. null = the pool is
+ * unknown (loading or the listing failed): no next-key action renders
+ * (honest — never offer a key we cannot see) and the R124 12s fail
+ * dismissal stays armed, exactly the pre-R128-W4 behavior. */
+interface ModelTestKeyPool {
+  /** The Key-N DISPLAY ordinal of a held slot — the API keys card's
+   * spelling (keyOrdinal: positional over the sorted held slots, the raw
+   * slot stays the wire's internal detail). */
+  ordinalFor: (slot: number) => number;
+  /** The next HELD pool slot strictly beyond `triedSlot`, ascending —
+   * null when the pool holds nothing beyond it (exhausted). */
+  nextAfter: (triedSlot: number) => { slot: number; ordinal: number } | null;
+}
 
 /** R124: how long a FAIL verdict stays on screen before it dismisses
  * itself (the owner: "it shows me the error message, which is proper, but
  * that error message does not disappear automatically after some time").
  * 12s — long enough to read the reason (and open the raw-reason toggle),
  * short enough that a stale failure never lingers over the list. A fresh
- * test re-arms it; PASS verdicts stay (they are the quiet confirmation). */
+ * test re-arms it; PASS verdicts stay (they are the quiet confirmation).
+ * R128-W4: the timer only arms when NO further held key exists — while
+ * the fail band offers a Try-next-key action, the band (and the action)
+ * persists until the user acts or retries (see useModelTest). */
 const MODEL_TEST_FAIL_DISMISS_MS = 12_000;
 
-function useModelTest(model: ProviderModelConfig | null): { state: ModelTestState; run: () => void } {
+function useModelTest(
+  model: ProviderModelConfig | null,
+  /** R128-W4: the disarm callback — "does a held key-pool slot exist
+   * beyond the slot the failing probe used?" The card builds it from the
+   * section's shared key-pool resolver. undefined (no resolver wired, or
+   * the pool listing is unknown) behaves like "no": the R124 dismissal
+   * stays armed, byte-identical to the pre-R128-W4 behavior. */
+  hasMoreKeys?: (triedSlot: number) => boolean,
+): { state: ModelTestState; run: (slot?: number) => void } {
   const [state, setState] = useState<ModelTestState>({ kind: "idle" });
   // R124: the auto-dismiss timer — armed when a FAIL lands, cleared by any
   // state change (a fresh test or an unmount). The effect's cleanup IS the
   // re-arm mechanism: a new state object re-runs it.
+  //
+  // R128-W4: DISARMED while another held key remains. The signal is
+  // re-derived EVERY render (the pool listing can land AFTER the fail
+  // lands) and carried as a plain boolean in the deps — so a late pool
+  // load re-runs the effect, and the CLEANUP cancels the already-armed
+  // timer instead of stranding it. The fail band and its Try-next-key
+  // action persist until the user acts or retries; when the pool is
+  // exhausted (or unknown) the existing 12s behavior stands.
+  const failHasMoreKeys =
+    state.kind === "fail" && hasMoreKeys !== undefined ? hasMoreKeys(state.triedSlot ?? 0) : false;
   useEffect(() => {
     if (state.kind !== "fail") return;
+    if (failHasMoreKeys) return; // R128-W4: disarmed — the next key is one click away
     const dismiss = setTimeout(() => setState({ kind: "idle" }), MODEL_TEST_FAIL_DISMISS_MS);
     return () => clearTimeout(dismiss);
-  }, [state]);
-  const run = (): void => {
+  }, [state, failHasMoreKeys]);
+  const run = (slot?: number): void => {
     if (model === null) return;
-    setState({ kind: "testing" });
-    testModelConnection(model.id)
+    // R128-W4: the slot rides the probe — absent = the primary key (the
+    // pre-R128-W4 wire, byte-identical); explicit = that pool slot. The
+    // STATE records the RESOLVED slot (0 = primary) so the busy copy and
+    // the next-key walk stay honest about WHICH key answered.
+    const resolved = slot ?? 0;
+    setState({ kind: "testing", slot: resolved });
+    testModelConnection(model.id, slot === undefined ? undefined : { slot })
       .then((result) => {
         // R119-P: the tools leg rides BOTH verdict states (absent when the
         // pong phase failed first — the leg never ran). Read defensively:
@@ -1920,16 +1975,20 @@ function useModelTest(model: ProviderModelConfig | null): { state: ModelTestStat
           setState({
             kind: "fail",
             reason: result.reason ?? "the probe failed without a reason",
+            triedSlot: resolved,
             ...(tools !== undefined ? { tools } : {}),
           });
         }
       })
       .catch((err: unknown) => {
         // ApiError — 409 (no key / provider gone) or 502 (transport). The
-        // message is the honest envelope text (R77 discipline).
+        // message is the honest envelope text (R77 discipline). R128-W4:
+        // the tried slot rides the fail too — a 409 names the empty SLOT,
+        // and the next-key walk starts beyond what was tried.
         setState({
           kind: "fail",
           reason: err instanceof Error ? err.message : String(err),
+          triedSlot: resolved,
         });
       });
   };
@@ -1951,6 +2010,69 @@ function useTestTint(state: ModelTestState): { tinted: boolean; outcome: "pass" 
   return { tinted, outcome };
 }
 
+/** R128-W4: the busy copy's key ordinal — non-null only while a NON-primary
+ * slot's probe is in flight (the primary keeps the model-name copy).
+ * Falls back to null when the pool listing is unknown (the model-name copy
+ * stands — never a raw slot number). */
+function testingKeyOrdinal(state: ModelTestState, keyPoolNav: ModelTestKeyPool | null): number | null {
+  if (state.kind !== "testing" || state.slot === undefined || state.slot <= 0) return null;
+  return keyPoolNav !== null ? keyPoolNav.ordinalFor(state.slot) : null;
+}
+
+/** R128-W4: the fail band's next held key beyond the slot the failing probe
+ * used — null when the pool is exhausted (or the listing is unknown). */
+function nextKeyAfterFail(
+  state: ModelTestState,
+  keyPoolNav: ModelTestKeyPool | null,
+): { slot: number; ordinal: number } | null {
+  if (state.kind !== "fail") return null;
+  return keyPoolNav !== null ? keyPoolNav.nextAfter(state.triedSlot ?? 0) : null;
+}
+
+/** R128-W4: the rate-limit smell — the failure shapes where the next key is
+ * the LIKELY cure (the owner's exact scenario: "HTTP 429, rate limit
+ * exceeded"). ADVISORY ONLY: the Try-next-key action renders for ANY failure
+ * while a further held key exists (a 500 on one key can be key-specific
+ * too) — this only picks the tint. */
+function isRateLimitishFailure(reason: string): boolean {
+  return /HTTP 429|rate limit/i.test(reason);
+}
+
+/** R128-W4: the fail band's TRY-NEXT-KEY action — ONE spelling for both
+ * bands (the model row's dedicated section + the config dialog's footer
+ * line). Amber (the §11 warning badge tone) when the failure smells like a
+ * rate limit; the plain danger ink otherwise. Clicking re-runs the probe
+ * scoped to the next held key — the exact juggling the conversations
+ * already do automatically, offered where the owner just SAW it fail. */
+function TryNextKeyButton({
+  nextKey,
+  rateLimitish,
+  onRun,
+}: {
+  nextKey: { slot: number; ordinal: number };
+  rateLimitish: boolean;
+  onRun: (slot: number) => void;
+}) {
+  return (
+    <button
+      onClick={() => onRun(nextKey.slot)}
+      data-testid="model-test-try-next-key"
+      title={`Retry this test with key ${nextKey.ordinal} — the failing key stays in the pool (conversations already juggle keys automatically)`}
+      className={[
+        "self-start h-7 px-2.5 rounded-full border text-[11px] font-semibold inline-flex items-center gap-1.5 shrink-0",
+        "transition-colors duration-100 active:scale-[0.98] cursor-pointer",
+        "focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--ac-accent)]",
+        rateLimitish
+          ? "border-warning-deep bg-badge-warning text-badge-warning-fg"
+          : "border-line-strong text-danger-deep hover:bg-hover",
+      ].join(" ")}
+    >
+      <Zap size={11} strokeWidth={2.5} />
+      Try key {nextKey.ordinal}
+    </button>
+  );
+}
+
 /** The presentational TEST button (both views share it). R94-C adds the
  * `segment` variant — the model ROW's unified action-group look (bordered
  * cluster, per-button dividers, pressed scale, focus ring) — while the
@@ -1967,7 +2089,10 @@ function TestIconButton({
 }: {
   model: ProviderModelConfig;
   state: ModelTestState;
-  run: () => void;
+  /** R128-W4: the run signature widened to carry the key slot — this
+   * button always tests the PRIMARY (wrapped: the click event must never
+   * leak in as a slot). */
+  run: (slot?: number) => void;
   label?: string;
   variant?: "ghost" | "segment";
 }) {
@@ -1981,7 +2106,7 @@ function TestIconButton({
   const baseColor = outcome === "pass" ? styles.successDeep : outcome === "fail" ? styles.dangerDeep : styles.textSecondary;
   return (
     <button
-      onClick={run}
+      onClick={() => run()}
       disabled={testing}
       aria-label={`Test model ${model.displayName || model.modelId}`}
       title="Send a real test request to this model — checks the key, the model id, and the reply"
@@ -2034,17 +2159,33 @@ function TestIconButton({
  * a FAIL persists (never auto-collapses — an error the owner must read
  * never snaps away); a PASS folds at 10s (was 5 — a 2-10s real completion
  * plus a 5s vanish read as "no status at all"). The useTestTint 5s tint
- * stays as-is. */
-function ModelTestButton({ model }: { model: ProviderModelConfig }) {
+ * stays as-is.
+ * R128-W4: the footer's FAIL band carries the same Try-next-key action as
+ * the row band (keyPoolNav — the dialog's providerId scopes it). */
+function ModelTestButton({
+  model,
+  keyPoolNav,
+}: {
+  model: ProviderModelConfig;
+  /** R128-W4: the provider's key-pool resolver (null = the pool is
+   * unknown — no next-key action, the R124 12s dismissal stays armed). */
+  keyPoolNav: ModelTestKeyPool | null;
+}) {
   const styles = useThemeStyles();
-  const { state, run } = useModelTest(model);
+  // R128-W4: the disarm callback — "does a held key exist beyond the slot
+  // the failing probe used?" (the hook consults it while a fail shows).
+  const hasMoreKeys = (triedSlot: number): boolean =>
+    keyPoolNav !== null && keyPoolNav.nextAfter(triedSlot) !== null;
+  const { state, run } = useModelTest(model, hasMoreKeys);
   const [showReply, setShowReply] = useState(false);
   const [showFull, setShowFull] = useState(false);
   // R118-F: pass folds at 10s. R124: the fail AUTO-DISMISSES at 12s — the
   // owner's new verdict ("that error message does not disappear
   // automatically after some time") supersedes R118-F's "never" — the
   // dismissal lives in useModelTest itself (the hook resets to idle), so
-  // this view only arms the PASS fold.
+  // this view only arms the PASS fold. R128-W4: the hook DISARMS that
+  // dismissal while another held key remains — the Try-next-key action
+  // below never vanishes under the cursor.
   const [showResult, setShowResult] = useState(false);
   useEffect(() => {
     if (state.kind !== "pass" && state.kind !== "fail") return;
@@ -2066,6 +2207,10 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
       : state.kind === "pass" && state.tools?.called
         ? styles.successDeep
         : styles.warningDeep;
+  // R128-W4: the busy copy's key ordinal (null = the primary's model-name
+  // copy) + the fail band's next held key.
+  const busyKeyOrdinal = testingKeyOrdinal(state, keyPoolNav);
+  const nextKey = nextKeyAfterFail(state, keyPoolNav);
 
   return (
     <>
@@ -2091,7 +2236,11 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
                 data-testid="model-test-busy"
               >
                 <RefreshCw size={12} className="animate-spin" aria-hidden />
-                Testing {model.displayName || model.modelId}…
+                {/* R128-W4: a NON-primary slot's probe names the key honestly
+                    ("Testing key 2…") — the primary keeps the model-name copy. */}
+                {busyKeyOrdinal !== null
+                  ? `Testing key ${busyKeyOrdinal}…`
+                  : `Testing ${model.displayName || model.modelId}…`}
               </div>
             ) : state.kind === "pass" ? (
               <div className="flex flex-col gap-0.5 min-w-0">
@@ -2166,6 +2315,16 @@ function ModelTestButton({ model }: { model: ProviderModelConfig }) {
                     {showFull ? "Show less" : "Show full error"}
                   </button>
                 )}
+                {/* R128-W4 — the TRY-NEXT-KEY action: the exact juggling the
+                    conversations already do, one click away where the owner
+                    just saw the failure. */}
+                {nextKey !== null && (
+                  <TryNextKeyButton
+                    nextKey={nextKey}
+                    rateLimitish={state.kind === "fail" && isRateLimitishFailure(state.reason)}
+                    onRun={run}
+                  />
+                )}
               </div>
             )}
           </motion.div>
@@ -2194,6 +2353,7 @@ function ModelCard({
   onToggleHidden,
   testAllSeq,
   onTestAllResult,
+  keyPoolNav,
 }: {
   m: MergedModel;
   row: ProviderModelConfig | null;
@@ -2213,9 +2373,18 @@ function ModelCard({
    * manual row-button click: the scope map records it, the progress counter
    * ignores it); `rowId` feeds the Test-scope dropdown's memory. */
   onTestAllResult?: (seq: number | null, ok: boolean, rowId: string | null) => void;
+  /** R128-W4: the provider's key-pool resolver (from the section's shared
+   * ["key-pool", providerId] listing; null = the pool is unknown — no
+   * next-key action, the R124 12s fail dismissal stays armed). */
+  keyPoolNav: ModelTestKeyPool | null;
 }) {
   const styles = useThemeStyles();
-  const { state, run } = useModelTest(row);
+  // R128-W4: the disarm callback — "does a held key exist beyond the slot
+  // the failing probe used?" (the hook consults it while a fail shows; a
+  // pool listing that lands late disarms too).
+  const hasMoreKeys = (triedSlot: number): boolean =>
+    keyPoolNav !== null && keyPoolNav.nextAfter(triedSlot) !== null;
+  const { state, run } = useModelTest(row, hasMoreKeys);
   const [showReply, setShowReply] = useState(false);
   const [showFull, setShowFull] = useState(false);
   const [showResult, setShowResult] = useState(false);
@@ -2234,6 +2403,11 @@ function ModelCard({
       : state.kind === "pass" && state.tools?.called
         ? styles.successDeep
         : styles.warningDeep;
+  // R128-W4: the busy copy's key ordinal (null = the primary's model-name
+  // copy) + the fail band's next held key (the Try-next-key walk starts
+  // beyond the slot the failing probe used).
+  const busyKeyOrdinal = testingKeyOrdinal(state, keyPoolNav);
+  const nextKey = nextKeyAfterFail(state, keyPoolNav);
 
   // ── R93-A7 → R94-C: the Test-All wiring. A new seq fires the card's own
   // test once; every SETTLED outcome is reported to the header through the
@@ -2278,7 +2452,9 @@ function ModelCard({
   // they are reading). R124 supersedes the FAIL half of R118-F: a fail now
   // AUTO-DISMISSES at 12s (useModelTest's own timer — the owner: "that
   // error message does not disappear automatically after some time"); this
-  // view arms only the PASS fold.
+  // view arms only the PASS fold. R128-W4: the hook DISARMS the 12s fail
+  // dismissal while another held key remains — the Try-next-key action
+  // below persists until the user acts or retries.
   useEffect(() => {
     if (state.kind !== "pass" && state.kind !== "fail") return;
     setShowResult(true);
@@ -2577,7 +2753,11 @@ function ModelCard({
                 data-testid="model-test-busy"
               >
                 <RefreshCw size={12} className="animate-spin" aria-hidden />
-                Testing {m.displayName || m.modelId}…
+                {/* R128-W4: a NON-primary slot's probe names the key honestly
+                    ("Testing key 2…") — the primary keeps the model-name copy. */}
+                {busyKeyOrdinal !== null
+                  ? `Testing key ${busyKeyOrdinal}…`
+                  : `Testing ${m.displayName || m.modelId}…`}
               </div>
             ) : state.kind === "pass" ? (
               /* R126-3f-2: the PASS band = the success badge tone (TOKENS §11;
@@ -2672,6 +2852,19 @@ function ModelCard({
                   >
                     {showFull ? "Show less" : "Show full error"}
                   </button>
+                )}
+                {/* R128-W4 — the TRY-NEXT-KEY action: the exact juggling the
+                    conversations already do, one click away where the owner
+                    just saw the failure ("in the Models and Providers maybe
+                    we can improve it" — this is the improvement). Repeated
+                    retries walk the pool; when it is exhausted the band
+                    behaves exactly as before. */}
+                {nextKey !== null && (
+                  <TryNextKeyButton
+                    nextKey={nextKey}
+                    rateLimitish={state.kind === "fail" && isRateLimitishFailure(state.reason)}
+                    onRun={run}
+                  />
                 )}
               </div>
             )}
@@ -2820,6 +3013,41 @@ function ModelListSection({
   useEffect(() => {
     setTestAll(null);
   }, [modelIdsKey]);
+
+  // ── R128-W4: the TRY-NEXT-KEY leg — the models list reads the provider's
+  // key-pool listing (the SAME ["key-pool", providerId] cache entry the
+  // Connection card's test-key selector and ProviderKeysCard read: one
+  // fetch, one truth, already warm when the detail pane opens) so a
+  // FAILING model test can offer the NEXT held key right in its band —
+  // the conversations already juggle keys automatically (the ProviderKeys
+  // card's own help line); this gives the owner the same lever where he
+  // just SAW the failure. The nav is null until the listing lands — no
+  // next-key action while the pool is unknown (honest — never offer a key
+  // we cannot see) — and on a listing failure, which simply leaves the
+  // R124 12s fail dismissal armed (the pre-R128-W4 behavior).
+  const keyPoolQuery = useQuery({
+    queryKey: ["key-pool", providerId],
+    queryFn: () => fetchKeyPool(providerId),
+  });
+  const keyPool = keyPoolQuery.data ?? null;
+  // keyOrdinal's primaryHeld leg: the listing's OWN slot-0 row is the same
+  // keyring truth ProviderKeysCard reads off the provider view — the
+  // models list never needs the ProviderView threaded down for ordinals.
+  const keyPoolHeldAsc =
+    keyPool?.filter((k) => k.slot > 0 && k.hasKey).map((k) => k.slot).sort((a, b) => a - b) ?? null;
+  const keyPoolPrimaryHeld = keyPool?.find((k) => k.slot === 0)?.hasKey ?? false;
+  const keyPoolNav: ModelTestKeyPool | null =
+    keyPoolHeldAsc === null
+      ? null
+      : {
+          ordinalFor: (slot: number) => keyOrdinal(slot, keyPoolPrimaryHeld, keyPoolHeldAsc),
+          nextAfter: (triedSlot: number) => {
+            const next = keyPoolHeldAsc.find((s) => s > triedSlot);
+            return next === undefined
+              ? null
+              : { slot: next, ordinal: keyOrdinal(next, keyPoolPrimaryHeld, keyPoolHeldAsc) };
+          },
+        };
 
   // ROUND-60 (R60-B): the list shows CONFIGURED (stored) rows ONLY — the
   // R58/R50 catalog→list merge is GONE (the owner: "By default none of the
@@ -3219,6 +3447,9 @@ function ModelListSection({
                   testAll !== null && inTestScope(m, testAll.scope) ? testAll.seq : undefined
                 }
                 onTestAllResult={onTestAllResult}
+                // R128-W4: the key-pool resolver — the fail band's
+                // Try-next-key action (null while the listing is unknown).
+                keyPoolNav={keyPoolNav}
               />
             </motion.div>
           ))}
@@ -3304,6 +3535,7 @@ function ModelListSection({
           model={configuring}
           prefill={null}
           catalog={catalog}
+          keyPoolNav={keyPoolNav}
           onClose={() => setConfiguring(null)}
           onSaved={() => {
             invalidate();
@@ -3317,6 +3549,7 @@ function ModelListSection({
           model={null}
           prefill={configuringPrefill}
           catalog={catalog}
+          keyPoolNav={keyPoolNav}
           onClose={() => setConfiguringPrefill(null)}
           onSaved={() => {
             invalidate();
@@ -4178,6 +4411,7 @@ function ModelConfigDialog({
   model,
   prefill,
   catalog,
+  keyPoolNav,
   onClose,
   onSaved,
 }: {
@@ -4192,6 +4426,10 @@ function ModelConfigDialog({
   /** R124: the provider's live catalog (entries + fetch state) — the smart
    * blank-fill's source. Optional for embeds/tests that prefill fully. */
   catalog?: ProviderCatalogState;
+  /** R128-W4: the provider's key-pool resolver — the footer's model-test
+   * FAIL band gets the same Try-next-key action as the row band. (The
+   * test button only renders in EDIT mode; add mode ignores it.) */
+  keyPoolNav: ModelTestKeyPool | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -4701,7 +4939,7 @@ function ModelConfigDialog({
           >
             Cancel
           </button>
-          {model !== null && <ModelTestButton model={model} />}
+          {model !== null && <ModelTestButton model={model} keyPoolNav={keyPoolNav} />}
           <span className="flex-1" />
           <button
             onClick={submit}

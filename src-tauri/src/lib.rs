@@ -120,6 +120,12 @@ pub fn run() {
             browser::browser_tab_scroll_to,
             browser::browser_tab_set_zoom,
             browser::browser_tab_eval,
+            // ROUND-128 (R128-W7a): restore the main window from minimized —
+            // the staged screenshot capture's guard-3 recovery leg (a
+            // minimized window used to be a flat refusal; now the capture
+            // un-minimizes, re-reads the metrics, and only a STILL-minimized
+            // window refuses).
+            browser::window_unminimize,
             // ROUND-90 (R90-C2): the menu overlay window — the sidebar's
             // popovers render in an OWNED transparent OS window so they
             // float ON TOP of the live browser webview (the "browser paused

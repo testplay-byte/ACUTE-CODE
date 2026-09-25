@@ -168,7 +168,11 @@ describe("GET /api/v1/projects/:id/attachments/bytes (ROUND-121 R121-a)", () => 
       url: bytesUrl(projectId, "/etc/hostname"),
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error.message).toContain("RELATIVE");
+    // R128-W7b re-pin: the refusal now NAMES the root and shows a rebased
+    // example of the relative shape instead of the bare "must be RELATIVE"
+    // scold — the containment law itself is unchanged (still a 400).
+    expect(res.json().error.message).toContain("path must be INSIDE the project root");
+    expect(res.json().error.message).toContain("e.g. 'etc/hostname'");
   });
 
   // ── the honest refusals ────────────────────────────────────────────────

@@ -1292,6 +1292,30 @@ pub fn browser_tab_set_zoom(app: AppHandle, tab_id: String, factor: f64) -> Resu
         .map_err(|e| format!("set_zoom tab \"{tab_id}\" failed: {e}"))
 }
 
+/// `window_unminimize()` — ROUND-128 (R128-W7a): restore the MAIN window from
+/// minimized, best-effort. The staged screenshot capture
+/// (src/lib/agent-browser-capture.ts guard 3) used to REFUSE flatly when the
+/// app window was minimized (a minimized Windows window parks at
+/// (-32000,-32000) and paints nothing); now it calls this command first and
+/// re-reads the window metrics once — only a STILL-minimized window refuses,
+/// with the honest "restored the window and retried" copy.
+///
+/// No arguments: it always operates on the MAIN window (`app
+/// .get_webview_window("main")` — the same lookup pattern as the pop-out
+/// commands' `set_focus` legs). `unminimize` + `show` cover both minimized
+/// and hidden states; both are best-effort (errors swallowed — a window API
+/// that refuses must never fail the capture command that called for help).
+/// Ok(()) even when the window is missing (the capture's own metrics re-read
+/// is the truth; a missing window fails there honestly).
+#[tauri::command]
+pub fn window_unminimize(app: AppHandle) -> Result<(), String> {
+    if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = main.unminimize();
+        let _ = main.show();
+    }
+    Ok(())
+}
+
 /// `browser_tab_url(tab_id)` — the webview's CURRENT url (what the user
 /// actually sees, including any in-page navigation we were not told about).
 #[tauri::command]

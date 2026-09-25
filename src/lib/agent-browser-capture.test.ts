@@ -37,6 +37,11 @@ const nativeState = vi.hoisted(() => {
     available: true,
     exists: true,
     metrics: { x: 1920, y: 0, scaleFactor: 2 } as { x: number; y: number; scaleFactor: number } | null,
+    // R128-W7a: a scripted SEQUENTIAL metrics queue — when non-empty each
+    // nativeWindowMetrics call shifts the next reply (the guard-3 recovery
+    // re-reads the metrics after window_unminimize; the first reply is the
+    // minimized parking spot, the second the restored position).
+    metricsQueue: [] as Array<{ x: number; y: number; scaleFactor: number } | null>,
     bounds,
     zoom,
   };
@@ -58,7 +63,14 @@ const apiState = vi.hoisted(() => ({
 vi.mock("./native-browser", () => ({
   isNativeBrowserAvailable: () => nativeState.available,
   nativeTabExists: vi.fn(async () => nativeState.exists),
-  nativeWindowMetrics: vi.fn(async () => nativeState.metrics),
+  // R128-W7a: the metrics queue takes precedence (the un-minimize recovery
+  // pins script minimized → live sequences through it).
+  nativeWindowMetrics: vi.fn(async () => {
+    if (nativeState.metricsQueue.length > 0) return nativeState.metricsQueue.shift()!;
+    return nativeState.metrics;
+  }),
+  // R128-W7a: the Rust window_unminimize command's bridge fake.
+  unminimizeMainWindow: vi.fn(async () => {}),
   // Faithful to the real module: successful commands RECORD into the tab
   // geometry memory the restore path reads.
   nativeTabSetBounds: vi.fn(async (tabId: string, x: number, y: number, w: number, h: number) => {
@@ -102,12 +114,14 @@ import {
   nativeTabSetVisible,
   nativeTabSetZoom,
   resetTabGeometryMemoryForTest,
+  unminimizeMainWindow,
 } from "./native-browser";
 import { captureBrowserRegion } from "./api";
 
 const setBoundsMock = vi.mocked(nativeTabSetBounds);
 const setZoomMock = vi.mocked(nativeTabSetZoom);
 const setVisibleMock = vi.mocked(nativeTabSetVisible);
+const unminimizeMock = vi.mocked(unminimizeMainWindow);
 const captureMock = vi.mocked(captureBrowserRegion);
 
 beforeEach(() => {
@@ -116,6 +130,8 @@ beforeEach(() => {
   nativeState.available = true;
   nativeState.exists = true;
   nativeState.metrics = { x: 1920, y: 0, scaleFactor: 2 };
+  // R128-W7a: no scripted metrics sequence by default.
+  nativeState.metricsQueue.length = 0;
   apiState.failWith = null;
   apiState.reply = { pngBase64: "aW1n".repeat(40), width: 2560, height: 1440 };
   apiState.regions.length = 0;
@@ -293,10 +309,46 @@ describe("R124: performStagedBrowserCapture — the choreography", () => {
     expect(captureMock).not.toHaveBeenCalled();
   });
 
-  it("a MINIMIZED window → the honest refusal (nothing on screen to capture)", async () => {
-    nativeState.metrics = { x: -32000, y: -32000, scaleFactor: 1 };
-    await expect(performStagedBrowserCapture("tab-min", {})).rejects.toThrow(/app window is minimized/);
+  it("a MINIMIZED window is RECOVERED, not refused — unminimize called, the metrics re-read, the capture proceeds at the LIVE position (R128-W7a)", async () => {
+    // The guard-3 recovery: the first metrics read answers the minimized
+    // parking spot (-32000,-32000); the Rust window_unminimize command
+    // runs; the bounded wait passes; the re-read answers the restored
+    // position — and the capture's physical region uses the LIVE metrics,
+    // never the parking spot.
+    nativeState.metricsQueue = [
+      { x: -32000, y: -32000, scaleFactor: 1 },
+      { x: 100, y: 50, scaleFactor: 2 },
+    ];
+    const result = await performStagedBrowserCapture("tab-unmin", {});
+    expect(unminimizeMock).toHaveBeenCalledTimes(1);
+    // The staged geometry is the standard centered 1280×720 (1600×900
+    // client area, no anchor): x=160, y=90 → the region adds the LIVE
+    // window origin (100,50) at scale 2: (100+320, 50+180) = (420, 230).
+    expect(captureMock).toHaveBeenCalledWith({ x: 420, y: 230, w: 2560, h: 1440 });
+    expect(result.logicalWidth).toBe(1280);
+    expect(result.logicalHeight).toBe(720);
+  });
+
+  it("a window STILL minimized after the un-minimize retry → the honest refusal that says the restore was attempted (R128-W7a)", async () => {
+    nativeState.metricsQueue = [
+      { x: -32000, y: -32000, scaleFactor: 1 },
+      { x: -32000, y: -32000, scaleFactor: 1 },
+    ];
+    await expect(performStagedBrowserCapture("tab-still-min", {})).rejects.toThrow(
+      /restored the window and retried, but it still reports minimized coordinates/,
+    );
+    expect(unminimizeMock).toHaveBeenCalledTimes(1);
+    // Nothing was staged — the refusal owns the answer.
     expect(setBoundsMock).not.toHaveBeenCalled();
+    expect(captureMock).not.toHaveBeenCalled();
+  });
+
+  it("a minimized window whose re-read answers NO metrics (the window API gone mid-recovery) → the same honest refusal, never a hang", async () => {
+    nativeState.metricsQueue = [{ x: -32000, y: -32000, scaleFactor: 1 }, null];
+    await expect(performStagedBrowserCapture("tab-unmin-null", {})).rejects.toThrow(
+      /restored the window and retried, but it still reports minimized coordinates/,
+    );
+    expect(unminimizeMock).toHaveBeenCalledTimes(1);
   });
 
   it("no window metrics → the honest refusal (the physical region cannot be computed)", async () => {

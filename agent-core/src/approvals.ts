@@ -119,6 +119,49 @@ const BLOCKED_PREFIXES: readonly string[] = [
   "pnpm dev", "npm start", "next dev", "npx playwright", "npx puppeteer",
 ];
 
+/** R128-W7b (FIX 3): the LOOPBACK carve-out's host set — 127.0.0.1,
+ * localhost, and [::1] (the sidecar's own REST surface, a local dev server,
+ * the app's own machine). A curl/wget whose EVERY URL targets loopback is a
+ * local probe, not network exfiltration; anything else still blocks
+ * verbatim. */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+
+/** R128-W7b (FIX 3): extract every http(s) URL token from a command (the
+ * regex stops at whitespace/quotes/angle-brackets so shell punctuation never
+ * becomes part of the host). */
+function extractHttpUrls(command: string): string[] {
+  return command.match(/https?:\/\/[^\s"'<>]+/gi) ?? [];
+}
+
+/** R128-W7b (FIX 3): is ONE URL loopback-only? Host parsing: strip the
+ * scheme, take the authority up to path/query/hash, drop userinfo, strip the
+ * port (bracket-aware for IPv6 literals). */
+function isLoopbackUrl(url: string): boolean {
+  const m = /^https?:\/\/([^/?#]+)/i.exec(url);
+  if (m === null) return false;
+  let authority = m[1].toLowerCase();
+  const at = authority.lastIndexOf("@");
+  if (at !== -1) authority = authority.slice(at + 1);
+  if (authority.startsWith("[")) {
+    const close = authority.indexOf("]");
+    if (close === -1) return false;
+    return LOOPBACK_HOSTS.has(authority.slice(0, close + 1));
+  }
+  const colon = authority.lastIndexOf(":");
+  if (colon !== -1) authority = authority.slice(0, colon);
+  return LOOPBACK_HOSTS.has(authority);
+}
+
+/** R128-W7b (FIX 3): does the command carry at least one URL with EVERY URL
+ * targeting loopback? Conservative in both directions — a command with NO
+ * URL never carves out (curl's default target is not provably loopback), and
+ * one non-loopback URL anywhere blocks the carve-out. */
+function targetsOnlyLoopback(command: string): boolean {
+  const urls = extractHttpUrls(command);
+  if (urls.length === 0) return false;
+  return urls.every(isLoopbackUrl);
+}
+
 /** Windows-shaped disk-wiping variants + exact-token commands (a bare
  * "vite" prefix would also block "vitest" — hence word-boundary regexes). */
 const BLOCKED_PATTERNS: readonly RegExp[] = [
@@ -170,6 +213,25 @@ function normalizeForMatch(action: string): string {
 
 /** The policy tier for a command (pure — no DB, no environment). */
 export function categorize(action: string): ActionCategory {
+  return categorizeWithMatch(action).category;
+}
+
+/** The policy tier + (for the BLOCKED tier) the EXACT rule that matched.
+ * ROUND-128 (R128-W7b, FIX 3): the ledger complaint — a blocklist denial
+ * listed six UNRELATED prefixes ("Blocked: rm -rf /, sudo, su, shutdown…")
+ * while refusing `curl`, so the model could not tell WHICH rule had fired.
+ * `categorize` keeps its plain string union (every historical pin keys on
+ * it); THIS spelling carries `matchedPattern` so decideCommand and the
+ * denial note can name the exact rule (prefix verbatim, or the regex's
+ * source). */
+export interface CategorizedCommand {
+  category: ActionCategory;
+  /** Present only for category === "blocked" — the exact prefix (verbatim,
+   * trailing space included) or regex source that matched. */
+  matchedPattern?: string;
+}
+
+export function categorizeWithMatch(action: string): CategorizedCommand {
   // ROUND-64 (R64-d): normalization for MATCHING only (see normalizeForMatch).
   const normalized = normalizeForMatch(action);
   const segments = splitCompound(normalized);
@@ -180,31 +242,46 @@ export function categorize(action: string): ActionCategory {
     // owner sees the full command and decides — fail-closed).
     let worst: ActionCategory = "auto";
     for (const segment of segments) {
-      const tier = categorize(segment); // segments are simple — no recursion depth
-      if (tier === "blocked") return "blocked";
-      if (tier === "destructive") worst = "destructive";
-      else if (tier === "confirm" && worst === "auto") worst = "confirm";
+      const tier = categorizeWithMatch(segment); // segments are simple — no recursion depth
+      if (tier.category === "blocked") return { category: "blocked", matchedPattern: tier.matchedPattern };
+      if (tier.category === "destructive") worst = "destructive";
+      else if (tier.category === "confirm" && worst === "auto") worst = "confirm";
     }
-    return worst === "auto" ? "confirm" : worst;
+    return { category: worst === "auto" ? "confirm" : worst };
   }
-  if (hasRecursiveOrForceRm(normalized)) return "blocked";
+  if (hasRecursiveOrForceRm(normalized)) {
+    return { category: "blocked", matchedPattern: "rm with -r/-f" };
+  }
   for (const pattern of BLOCKED_PATTERNS) {
-    if (pattern.test(normalized)) return "blocked";
+    if (pattern.test(normalized)) return { category: "blocked", matchedPattern: pattern.source };
   }
-  if (BLOCKED_PREFIXES.some((p) => normalized.startsWith(p))) return "blocked";
+  // R128-W7b (FIX 3): the LOOPBACK carve-out — `curl`/`wget` probing
+  // 127.0.0.1 / localhost / [::1] (the sidecar's own REST surface, a local
+  // dev server) is a LOCAL probe, not network exfiltration, and the owner's
+  // ledger case was exactly a blocked localhost curl. Conservative: only
+  // when EVERY http(s) URL in the command is loopback — one non-loopback
+  // URL anywhere keeps the block. Every OTHER prefix still applies verbatim
+  // (`sudo curl http://127.0.0.1` stays blocked by "sudo ").
+  const loopbackOnly = targetsOnlyLoopback(normalized);
+  for (const prefix of BLOCKED_PREFIXES) {
+    if (normalized.startsWith(prefix)) {
+      if ((prefix === "curl " || prefix === "wget ") && loopbackOnly) continue;
+      return { category: "blocked", matchedPattern: prefix };
+    }
+  }
   for (const pattern of DESTRUCTIVE_PATTERNS) {
-    if (pattern.test(normalized)) return "destructive";
+    if (pattern.test(normalized)) return { category: "destructive" };
   }
   // ROUND-64 (R64-d): word-boundary matching + the fd/find exec-flag demotion.
   if (AUTO_PREFIXES.some((p) => matchesAutoPrefix(normalized, p))) {
-    return hasFdFindExecFlag(normalized) ? "confirm" : "auto";
+    return { category: hasFdFindExecFlag(normalized) ? "confirm" : "auto" };
   }
-  return "confirm";
+  return { category: "confirm" };
 }
 
 /** The layered decision every run_command passes through. */
 export type CommandDecision =
-  | { action: "deny"; category: "blocked"; reason: string }
+  | { action: "deny"; category: "blocked"; reason: string; matchedPattern?: string }
   | { action: "run"; category: "auto" | "rule"; reason: string }
   | { action: "ask"; category: Extract<ActionCategory, "confirm" | "destructive"> };
 
@@ -316,16 +393,25 @@ export function decideCommand(
    * authoritative — the owner may explicitly allow anything). */
   root?: string,
 ): CommandDecision {
-  const tier = categorize(command);
-  if (tier === "blocked") {
-    return { action: "deny", category: "blocked", reason: "this command is on the blocklist and can never run" };
+  const tier = categorizeWithMatch(command);
+  if (tier.category === "blocked") {
+    // R128-W7b (FIX 3): the denial NAMES the exact rule that matched — the
+    // old generic message made the model guess among unrelated patterns.
+    return tier.matchedPattern !== undefined
+      ? {
+          action: "deny",
+          category: "blocked",
+          reason: `this command is on the blocklist and can never run (matched: "${tier.matchedPattern}")`,
+          matchedPattern: tier.matchedPattern,
+        }
+      : { action: "deny", category: "blocked", reason: "this command is on the blocklist and can never run" };
   }
-  if (tier === "destructive") {
+  if (tier.category === "destructive") {
     // Hard rule: destructive operations ALWAYS ask — an "always allow" rule
     // never bypasses them.
     return { action: "ask", category: "destructive" };
   }
-  if (tier === "auto") {
+  if (tier.category === "auto") {
     // ROUND-45 (P0-4): the AUTO tier is path-contained. A read-only command
     // touching anything outside the project root (`cat /etc/passwd`,
     // `cat ~/.ssh/id_rsa`, `head ../secrets.env`) demotes to ASK — fail
@@ -551,7 +637,17 @@ export async function requestCommandApproval(
   const decision = decideCommand(db, deps.projectId, command, opts?.root);
 
   if (decision.action === "deny") {
-    return { allowed: false, note: `command blocked: ${decision.reason}. Blocked: ${BLOCKED_PREFIXES.slice(0, 6).join(", ")}…` };
+    // R128-W7b (FIX 3): the note now names the EXACT matched pattern (the
+    // reason already carries it); the full first-6-prefix list only rides
+    // along when no specific match is known (the legacy shape, kept for
+    // back-compat — every blocked decision routes through a named rule).
+    return {
+      allowed: false,
+      note:
+        decision.matchedPattern !== undefined
+          ? `command blocked: ${decision.reason}`
+          : `command blocked: ${decision.reason}. Blocked: ${BLOCKED_PREFIXES.slice(0, 6).join(", ")}…`,
+    };
   }
   if (decision.action === "run") {
     return { allowed: true, note: decision.reason };

@@ -50,6 +50,47 @@
  *     context.compact EVENT payload and the streamed meta.compaction frame
  *     carry the numbers + reason as ADDITIVE optional fields — pre-R125
  *     events simply lack them and every reader ignores unknown fields.
+ *
+ * ROUND-128 (R128-W8, D3+D5 — the ZCode adoption round's compaction wave;
+ * study §D3/§D5, mirrored from ZCode compact/rounds.ts +
+ * agent/message-history.ts invalidateRuntimeTokenUsage +
+ * turn-loop-state.ts evaluateRapidRefill):
+ *   - D3a ROUND-ALIGNED SELECTION: the keep/summarize boundary never splits
+ *     an assistant's tool exchange. The head is grouped into assistant-
+ *     STARTED rounds (groupByAssistantStartedRounds — ZCode compact/rounds
+ *     groupByAssistantStartedRounds's twin: an assistant message + its
+ *     trailing tool_results/user messages until the next assistant; leading
+ *     user messages form their own head group); after the 60%-budget byte
+ *     cut, the boundary walks BACK to the start of the oldest kept
+ *     assistant round, and everything before that round start is summarized
+ *     (the newest exchange rides verbatim — never a summarized tool_call
+ *     whose tool_result survives in the tail). Honest guard: when the
+ *     extension would push the keep set past 125% of the 60% keep-target
+ *     (= 75% of `available`), the byte-budget cut stands instead and the
+ *     plan says roundAligned:false (a single gigantic round must not
+ *     consume the whole window). ADDITIVE decision fields on the plan and
+ *     the persisted event: roundAligned + preservedRounds.
+ *   - D3b ANCHOR INVALIDATION (providerUsageAnchor): a compaction boundary
+ *     invalidates every provider-usage anchor at or before it — those
+ *     inputTokens measured the PRE-compaction serialization (the documented
+ *     stale-anchor over-trigger window: right after a compaction, before
+ *     the next successful provider reply re-anchors). The scan skips
+ *     usage-bearing assistant events older than the newest compaction
+ *     EVENT (the keep-set assistants included — ZCode's
+ *     invalidateRuntimeTokenUsage zeroes exactly those preserved-tail
+ *     anchors), returning null when nothing post-boundary exists yet: the
+ *     honest "no anchor" the estimate fallback already handles.
+ *   - D5 RAPID-REFILL CIRCUIT BREAKER: when the last 3 compactions EACH
+ *     landed with fewer than 3 tool turns (tool.use events) since the
+ *     previous one, the next AUTO compaction is BLOCKED — the session is
+ *     compacting faster than it fills (a runaway tool-output loop would
+ *     otherwise re-compact every iteration). A persisted turn.warning
+ *     (kind "compaction_rapid_refill", one per episode) carries the
+ *     teaching copy. The breaker MUST NOT (and does not) block the manual
+ *     compact route, the overflow-recovery force path, or the
+ *     summarizer-failure hard-trim fallback — all of those ride
+ *     opts.force. The block lifts once a compaction is followed by ≥3
+ *     tool turns (the counter reset).
  */
 import type Database from "better-sqlite3";
 import { appendSessionEvent, getSession, listSessionEvents, recordUsage, type SessionEvent } from "../storage/sessions.js";
@@ -94,6 +135,16 @@ export interface CompactionPayload {
   threshold?: number;
   /** Why the compaction fired (the D2 vocabulary). */
   reason?: CompactionDecisionReason;
+  /* ROUND-128 (R128-W8, D3a): the round-aligned selection's additive
+   * fields — same contract as the R125-C fields above (old events simply
+   * lack them; every reader ignores unknown fields). */
+  /** True when the keep/summarize boundary sits on an assistant-round
+   * start (no assistant's tool exchange was split). False only on the
+   * materiality-guard fallback, where the byte-budget cut stood. */
+  roundAligned?: boolean;
+  /** How many whole assistant-started rounds the keep set preserves
+   * verbatim. */
+  preservedRounds?: number;
 }
 
 /** ROUND-125 (R125-C, D2): why planCompaction decided what it decided —
@@ -137,7 +188,8 @@ export interface CompactionDecisionFields {
  * carries the typed decision (the pre-R125 `null` returns became
  * { decision: "skip", reason: "below_threshold" | "empty_to_summarize" }
  * objects; the two test pins that asserted null were updated with
- * comments). The COMPACT side is the old plan plus the same fields. */
+ * comments). The COMPACT side is the old plan plus the same fields, plus
+ * the R128-W8 (D3a) round-alignment fields. */
 export type CompactionPlan =
   | (CompactionDecisionFields & { decision: "skip" })
   | (CompactionDecisionFields & {
@@ -145,12 +197,173 @@ export type CompactionPlan =
       toSummarize: SeqMessage[];
       keep: SeqMessage[];
       targetThroughSeq: number;
+      /* ROUND-128 (R128-W8, D3a): the selection's shape — additive on the
+       * COMPACT side only (a skip made no selection). roundAligned is
+       * false ONLY when the materiality guard kept the byte-budget cut
+       * (a round WAS split — the honest fallback); a boundary that splits
+       * no assistant round is true, extension or not. */
+      roundAligned: boolean;
+      /** Whole assistant-started rounds preserved verbatim in `keep`. */
+      preservedRounds: number;
     });
 
 /** The compaction event type name (appendSessionEvent accepts any string;
  * readers that don't know the type skip it — the UI event filters only
  * render known types, so no frontend change is required). */
 export const COMPACTION_EVENT_TYPE = "context.compact";
+
+/** R128-W8 (D3a): the materiality guard on the round-boundary extension —
+ * the extended keep set may grow past the 60% keep-target by at most this
+ * factor (1.25 → at most 75% of `available`); beyond it the byte-budget
+ * cut stands and the plan reports roundAligned:false. Keeps a single
+ * gigantic assistant round from consuming the window the compaction
+ * exists to free. */
+export const ROUND_EXTENSION_TOLERANCE = 1.25;
+
+/* ── ROUND-128 (R128-W8, D5): the rapid-refill circuit breaker ────────── */
+
+/** R128-W8 (D5): a compaction is a RAPID REFILL when fewer than this many
+ * tool turns (persisted tool.use events) passed since the previous one —
+ * the session is compacting faster than it fills (ZCode
+ * turn-loop-state.ts RAPID_REFILL_TOOL_TURN_THRESHOLD's twin). */
+export const RAPID_REFILL_TOOL_TURN_THRESHOLD = 3;
+
+/** R128-W8 (D5): this many consecutive rapid refills trip the breaker —
+ * the next AUTO compaction is blocked for the session (ZCode
+ * turn-loop-state.ts MAX_CONSECUTIVE_RAPID_REFILLS's twin; ACUTE derives
+ * the count from the durable event log instead of in-memory turn state,
+ * so the block survives restarts). */
+export const MAX_CONSECUTIVE_RAPID_REFILLS = 3;
+
+/** The persisted turn.warning's kind for a tripped rapid-refill breaker
+ * (the runtime loop-guard warnings' payload shape: {kind, message, …} —
+ * diagnostics only, never args/outputs/secrets). */
+export const RAPID_REFILL_WARNING_KIND = "compaction_rapid_refill";
+
+/** The breaker's teaching copy — one pinned string, surfaced verbatim as
+ * the turn.warning's message (the phone's transcript renders it as a meta
+ * line; the desktop log-fold skips the type safely). */
+export const RAPID_REFILL_WARNING_MESSAGE =
+  "Auto-compaction is paused for this session: it is compacting faster than the conversation fills " +
+  "(several compactions in a row with fewer than 3 tool calls between them — likely a runaway tool-output loop). " +
+  "Force a compaction with POST /sessions/:id/compact, or trim the oversized tool output; " +
+  "auto-compaction resumes after 3+ tool calls pass without a compaction.";
+
+/** R128-W8 (D5): the rapid-refill breaker's verdict over an event log.
+ * PURE — derived entirely from the persisted events, pinnable without a
+ * DB. */
+export interface RapidRefillBreakerDecision {
+  /** True when the next AUTO compaction must be blocked. */
+  blocked: boolean;
+  /** How many context.compact events have landed (any payload shape — the
+   * cadence signal is the event's existence). */
+  compactions: number;
+  /** tool.use counts between consecutive compactions, oldest → newest.
+   * gaps[0] counts from the LOG'S START to the first compaction (the
+   * honest durable twin of ZCode's undefined-tracking ≡ 0 baseline); the
+   * would-be gap of the NEXT compaction is NOT in here — it is
+   * toolUsesSinceLastCompact. */
+  gaps: number[];
+  /** tool.use events since the LAST compaction (since the log's start when
+   * none has landed yet) — the would-be next gap. ≥ threshold means the
+   * streak already reset ("a compaction followed by ≥3 tool turns"). */
+  toolUsesSinceLastCompact: number;
+  /** How many TRAILING compactions were each rapid (their gap since the
+   * previous compaction was < RAPID_REFILL_TOOL_TURN_THRESHOLD). */
+  consecutiveRapidRefills: number;
+}
+
+/**
+ * R128-W8 (D5): evaluate the rapid-refill circuit breaker over a session
+ * event log — ZCode turn-loop-state.ts evaluateRapidRefill's durable ACUTE
+ * twin (the study's §D5).
+ *
+ * The law: BLOCK the next auto compaction when the last
+ * MAX_CONSECUTIVE_RAPID_REFILLS compactions EACH landed with fewer than
+ * RAPID_REFILL_TOOL_TURN_THRESHOLD tool turns since the previous one AND
+ * the current stretch since the last compaction is still under the
+ * threshold (the reset: a compaction followed by ≥3 tool turns breaks the
+ * streak — a session that recovered does not get punished for its past).
+ * The manual compact route and the overflow-recovery force path bypass
+ * the breaker by construction (they ride opts.force; the check runs on
+ * the AUTO path only).
+ *
+ * PURE (events in, decision out) — the decision table is unit-pinned in
+ * tests/r128-compaction-d3d5.test.ts.
+ */
+export function evaluateRapidRefill(events: readonly SessionEvent[]): RapidRefillBreakerDecision {
+  let compactions = 0;
+  let toolUses = 0;
+  const gaps: number[] = [];
+  for (const ev of events) {
+    if (ev.type === "tool.use") {
+      toolUses += 1;
+      continue;
+    }
+    if (ev.type === COMPACTION_EVENT_TYPE) {
+      compactions += 1;
+      gaps.push(toolUses);
+      toolUses = 0;
+    }
+  }
+  let consecutiveRapidRefills = 0;
+  for (let i = gaps.length - 1; i >= 0; i--) {
+    if (gaps[i] < RAPID_REFILL_TOOL_TURN_THRESHOLD) consecutiveRapidRefills += 1;
+    else break;
+  }
+  const toolUsesSinceLastCompact = toolUses;
+  const blocked =
+    consecutiveRapidRefills >= MAX_CONSECUTIVE_RAPID_REFILLS &&
+    toolUsesSinceLastCompact < RAPID_REFILL_TOOL_TURN_THRESHOLD;
+  return { blocked, compactions, gaps, toolUsesSinceLastCompact, consecutiveRapidRefills };
+}
+
+/** R128-W8 (D5): has a rapid-refill warning already been sent for the
+ * CURRENT episode? True when the newest rapid-refill turn.warning is
+ * newer than the newest compaction (one warning per streak — a blocked
+ * session re-checked every outer-loop iteration must not spam identical
+ * rows; the next compaction closes the episode and re-arms the warning).
+ * PURE. */
+function rapidRefillWarningAlreadySent(events: readonly SessionEvent[]): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type === COMPACTION_EVENT_TYPE) return false;
+    if (ev.type === "turn.warning") {
+      const payload = ev.payload !== null && typeof ev.payload === "object" ? (ev.payload as Record<string, unknown>) : {};
+      if (payload.kind === RAPID_REFILL_WARNING_KIND) return true;
+    }
+  }
+  return false;
+}
+
+/** R128-W8 (D5): persist the breaker's loud warning — a turn.warning
+ * session event in the runtime loop-guard warnings' own payload shape
+ * ({kind, message, …counts}; agentId null like every compaction-owned
+ * event). Best-effort by construction (the persistLoopWarning idiom: the
+ * durable, reload-safe record; a write failure must never fail the
+ * assembly). */
+function persistRapidRefillWarning(
+  db: Database.Database,
+  sessionId: string,
+  decision: RapidRefillBreakerDecision,
+): void {
+  try {
+    appendSessionEvent(db, sessionId, {
+      type: "turn.warning",
+      agentId: null,
+      payload: {
+        kind: RAPID_REFILL_WARNING_KIND,
+        message: RAPID_REFILL_WARNING_MESSAGE,
+        consecutiveRapidRefills: decision.consecutiveRapidRefills,
+        toolTurnsSinceLastCompact: decision.toolUsesSinceLastCompact,
+        compactions: decision.compactions,
+      },
+    });
+  } catch {
+    // Best-effort — the blocked skip below is the real contract; the
+    // warning is the story on top of it.
+  }
+}
 
 /** How much of a compact summary rides into the persisted memory row (the
  * task's 400-char slice — a memory is a POINTER + a taste, not a second
@@ -227,6 +440,17 @@ export function findLatestCompaction(events: readonly SessionEvent[]): Compactio
         payload.reason === "empty_to_summarize"
           ? payload.reason
           : undefined,
+      // ROUND-128 (R128-W8, D3a): the round-alignment fields fold verbatim
+      // when present — the same typed-guard discipline as the fields above;
+      // a pre-R128 event yields undefined for each (the additive contract:
+      // old events simply lack them).
+      roundAligned: typeof payload.roundAligned === "boolean" ? payload.roundAligned : undefined,
+      preservedRounds:
+        typeof payload.preservedRounds === "number" &&
+        Number.isFinite(payload.preservedRounds) &&
+        payload.preservedRounds >= 0
+          ? payload.preservedRounds
+          : undefined,
     };
   }
   return null;
@@ -279,22 +503,58 @@ export function applyCompaction(messages: readonly SeqMessage[], compact: Compac
  * exists — the caller falls back to the pure local estimate and behaves
  * byte-identically to pre-R125.
  *
- * PURE (events + messages in, number out) — pinnable without a DB. The
- * anchor deliberately over-triggers rather than under-triggers in one known
- * window: after a compaction lands but before the next successful provider
- * reply re-anchors, the stale provider number still counts messages the new
- * summary replaced (ZCode zeroes such anchors via
- * invalidateRuntimeTokenUsage — the research doc's D3, queued, not this
- * round). The self-healing law: any successful provider call after a
- * compaction re-anchors exactly.
+ * PURE (events + messages in, number out) — pinnable without a DB.
+ *
+ * ROUND-128 (R128-W8, D3b) — ANCHOR INVALIDATION, ZCode
+ * agent/message-history.ts invalidateRuntimeTokenUsage's law: a compaction
+ * boundary invalidates every usage anchor at or before it. A provider
+ * inputTokens row measures the serialization of the request THAT PRODUCED
+ * it — and every assistant event persisted BEFORE the compaction event
+ * landed (the summarized head AND the preserved keep-set tail alike: both
+ * existed pre-compaction) replied to requests that contained the raw,
+ * un-summarized history. The pre-R128 stale-anchor over-trigger window —
+ * "after a compaction lands but before the next successful provider reply
+ * re-anchors, the stale provider number still counts messages the new
+ * summary replaced" — is closed here: the scan finds the NEWEST valid
+ * context.compact event (same malformed-payload guard as
+ * findLatestCompaction — a malformed newest compaction poisons the boundary
+ * to absent, exactly as the fold treats it) and returns null unless a
+ * usage-bearing assistant event exists STRICTLY AFTER it. The self-healing
+ * law stands: any successful provider call after a compaction re-anchors
+ * exactly (its reply persists after the compaction event by construction —
+ * the turn loop assembles the post-compaction list for that very call).
  */
 export function providerUsageAnchor(
   events: readonly SessionEvent[],
   messages: readonly SeqMessage[],
 ): number | null {
+  // R128-W8 (D3b): the compaction boundary — the newest VALID
+  // context.compact event's own seq. Everything at-or-before it measured
+  // the pre-compaction serialization and is not an honest anchor for the
+  // current (summary + tail) request.
+  let compactEventSeq: number | null = null;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type !== COMPACTION_EVENT_TYPE) continue;
+    const payload = ev.payload !== null && typeof ev.payload === "object" ? (ev.payload as Record<string, unknown>) : {};
+    const summary = typeof payload.summary === "string" ? payload.summary.trim() : "";
+    const throughSeq = typeof payload.throughSeq === "number" ? payload.throughSeq : 0;
+    // findLatestCompaction's exact law: a malformed NEWEST compaction is
+    // treated as absent (return null there too — an older valid event must
+    // not become a boundary the fold itself refuses).
+    if (summary === "" || throughSeq <= 0) break;
+    compactEventSeq = ev.seq;
+    break;
+  }
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
     if (ev.type !== "message.assistant") continue;
+    // R128-W8 (D3b): the walk is newest→oldest over seq-ordered events, so
+    // the FIRST assistant event found below the boundary means every
+    // remaining (older) candidate is pre-boundary too — the honest "no
+    // anchor" (the estimate fallback; callers already handle null for the
+    // no-usage-row case).
+    if (compactEventSeq !== null && ev.seq < compactEventSeq) return null;
     const payload =
       ev.payload !== null && typeof ev.payload === "object" ? (ev.payload as Record<string, unknown>) : null;
     const usage =
@@ -309,6 +569,58 @@ export function providerUsageAnchor(
     return inputTokens + tailTokens;
   }
   return null;
+}
+
+/** One round of the conversation — a group of contiguous messages produced
+ * by one assistant exchange (see groupByAssistantStartedRounds). */
+export interface MessageRoundGroup {
+  /** The group's messages, in conversation order. */
+  messages: SeqMessage[];
+  /** True when this group was STARTED by an assistant message beginning a
+   * new round. The FIRST group is the head group — leading user messages
+   * before the first assistant (a degenerate assistant-first list's opening
+   * segment functions as the head too, ZCode compact/rounds.ts's own law:
+   * its `current.length > 0` guard merges the opening assistant into the
+   * first group) — and carries false. */
+  assistantStarted: boolean;
+}
+
+/**
+ * ROUND-128 (R128-W8, D3a): group a message list into ASSISTANT-STARTED
+ * ROUNDS — ZCode compact/rounds.ts groupByAssistantStartedRounds's ACUTE
+ * twin (the selection half of the study's D3).
+ *
+ * A ROUND starts at each assistant-role message and extends through the
+ * subsequent tool/user messages (an assembled <tool_results> block is a
+ * user-role message, so an assistant's tool exchange is exactly one round)
+ * until the next assistant message. Leading user messages before the first
+ * assistant form their own HEAD group. Consecutive assistant messages each
+ * start their own round (ACUTE persists no assistant-id at this seam to
+ * merge streaming segments — each persisted assistant event is a round
+ * start, the honest granularity for never splitting an exchange).
+ *
+ * PURE (messages in, groups out) — pinnable without a DB. The boundary math
+ * in planCompaction consumes the group START indices; the keep/summarize
+ * split always lands ON one so no assistant's tool_call is ever summarized
+ * while its tool_result survives verbatim in the tail (or vice versa).
+ */
+export function groupByAssistantStartedRounds(messages: readonly SeqMessage[]): MessageRoundGroup[] {
+  const groups: MessageRoundGroup[] = [];
+  let current: SeqMessage[] = [];
+  let currentAssistantStarted = false;
+  for (const message of messages) {
+    if (message.role === "assistant" && current.length > 0) {
+      groups.push({ messages: current, assistantStarted: currentAssistantStarted });
+      current = [message];
+      currentAssistantStarted = true;
+    } else {
+      current.push(message);
+    }
+  }
+  if (current.length > 0) {
+    groups.push({ messages: current, assistantStarted: currentAssistantStarted });
+  }
+  return groups;
 }
 
 /**
@@ -338,6 +650,22 @@ export function providerUsageAnchor(
  * { decision: "skip", reason: "below_threshold" | "empty_to_summarize", … }
  * where pre-R125 returned null, and the compact plan carries the same
  * fields (ZCode AutoCompactDecision's twin).
+ *
+ * ROUND-128 (R128-W8, D3a): ROUND-ALIGNED SELECTION — the study's D3
+ * selection half, ZCode compact/rounds.ts + helpers/compact-selection.ts's
+ * "preserve the last round verbatim" law wearing ACUTE's 60% keep-window
+ * shape. After the byte-budget cut computes `boundary`, the boundary walks
+ * BACK to the start of the oldest kept assistant round
+ * (groupByAssistantStartedRounds): the whole partial round joins the keep
+ * set, and the summarize set is everything before that round start — an
+ * assistant's tool_call is never summarized while its tool_result rides in
+ * the tail. Materiality guard (the honest fallback): when the extension
+ * would push the keep set past 125% of the 60% keep-target — i.e. past 75%
+ * of `available` — the byte-budget cut stands instead and the plan reports
+ * roundAligned:false (a single gigantic round must not consume the window
+ * the compaction exists to free). A boundary that already splits no
+ * assistant round (it sits ON a round start, or inside the head group —
+ * leading user prose is not a round) is round-aligned with no extension.
  */
 export function planCompaction(
   messages: readonly SeqMessage[],
@@ -376,7 +704,58 @@ export function planCompaction(
   // Never keep nothing: if even the last message overflows the target alone,
   // keep just it.
   if (boundary > messages.length - 1) boundary = messages.length - 1;
-  const toSummarize = messages.slice(0, boundary);
+
+  // R128-W8 (D3a): round-align the boundary. Round starts are the indices
+  // where an assistant message began a NEW group (≥ 1 by construction — a
+  // new round requires an open group); the head group's interior and start
+  // are never round starts, so a boundary inside the head group cannot (and
+  // must not) extend: no assistant round is split there.
+  const roundStarts = new Set<number>();
+  {
+    let index = 0;
+    for (const group of groupByAssistantStartedRounds(messages)) {
+      if (group.assistantStarted) roundStarts.add(index);
+      index += group.messages.length;
+    }
+  }
+  let roundAligned = true;
+  let selectionBoundary = boundary;
+  if (!roundStarts.has(boundary)) {
+    let roundStart = -1;
+    for (let i = boundary; i >= 0; i--) {
+      if (roundStarts.has(i)) {
+        roundStart = i;
+        break;
+      }
+    }
+    if (roundStart >= 0) {
+      // The whole round containing `boundary` joins the keep set. Materiality
+      // guard: the extension must not push the keep set past 125% of the
+      // keep-target (75% of available) — else the byte cut stands, honestly
+      // split (roundAligned:false).
+      const extendedKeepTokens = estimateMessageTokens(
+        messages.slice(roundStart).map(({ role, content }) => ({ role, content })),
+      );
+      if (extendedKeepTokens <= target * ROUND_EXTENSION_TOLERANCE) {
+        selectionBoundary = roundStart;
+      } else {
+        roundAligned = false;
+      }
+    }
+  }
+
+  // R128-W8 (D3a): preservedRounds — the whole assistant-started rounds in
+  // the FINAL keep set (a group split by the boundary does not count).
+  let preservedRounds = 0;
+  {
+    let index = 0;
+    for (const group of groupByAssistantStartedRounds(messages)) {
+      if (group.assistantStarted && index >= selectionBoundary) preservedRounds += 1;
+      index += group.messages.length;
+    }
+  }
+
+  const toSummarize = messages.slice(0, selectionBoundary);
   if (toSummarize.length === 0) {
     return {
       decision: "skip",
@@ -397,8 +776,14 @@ export function planCompaction(
     // decision past the gate — the numbers are on the decision either way.
     reason: force ? "forced" : "above_threshold",
     toSummarize,
-    keep: messages.slice(boundary),
+    // R128-W8 (D3a): the ROUND-ALIGNED selection — the keep set starts at
+    // the round boundary (extended back from the byte cut when the guard
+    // allowed it), so no assistant's tool exchange is split; the additive
+    // fields tell the log which shape won.
+    keep: messages.slice(selectionBoundary),
     targetThroughSeq: toSummarize[toSummarize.length - 1].throughSeq,
+    roundAligned,
+    preservedRounds,
   };
 }
 
@@ -461,6 +846,21 @@ export interface CompactionOutcome {
  * It replaces the local estimate in planCompaction's over-budget gate and
  * rides the persisted event payload as the typed decision fields (D2), so
  * the log answers “why did it compact, and on whose numbers”.
+ *
+ * ROUND-128 (R128-W8, D3a/D5): the persisted event carries the
+ * round-alignment fields additively (roundAligned + preservedRounds — old
+ * events and readers simply lack/ignore them), and the AUTO path runs the
+ * rapid-refill circuit breaker BEFORE the summarizer fires: when the last
+ * MAX_CONSECUTIVE_RAPID_REFILLS compactions each landed with fewer than
+ * RAPID_REFILL_TOOL_TURN_THRESHOLD tool turns since the previous one (and
+ * the current stretch is still under the threshold), the compaction is
+ * SKIPPED — the raw (prior-compaction-applied) messages ride on, a
+ * turn.warning (kind "compaction_rapid_refill", one per episode) carries
+ * the teaching copy, and no context.compact event lands. NEVER blocked: the
+ * manual compact route and the overflow-recovery force path (both ride
+ * opts.force — the provider itself said the request was too large; a
+ * recovery attempt is a recovery attempt) and the summarizer-failure
+ * hard-trim fallback (it runs after the breaker allowed the attempt).
  */
 export async function assembleWithCompaction(
   seqMessages: readonly SeqMessage[],
@@ -480,6 +880,22 @@ export async function assembleWithCompaction(
     // Within budget (with any prior compaction applied): use as-is. If some
     // prior trim marker is already inside `applied` it stays — nothing to do.
     return { messages: applied.map(({ role, content }) => ({ role, content })), compacted: false };
+  }
+
+  // R128-W8 (D5): the rapid-refill circuit breaker — the AUTO path only
+  // (opts.force is the manual route / the overflow-recovery path; both
+  // bypass by construction). Blocked → skip the compaction entirely: the
+  // raw messages go out (they fit or the provider rejects and the FORCE
+  // path recovers), the teaching warning persists once per episode, and no
+  // event lands (the next iteration re-plans from raw events).
+  if (opts?.force !== true) {
+    const breaker = evaluateRapidRefill(events);
+    if (breaker.blocked) {
+      if (!rapidRefillWarningAlreadySent(events)) {
+        persistRapidRefillWarning(deps.db, deps.sessionId, breaker);
+      }
+      return { messages: applied.map(({ role, content }) => ({ role, content })), compacted: false };
+    }
   }
 
   let summary = "";
@@ -567,6 +983,11 @@ export async function assembleWithCompaction(
     estimatedTokens: plan.estimatedTokens,
     threshold: plan.threshold,
     reason: plan.reason,
+    // R128-W8 (D3a): the round-alignment fields ride the persisted event —
+    // same additive contract (old events simply lack them; the fold's typed
+    // guards keep them honest on the read side).
+    roundAligned: plan.roundAligned,
+    preservedRounds: plan.preservedRounds,
   };
   const finalMessages: SeqMessage[] = [summaryMessage(compact), ...plan.keep];
   compact.tokensSaved = Math.max(

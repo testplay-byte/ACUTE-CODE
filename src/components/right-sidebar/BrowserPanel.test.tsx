@@ -7,6 +7,11 @@ import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { useBrowserTabStore } from "../../lib/browser-store";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 import * as nativeBrowser from "../../lib/native-browser";
+// R128-W7a: the REAL hands action-script builder — the evalJob fix's pins
+// run its exact output through the simulated Rust browser_tab_eval wrap
+// (the cross-package import is test-only; the builders are pure string
+// functions with no agent-core runtime deps).
+import { buildHandsClickScript } from "../../../agent-core/src/tools/plugins/browser-hands.js";
 // R60-D: the popover-suppression guard the nativeCreate show consults.
 import { setPopoverWebviewSuppression, useWebviewGuardStore } from "./popover-webview-guard";
 // R62 (D8): the agent-browser bridge registry — the panel registers its
@@ -60,6 +65,14 @@ const nativeState = vi.hoisted(() => ({
   // R89-E: a scripted SEQUENTIAL reply queue (the evalJob protocol needs
   // start → poll → poll-done). When non-empty it takes precedence.
   evalQueue: [] as Array<{ ok: boolean; value?: unknown; error?: string }>,
+  // R128-W7a: when true, the eval mock SIMULATES the Rust browser_tab_eval
+  // wrap (src-tauri/src/browser.rs): the script becomes a FUNCTION BODY and
+  // only a `return` statement's value survives into the {ok,value} envelope
+  // — a bare IIFE expression statement's value is DISCARDED (value:null).
+  // The pre-R128 mocks handed the panel scripted envelopes directly, which
+  // is exactly why the IIFE-vs-return evalJob bug was invisible to this
+  // suite; the flag exists so the fix's pins run the REAL wrap semantics.
+  rustWrap: false,
   windowMetrics: null as { x: number; y: number; scaleFactor: number } | null,
   // ROUND-124 (R124): the staged capture's fakes — the tab geometry memory
   // (mirroring the REAL native-browser module's recording setters) and the
@@ -104,8 +117,24 @@ vi.mock("../../lib/native-browser", () => ({
   nativeTabsCloseAll: vi.fn(() => Promise.resolve()),
   openExternalUrl: vi.fn(() => Promise.resolve()),
   // R62 (D8): eval + screenshot geometry (the panel's bridge handler).
+  // R128-W7a: rustWrap=true runs the REAL Rust wrap semantics (see
+  // nativeState.rustWrap) — the script is wrapped as a function body and
+  // evaluated in this realm (happy-dom's window is the "page": a stub
+  // window.__acuteHands installed by a test is the page's runtime).
   nativeTabEval: vi.fn((_tabId: string, script: string) => {
     nativeState.evalScripts.push(script);
+    if (nativeState.rustWrap) {
+      const wrapped = `(function(){try{var __acute_r=(function(){${script}})();return JSON.stringify({ok:true,value:(__acute_r===undefined?null:__acute_r)});}catch(e){return JSON.stringify({ok:false,error:String((e&&(e.message||e))||e)});}})()`;
+      try {
+        // `return ${wrapped}` — the wrapped string is an EXPRESSION; using
+        // it directly as a function body would discard its value (the very
+        // bug under test).
+        const raw = new Function(`return ${wrapped}`)() as string;
+        return Promise.resolve(JSON.parse(raw) as { ok: boolean; value?: unknown; error?: string });
+      } catch (err) {
+        return Promise.resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
     if (nativeState.evalQueue.length > 0) return Promise.resolve(nativeState.evalQueue.shift()!);
     return Promise.resolve(nativeState.evalResult);
   }),
@@ -310,6 +339,11 @@ beforeEach(() => {
   // ROUND-50: fresh native-bridge state + mock call history per test.
   nativeState.available = false;
   nativeState.navigatedListener = null;
+  // R128-W7a: the Rust-wrap simulation is per-test opt-in, and a stub page
+  // runtime from a prior test never leaks into the next one.
+  nativeState.rustWrap = false;
+  delete (window as unknown as { __acuteHands?: unknown }).__acuteHands;
+  delete (window as unknown as { __acuteJob?: unknown }).__acuteJob;
   // R124: fresh staged-capture fakes (the geometry memory mirrors the real
   // module's per-tab recording; the capture route's scripted state resets).
   nativeState.boundsMemory.clear();
@@ -777,6 +811,13 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     nativeState.evalResult = null;
     nativeState.evalScripts = [];
     nativeState.evalQueue = [];
+    // R128-W7a: the Rust-wrap simulation is OPT-IN per test (the scripted
+    // envelope/queue fakes above stay the default for the legacy pins) —
+    // and a stub page runtime from a prior test must never leak into the
+    // next one.
+    nativeState.rustWrap = false;
+    delete (window as unknown as { __acuteHands?: unknown }).__acuteHands;
+    delete (window as unknown as { __acuteJob?: unknown }).__acuteJob;
     nativeState.windowMetrics = null;
     create().mockReset();
     create().mockImplementation(() => Promise.resolve());
@@ -1381,6 +1422,101 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     });
     expect(reply.ok).toBe(false);
     expect(reply.error).toContain("no element matches the CSS selector");
+  });
+
+  // ── R128-W7a: the evalJob IIFE-vs-return fix, pinned through the ─────────
+  // SIMULATED Rust wrap (nativeState.rustWrap). The owner's 18-entry ledger
+  // carried this failure FIVE times: every click/press_key answered
+  // "evalJob: unexpected start payload (no job started) — got: {}" because
+  // the hands builders emitted IIFE expression statements whose values the
+  // Rust function-body wrap discards (value:null) — the pre-R128 mocks here
+  // handed the panel scripted envelopes directly, so the suite never saw it.
+  // These pins run the REAL builder output through the REAL wrap semantics.
+
+  it("R128-W7a: a REAL click action script through the simulated Rust wrap STARTS the job — value {started:true}, never null", async () => {
+    nativeState.rustWrap = true;
+    // The minimal page runtime stub: startJob arms a completed job at once
+    // (the REAL runtime's protocol; the real builders' round-trips are
+    // pinned in agent-core's browser-tool suite — this pin is the PANEL's
+    // start phase through the wrap).
+    (window as unknown as { __acuteHands?: unknown }).__acuteHands = {
+      startJob: (driver: () => unknown) => {
+        void driver;
+        (window as unknown as { __acuteJob?: unknown }).__acuteJob = {
+          done: true,
+          result: { clicked: { tag: "a", text: "Next" } },
+          error: null,
+        };
+      },
+    };
+    const tab = makeTab({ browserUrl: "https://example.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(hasBrowserCommandHandler("tab-test-1")).toBe(true));
+
+    const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("evalJob", {
+      script: buildHandsClickScript("#a", "", 1),
+    });
+    expect(reply.ok).toBe(true);
+    expect(reply.data).toEqual({ ok: true, value: { clicked: { tag: "a", text: "Next" } } });
+    // The start script is the REAL builder's output (return-styled) and the
+    // poll read the job the stub's startJob armed — start + poll = 2 evals.
+    expect(nativeState.evalScripts.length).toBe(2);
+    expect(nativeState.evalScripts[0]).toMatch(/^return\s*\(function/);
+    expect(nativeState.evalScripts[0]).toContain("startJob");
+    expect(nativeState.evalScripts[1]).toContain("__acuteJob");
+  });
+
+  it("R128-W7a: the {needInstall:true} handshake + installer verification now FIRE — install → retry start → poll (the pre-R128 dead path, end-to-end)", async () => {
+    nativeState.rustWrap = true;
+    // No window.__acuteHands — the first start must answer {needInstall:true}
+    // (the shape the pre-R128 wrap could never deliver).
+    const tab = makeTab({ browserUrl: "https://example.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(hasBrowserCommandHandler("tab-test-1")).toBe(true));
+
+    const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("evalJob", {
+      script: buildHandsClickScript("#a", "", 1),
+      // A return-styled stub installer (the real one's round-trip is pinned
+      // in agent-core): installs a minimal runtime, answers {installed:true}.
+      installScript:
+        'window.__acuteHands = { startJob: function (driver) { window.__acuteJob = { done: true, result: { clicked: { tag: "a" } }, error: null }; } }; return { installed: true, adopted: false };',
+    });
+    expect(reply.ok).toBe(true);
+    expect(reply.data).toEqual({ ok: true, value: { clicked: { tag: "a" } } });
+    // The full choreography through the wrap: start (needInstall) → install
+    // → retry start (started) → poll — the handshake + the {installed:true}
+    // verification the pre-R128 shape made unreachable.
+    expect(nativeState.evalScripts).toHaveLength(4);
+    expect(nativeState.evalScripts[0]).toMatch(/^return\s*\(function/);
+    expect(nativeState.evalScripts[1]).toContain("__acuteHands =");
+    expect(nativeState.evalScripts[2]).toMatch(/^return\s*\(function/);
+    expect(nativeState.evalScripts[3]).toContain("__acuteJob");
+  });
+
+  it("R128-W7a (the belt): an OLD-FORMAT IIFE script (an older sidecar) gets the probe + one retry, then the honest null-valued error — never a silent {}", async () => {
+    nativeState.rustWrap = true;
+    const tab = makeTab({ browserUrl: "https://example.com" });
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(hasBrowserCommandHandler("tab-test-1")).toBe(true));
+
+    // The pre-R128 shape: an IIFE EXPRESSION statement (no leading return)
+    // — its value is discarded by the wrap, the envelope answers value:null.
+    const reply = await getBrowserCommandHandlerForTest("tab-test-1")!("evalJob", {
+      script:
+        '(function () { try { if (!window.__acuteHands) return { needInstall: true }; return { started: true }; } catch (e) { return { error: String((e && e.message) || e) }; } })()',
+    });
+    expect(reply.ok).toBe(false);
+    expect(reply.error).toContain("unexpected start payload");
+    // The honest value the wrap actually produced — null, not the old
+    // misleading {} (the belt's re-probe ran first: the probe's __acuteJob
+    // read is in the script log).
+    expect(reply.error).toContain("null");
+    expect(nativeState.evalScripts.some((s) => s.includes("__acuteJob"))).toBe(true);
+    // start → probe → retry start (the belt's bounded retry), then the error.
+    expect(nativeState.evalScripts.length).toBeGreaterThanOrEqual(3);
   });
 
   it("R62: screenshot_meta reports the panel's PHYSICAL-px region (rect × scale + window origin)", async () => {

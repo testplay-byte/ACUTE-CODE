@@ -228,7 +228,11 @@ describe("R98-F3 A: the search_symbols tool", () => {
     expect(result.ok).toBe(true);
     expect(result.output).toContain("the symbol index is empty for this project");
     expect(result.output).toContain("call index_project to build it now");
-    expect(result.output).toContain("(no matching symbols)");
+    // R128-W7b (FIX 9): the still-empty body now names the matching model
+    // (prefix-first + the contains fallback) instead of a bare parenthetical.
+    expect(result.output).toContain(
+      "(no matching symbols — matching is PREFIX-first with a contains fallback; for content search use search_code)",
+    );
 
     // A root with NO files: an empty index is the truth — no stale noise.
     const { root: emptyRoot, deps: emptyDeps } = setupProject("empty-root");
@@ -272,7 +276,11 @@ describe("R98-F3 B: the incremental index after write/edit", () => {
     expect(after.ok).toBe(true);
     expect(after.output).toContain("edit-me.ts:1 [function] newName");
     const old = await tool(tools, "search_symbols").execute({ query: "oldName" });
-    expect(old.output).toContain("(no matching symbols)");
+    // R128-W7b (FIX 9) re-pin: the still-empty body now carries the
+    // matching-model hint instead of the bare parenthetical.
+    expect(old.output).toContain(
+      "(no matching symbols — matching is PREFIX-first with a contains fallback; for content search use search_code)",
+    );
   });
 
   it("delete_file clears the path's rows (search_symbols never returns a dead path)", async () => {
@@ -283,7 +291,10 @@ describe("R98-F3 B: the incremental index after write/edit", () => {
     expect((await tool(tools, "search_symbols").execute({ query: "goneFn" })).output).toContain("gone.ts:1");
     await tool(tools, "delete_file").execute({ path: "gone.ts" });
     const after = await tool(tools, "search_symbols").execute({ query: "goneFn" });
-    expect(after.output).toContain("(no matching symbols)");
+    // R128-W7b (FIX 9) re-pin: same honest empty body as above.
+    expect(after.output).toContain(
+      "(no matching symbols — matching is PREFIX-first with a contains fallback; for content search use search_code)",
+    );
   });
 });
 

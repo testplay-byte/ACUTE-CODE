@@ -429,6 +429,21 @@ export function openExternalUrl(url: string): Promise<void> {
 }
 
 /**
+ * ROUND-128 (R128-W7a): restore the MAIN window from minimized — the Rust
+ * `window_unminimize` command (src-tauri/src/browser.rs; unminimize + show,
+ * best-effort, no arguments). The staged screenshot capture's guard-3
+ * recovery leg: a minimized Windows window parks at (-32000,-32000) and
+ * paints nothing, so the capture used to refuse flatly; now it calls this,
+ * waits a short bounded beat, re-reads the window metrics, and only a
+ * STILL-minimized window refuses (with the honest "restored the window and
+ * retried" copy). Outside Tauri a safe no-op (the web-mode capture path
+ * refuses earlier at the bridge guard anyway).
+ */
+export function unminimizeMainWindow(): Promise<void> {
+  return runCommand("window_unminimize");
+}
+
+/**
  * Subscribe to `browser-navigated` — emitted by the Rust `on_navigation`
  * hook for every http/https navigation of every tab (initial loads, link
  * clicks, redirects). Payload is `{ tab_id, url }` (serde keeps snake_case).

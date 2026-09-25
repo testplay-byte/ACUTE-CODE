@@ -46,6 +46,9 @@
  *     "ran successfully and printed nothing" note (no silent empty output).
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import type { ToolResult } from "./index.js";
 import { decideCommand, requestCommandApproval, type ApprovalRequestDeps } from "../approvals.js";
 // ROUND-45 (audit P0-3): children never inherit the sidecar's secrets.
@@ -87,14 +90,117 @@ export function looksLikeBackgroundLaunch(command: string): boolean {
   return false;
 }
 
-/** Parse the first stdout/append redirection target (`> file` / `>> file`)
- * so job_status can tail what a redirected background process prints.
- * `2>&1`-style duplicates are ignored (they don't name a file). */
+/** Parse the stdout/append redirection targets (`> file` / `>> file`) so
+ * job_status can tail what a redirected background process prints.
+ * `2>&1`-style duplicates are ignored (they don't name a file).
+ *
+ * ROUND-128 (R128-W7b, FIX 6): the null device is NEVER a log — `>nul`,
+ * `>NUL`, `>/dev/null` are discarded, and when MULTIPLE redirects exist the
+ * LAST REAL one wins (the ledger complaint: a job advertised log 'nul'
+ * while the command actually redirected to `TEST-1\job.log` — the shape
+ * was `… > job.log 2>&1 >nul`, and the FIRST-match parse picked 'nul').
+ * All-null (`>nul 2>&1`) → null: no log is advertised at all. */
 export function parseLogRedirect(command: string): string | null {
-  const match = command.match(/(?:^|\s)(?:>>|>)\s*("[^"]+"|'[^']+'|[^\s>&|]+)/);
-  if (match === null) return null;
-  const raw = match[1].replace(/^["']|["']$/g, "");
-  return raw === "" || raw === "&" ? null : raw;
+  const redirectRe = /(?:^|\s)(?:>>|>)\s*("[^"]+"|'[^']+'|[^\s>&|]+)/g;
+  const realTargets: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = redirectRe.exec(command)) !== null) {
+    const raw = match[1].replace(/^["']|["']$/g, "");
+    if (raw === "" || raw === "&") continue;
+    // R128-W7b: the null device is a SINK, not a log (case-insensitive —
+    // Windows' NUL is usually spelled lowercase in scripts).
+    if (raw.toLowerCase() === "nul" || raw.toLowerCase() === "/dev/null") continue;
+    realTargets.push(raw);
+  }
+  return realTargets.length > 0 ? realTargets[realTargets.length - 1] : null;
+}
+
+/** ROUND-128 (R128-W7b, FIX 2): search tools whose "no matches" exit code
+ * is 1, not an error — findstr/find/grep/rg all use exit 1 for "nothing
+ * matched", and the old finish path reported that as FAILED: "(no output)",
+ * teaching the model its probe had ERRORED (the ledger's findstr case). */
+const SEARCH_TOOLS_EXITING_ONE = new Set([
+  "findstr", "findstr.exe", "grep", "egrep", "fgrep", "rg", "ripgrep",
+  "find", "find.exe",
+]);
+
+/** R128-W7b (FIX 2): the command's first whitespace token (trimmed,
+ * case-insensitive, quotes stripped) — the tool name a shell would exec. */
+function firstCommandToken(command: string): string {
+  const first = command.trim().split(/\s+/)[0] ?? "";
+  return first.replace(/^["']|["']$/g, "").toLowerCase();
+}
+
+/** R128-W7b (FIX 10): does the command suppress stderr into the Windows
+ * null device? (`2>nul`, `2 > nul` — cmd's spelling; the ledger's agent
+ * appended it and lost the actual error text.) */
+function suppressesStderrToNull(command: string): boolean {
+  return /2\s*>\s*nul/i.test(command);
+}
+
+/* ── ROUND-128 (R128-W7b, FIX 4): win32 `node -e "<script>"` auto-tempfile ──
+ * The ledger's complaint: "Multiple inline `node -e` commands via
+ * run_command were visibly mangled by Windows/cmd quoting and escaping; the
+ * assistant explicitly noted 'cmd mangled the quoting.'" With shell:true a
+ * `node -e "script with ' \" ^ % < > & |"` payload round-trips through
+ * cmd.exe's quote collapsing — the script node RECEIVES is not the script
+ * the model wrote. The fix: when the command is exactly a quoted
+ * `node -e "script"` (the script is the tail of the command) whose body
+ * contains shell-hostile characters, write the body to a temp file and
+ * spawn `node "<tempfile>"` instead. The rewrite is SILENT to the model
+ * (same output, same exit code) and the temp file is ALWAYS deleted in the
+ * finish path — success, failure, timeout, background — so nothing leaks.
+ * POSIX is untouched (sh passes the payload through verbatim). */
+
+/** The mangle-risk characters: quotes beyond the wrapping pair plus the
+ * cmd metacharacters that re-interpret inside a quoted script. */
+const EVAL_MANGLE_CHARS = /["'^%<>&|]/;
+
+/** The detection shape: `node`/`node.exe` + `-e`/`--eval` + a quoted script. */
+const NODE_EVAL_SHAPE = /(?:^|\s)(?:"?node(?:\.exe)?"?)\s+(?:--eval\s+|-e\s+)(["'])/i;
+
+/** One planned rewrite: the spawned command + the temp file to create (the
+ * caller writes `script` to `path`, spawns `command`, deletes `path` in its
+ * finish path). */
+export interface EvalTempPlan {
+  command: string;
+  path: string;
+  script: string;
+}
+
+/** R128-W7b (FIX 4): plan the win32 auto-tempfile rewrite for a complex
+ * inline `node -e "<script>"` payload. Returns null when the shape does not
+ * apply (not win32, not a node -e form, the script has no mangle-risk
+ * characters, trailing arguments follow the script, or the command is a
+ * background launch — a detached grandchild must not race the temp-file
+ * deletion). PURE: no filesystem access, so tests can pin the rewrite
+ * directly. */
+export function planWindowsEvalTempFile(command: string, opts?: { background?: boolean }): EvalTempPlan | null {
+  if (process.platform !== "win32") return null;
+  if (opts?.background === true) return null;
+  const trimmed = command.trim();
+  const shape = NODE_EVAL_SHAPE.exec(trimmed);
+  if (shape === null) return null;
+  const quote = shape[1];
+  const scriptStart = shape.index + shape[0].length;
+  // The script runs to the LAST occurrence of the wrapping quote in the
+  // command — embedded same-quotes are part of the script (that is exactly
+  // what cmd mangles). The script must BE the tail: trailing arguments
+  // cannot be safely reconstructed, so those commands stay as written.
+  const scriptEnd = trimmed.lastIndexOf(quote);
+  if (scriptEnd < scriptStart) return null;
+  const script = trimmed.slice(scriptStart, scriptEnd);
+  if (script.trim() === "") return null;
+  if (!EVAL_MANGLE_CHARS.test(script)) return null;
+  const trailing = trimmed.slice(scriptEnd + 1).trim();
+  if (trailing !== "") return null;
+  // `node -e` scripts are CommonJS by default — a `.js` temp file keeps
+  // EXACTLY those semantics for the ledger's `require(...)`-shaped scripts.
+  // ESM-shaped bodies (import/export statements) get `.mjs` — `node -e`
+  // auto-detects those on modern Node, and a plain `.js` file would not.
+  const looksEsm = /(^|\n)\s*(import|export)\s/.test(script);
+  const path = `${tmpdir()}${tmpdir().endsWith("/") || tmpdir().endsWith("\\") ? "" : "/"}acute-eval-${randomUUID().slice(0, 8)}.${looksEsm ? "mjs" : "js"}`;
+  return { command: `node "${path}"`, path, script };
 }
 
 export interface RunCommandOptions {
@@ -150,8 +256,26 @@ export async function runCommand(
   const graceMs = isBackgroundLaunch ? BACKGROUND_LAUNCH_GRACE_MS : PIPE_GRACE_MS;
   const logFile = parseLogRedirect(trimmed);
 
+  // R128-W7b (FIX 4): on win32 a complex inline `node -e "<script>"` is
+  // rewritten to `node "<tempfile>"` — cmd.exe cannot round-trip the quoted
+  // payload ("cmd mangled the quoting", the ledger's repeated failure). The
+  // rewrite happens AFTER the approval gate (the model's command is what was
+  // approved — the temp file is an execution detail, silent to the model) and
+  // NEVER for background launches (a detached grandchild would race the
+  // finish-path deletion of the temp file). A failed write falls back to the
+  // original command verbatim.
+  let evalTemp: EvalTempPlan | null = planWindowsEvalTempFile(trimmed, { background: isBackgroundLaunch });
+  if (evalTemp !== null) {
+    try {
+      writeFileSync(evalTemp.path, evalTemp.script, "utf8");
+    } catch {
+      evalTemp = null;
+    }
+  }
+  const spawnCommand = evalTemp !== null ? evalTemp.command : trimmed;
+
   return new Promise((resolve) => {
-    const child: ChildProcess = spawn(trimmed, {
+    const child: ChildProcess = spawn(spawnCommand, {
       cwd: root,
       shell: true,
       windowsHide: true,
@@ -214,6 +338,16 @@ export async function runCommand(
       settled = true;
       if (outputTimer !== null) clearInterval(outputTimer);
       flushOutput();
+      // R128-W7b (FIX 4): the eval temp file ALWAYS goes away — success,
+      // failure, timeout, background — the rewrite is leak-free by
+      // construction (finish is the single settle point).
+      if (evalTemp !== null) {
+        try {
+          unlinkSync(evalTemp.path);
+        } catch {
+          /* already gone — nothing to leak */
+        }
+      }
       resolve(result);
     };
 
@@ -274,13 +408,36 @@ export async function runCommand(
         // Normal completion: pipes closed right after the shell exited.
         // ROUND-70 (R70-a): zero-output commands say so EXPLICITLY (SWE-agent
         // ACI — an empty/blank result is ambiguous: did it run? fail?).
+        // R128-W7b (FIX 2): a SEARCH tool that exits 1 with NO output is
+        // "no matches", not a failure — findstr/grep/rg exit 1 when nothing
+        // matched, and the old FAILED: "(no output)" taught the model its
+        // probe had errored (the ledger's findstr case).
+        const isNoMatches =
+          exitCode === 1 &&
+          clip(combined) === "" &&
+          SEARCH_TOOLS_EXITING_ONE.has(firstCommandToken(trimmed));
+        if (isNoMatches) {
+          finish({
+            ok: true,
+            output: `(no matches — ${firstCommandToken(trimmed)} exits 1 when nothing matches)`,
+          });
+          return;
+        }
         const output =
           clip(combined) ||
           (exitCode === 0
             ? "(no output — the command ran successfully and printed nothing)"
             : "(no output)");
         const exitLine = exitCode === 0 ? "" : `\n[exit code: ${exitCode}]`;
-        finish({ ok: exitCode === 0, output: output + exitLine });
+        // R128-W7b (FIX 10): a FAILED command that suppressed its stderr into
+        // the Windows null device gets the one-line nudge — the ledger's agent
+        // appended 2>nul and lost the diagnostic it needed. Success stays
+        // silent (the suppression was harmless then).
+        const stderrNote =
+          exitCode !== 0 && suppressesStderrToNull(trimmed)
+            ? `\n[note: the command suppressed stderr with 2>nul — remove it to see the actual error]`
+            : "";
+        finish({ ok: exitCode === 0, output: output + exitLine + stderrNote });
       });
 
       /** Register a background job + resolve with the supervision note.

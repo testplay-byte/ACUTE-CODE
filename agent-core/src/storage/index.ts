@@ -249,7 +249,15 @@ export function reindexFile(
  * the row's signature + line_end too (honestly: signature is the defining
  * source line; line_end is NULL until a future extractor computes spans),
  * and accepts an optional kind filter (SQL-side, one of the seven kinds the
- * schema's CHECK constrains). */
+ * schema's CHECK constrains).
+ * ROUND-128 (R128-W7b, FIX 9): PREFIX-FIRST with a CONTAINS FALLBACK. The
+ * ledger complaint: query "ch" → 0 matches, no hint — prefix-only search
+ * silently starved mid-word queries. When the prefix query returns 0 rows
+ * (ANY needle length), a `LIKE '%needle%' COLLATE NOCASE` fallback runs and
+ * those rows return with `matchMode: "contains"` so the tool layer can say
+ * so honestly. The return type is the plain array PLUS an optional
+ * matchMode marker (additive — existing callers keep compiling, and the
+ * REST serializer ignores the marker; only the plugin reads it). */
 export interface IndexSymbolMatch {
   path: string;
   symbol: string;
@@ -259,57 +267,69 @@ export interface IndexSymbolMatch {
   signature?: string;
 }
 
+/** R128-W7b (FIX 9): how the returned rows matched — prefix (the primary
+ * index-friendly query) or contains (the fallback that rescued a 0-row
+ * prefix search). */
+export type IndexSymbolSearchMode = "prefix" | "contains";
+
+/** R128-W7b (FIX 9): the additive result shape — the rows array plus the
+ * match-mode marker (an own property on the array; JSON serialization of
+ * the REST route keeps emitting a plain row array). */
+export type IndexSymbolSearchResult = IndexSymbolMatch[] & { matchMode?: IndexSymbolSearchMode };
+
 export function searchIndexSymbols(
   db: SqliteDatabase,
   projectId: string,
   query: string,
   limit = 50,
   kind?: string,
-): IndexSymbolMatch[] {
+): IndexSymbolSearchResult {
   const needle = query.trim();
   if (needle === "") return [];
   // ROUND-98 (R98-F3): the kind filter rides the SQL (the index is the
   // queryable surface the owner asked for — "look into indexing… essential
   // for larger projects"); the caller validates the vocabulary.
-  const rows = kind
-    ? (db
-        .prepare(
-          `SELECT path, symbol, kind, line, line_end, signature FROM codebase_index
-           WHERE project_id = ? AND symbol LIKE ? COLLATE NOCASE AND kind = ?
-           ORDER BY path, line LIMIT ?`,
-        )
-        .all(projectId, `${needle}%`, kind, limit) as Array<{
-          path: string;
-          symbol: string;
-          kind: string;
-          line: number;
-          line_end: number | null;
-          signature: string | null;
-        }>)
-    : (db
-        .prepare(
-          `SELECT path, symbol, kind, line, line_end, signature FROM codebase_index
-           WHERE project_id = ? AND symbol LIKE ? COLLATE NOCASE
-           ORDER BY path, line LIMIT ?`,
-        )
-        .all(projectId, `${needle}%`, limit) as Array<{
-          path: string;
-          symbol: string;
-          kind: string;
-          line: number;
-          line_end: number | null;
-          signature: string | null;
-        }>);
-  // Shaped honestly: only the fields the row actually carries (an absent
-  // line_end/signature is OMITTED, never null-padded).
-  return rows.map((r) => ({
-    path: r.path,
-    symbol: r.symbol,
-    kind: r.kind,
-    line: r.line,
-    ...(r.line_end !== null ? { line_end: r.line_end } : {}),
-    ...(r.signature !== null && r.signature !== "" ? { signature: r.signature } : {}),
-  }));
+  const runQuery = (likePattern: string): IndexSymbolMatch[] => {
+    const rows = (kind
+      ? db
+          .prepare(
+            `SELECT path, symbol, kind, line, line_end, signature FROM codebase_index
+             WHERE project_id = ? AND symbol LIKE ? COLLATE NOCASE AND kind = ?
+             ORDER BY path, line LIMIT ?`,
+          )
+          .all(projectId, likePattern, kind, limit)
+      : db
+          .prepare(
+            `SELECT path, symbol, kind, line, line_end, signature FROM codebase_index
+             WHERE project_id = ? AND symbol LIKE ? COLLATE NOCASE
+             ORDER BY path, line LIMIT ?`,
+          )
+          .all(projectId, likePattern, limit)) as Array<{
+      path: string;
+      symbol: string;
+      kind: string;
+      line: number;
+      line_end: number | null;
+      signature: string | null;
+    }>;
+    // Shaped honestly: only the fields the row actually carries (an absent
+    // line_end/signature is OMITTED, never null-padded).
+    return rows.map((r) => ({
+      path: r.path,
+      symbol: r.symbol,
+      kind: r.kind,
+      line: r.line,
+      ...(r.line_end !== null ? { line_end: r.line_end } : {}),
+      ...(r.signature !== null && r.signature !== "" ? { signature: r.signature } : {}),
+    }));
+  };
+  const prefixRows = runQuery(`${needle}%`);
+  if (prefixRows.length > 0) {
+    return Object.assign(prefixRows, { matchMode: "prefix" as const });
+  }
+  // R128-W7b (FIX 9): the contains fallback — prefix found nothing, so try
+  // the needle as a SUBSTRING of the symbol name (still COLLATE NOCASE).
+  return Object.assign(runQuery(`%${needle}%`), { matchMode: "contains" as const });
 }
 
 /* ── ROUND-98 (R98-F3): the index's HONEST freshness facts ────────────────── */

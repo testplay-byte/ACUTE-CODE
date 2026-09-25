@@ -123,6 +123,39 @@ function scopeFilter(ref: MemoryScopeRef): { where: string; params: unknown[] } 
 
 /* ── ROUND-46 (memory v2): scoring primitives ───────────────────────────── */
 
+/* ── ROUND-128 (R128-W7b, FIX 7): the near-duplicate primitives ──────────── */
+
+/** The similarity threshold for the near-duplicate rung: whitespace-token
+ * SETS with Jaccard ≥ 0.8 are "the same memory, reworded" — six very similar
+ * session summaries for one query was the ledger's recall complaint. */
+export const NEAR_DUPLICATE_JACCARD = 0.8;
+/** Rows shorter than this are exempt — tiny rows ("fact 3", "use pnpm") are
+ * legitimately short and their token sets are too sparse to judge. */
+export const NEAR_DUPLICATE_MIN_CHARS = 24;
+
+/** R128-W7b (FIX 7): the whitespace-token SET of a memory (lowercase, split
+ * on /\s+/ — the letter's exact tokenization, deliberately NOT the
+ * alphanumeric tokenizer: punctuation is part of the resemblance). */
+function whitespaceTokenSet(text: string): Set<string> {
+  return new Set(text.toLowerCase().split(/\s+/).filter((t) => t !== ""));
+}
+
+/** R128-W7b (FIX 7): Jaccard similarity of two token sets (|A∩B| / |A∪B|;
+ * 0 when either set is empty). */
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let shared = 0;
+  for (const token of a) if (b.has(token)) shared++;
+  return shared / (a.size + b.size - shared);
+}
+
+/** R128-W7b (FIX 7): are two memory contents the same memory, reworded?
+ * Same-scope only (the CALLER scopes); tiny rows exempt. */
+function isNearDuplicate(a: string, b: string): boolean {
+  if (a.length < NEAR_DUPLICATE_MIN_CHARS || b.length < NEAR_DUPLICATE_MIN_CHARS) return false;
+  return jaccardSimilarity(whitespaceTokenSet(a), whitespaceTokenSet(b)) >= NEAR_DUPLICATE_JACCARD;
+}
+
 /** Importance weight per kind — a durable DECISION outranks a casual note
  * when both compete for the digest's character budget. */
 const KIND_WEIGHT: Record<MemoryKind, number> = {
@@ -272,6 +305,28 @@ export function saveMemoryWithDedup(db: SqliteDatabase, input: MemoryInput): Sav
     };
   }
 
+  // R128-W7b (FIX 7): the NEAR-DUPLICATE rung — same scope, whitespace-token
+  // Jaccard ≥ 0.8 (tiny rows exempt). The ledger complaint: repeated session
+  // summaries landed as five near-twin rows ("six very similar session
+  // summaries" for one recall query) because only EXACT content deduped. A
+  // near-twin refreshes the existing row's content + updated_at instead of
+  // inserting — the scan is the same bounded scope window the recall path
+  // already fetches (newest-first, so the newest twin wins).
+  const nearTwin = fetchScopeMemories(db, ref, 500).find((row) => isNearDuplicate(row.content, content));
+  if (nearTwin !== undefined) {
+    db.prepare("UPDATE memory SET kind = ?, content = ?, source = ?, updated_at = ? WHERE rowid = ?").run(
+      kind,
+      content,
+      source,
+      now,
+      nearTwin.rowid,
+    );
+    return {
+      item: { ...toMemory(nearTwin), kind, content, source, updatedAt: now },
+      deduplicated: true,
+    };
+  }
+
   const memory: MemoryItem = {
     id: `mem_${randomUUID()}`,
     projectId,
@@ -369,7 +424,49 @@ function searchScopeMemories(
     if (score > 0) scored.push({ item, rowid: row.rowid, score });
   }
   scored.sort((a, b) => b.score - a.score || a.item.updatedAt.localeCompare(b.item.updatedAt) * -1 || a.rowid - b.rowid);
-  return scored.slice(0, cap).map((s) => s.item);
+  // R128-W7b (FIX 7): collapse near-identical results BEFORE the limit — the
+  // recall list the model reads should never be six rewordings of one fact.
+  // Each cluster keeps its best-ranked POSITION but its NEWEST content (a
+  // reworded twin saved later carries the same fact, fresher); nothing is
+  // appended to the content — the collapse is silent (the total already
+  // tells the truth). Tiny rows never collapse. (Successor-audit note: the
+  // scan is bounded by the fetchScopeMemories(…, 500) window, and each row's
+  // token set is built ONCE — the naive rebuild-per-comparison shape cost
+  // ~0.5s of pure CPU on a 500-row all-distinct worst case.)
+  const kept: ScoredMemory[] = [];
+  const keptTokens: Array<Set<string> | null> = [];
+  for (const entry of scored) {
+    // null = tiny row (below NEAR_DUPLICATE_MIN_CHARS) — exempt from the
+    // collapse on EITHER side of the comparison (isNearDuplicate's law).
+    const entryTokens =
+      entry.item.content.length >= NEAR_DUPLICATE_MIN_CHARS
+        ? whitespaceTokenSet(entry.item.content)
+        : null;
+    let twinIndex = -1;
+    if (entryTokens !== null) {
+      for (let i = 0; i < kept.length; i++) {
+        const twinTokens = keptTokens[i]!;
+        if (twinTokens !== null && jaccardSimilarity(twinTokens, entryTokens) >= NEAR_DUPLICATE_JACCARD) {
+          twinIndex = i;
+          break;
+        }
+      }
+    }
+    if (twinIndex === -1) {
+      kept.push(entry);
+      keptTokens.push(entryTokens);
+      continue;
+    }
+    const twin = kept[twinIndex];
+    const twinIsNewer =
+      twin.item.updatedAt > entry.item.updatedAt ||
+      (twin.item.updatedAt === entry.item.updatedAt && twin.rowid >= entry.rowid);
+    if (!twinIsNewer) {
+      kept[twinIndex] = entry;
+      keptTokens[twinIndex] = entryTokens;
+    }
+  }
+  return kept.slice(0, cap).map((s) => s.item);
 }
 
 /** Delete one memory by id (either scope — the id is global). `{ ok: false,

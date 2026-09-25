@@ -109,6 +109,7 @@ import {
   nativeTabSetVisible,
   nativeTabSetZoom,
   nativeWindowMetrics,
+  unminimizeMainWindow,
 } from "./native-browser";
 
 /**
@@ -139,6 +140,16 @@ export const BROWSER_CAPTURE_HEIGHT = 720;
  * blind — if field reports show torn captures, this is the dial.
  */
 export const BROWSER_CAPTURE_SETTLE_MS = 400;
+
+/**
+ * R128-W7a: how long the guard-3 recovery waits after `window_unminimize`
+ * before re-reading the window metrics. A Windows un-minimize is a short
+ * animated OS transition — the outer position moves off (-32000,-32000)
+ * within a few frames; 600ms is the bounded beat that covers it without
+ * stretching a refused capture into a hang (the capture itself still has
+ * the R124 30s round-trip budget).
+ */
+export const BROWSER_CAPTURE_UNMINIMIZE_WAIT_MS = 600;
 
 /**
  * R124: the honest floor for a staged dimension. The tool's REGION_MIN_PX
@@ -369,20 +380,37 @@ export async function performStagedBrowserCapture(
     );
   }
   // ── guard 2: the window metrics (the physical-region transform) ──────────
-  const metrics = await nativeWindowMetrics();
+  let metrics = await nativeWindowMetrics();
   if (metrics === null) {
     throw new Error(
       "screenshot_capture: the desktop window API is unavailable (no outer position / scale factor) — the physical capture region cannot be computed",
     );
   }
-  // ── guard 3: the minimized window ────────────────────────────────────────
+  // ── guard 3: the minimized window — RECOVER FIRST, refuse honestly ───────
   // A minimized Windows window parks at (-32000,-32000); a capture there
-  // would photograph empty screen coordinates. Nothing on screen can be
-  // grabbed from a minimized window — refuse honestly, steering to restore.
+  // would photograph empty screen coordinates. R128-W7a: instead of the
+  // pre-R128 flat refusal, call the Rust `window_unminimize` command
+  // (best-effort), wait the bounded beat, and re-read the metrics ONCE — a
+  // restored window proceeds with the LIVE position (the region math below
+  // uses the re-read metrics, never the minimized parking spot). Only a
+  // STILL-minimized window refuses, and the copy says the restore was
+  // attempted ("restored the window and retried; still minimized").
   if (metrics.x <= -10_000 || metrics.y <= -10_000) {
-    throw new Error(
-      "screenshot_capture: the app window is minimized — restore it (keep it in the background un-minimized) and retry; a minimized window paints nothing on screen to capture",
-    );
+    let live: { x: number; y: number; scaleFactor: number } | null = null;
+    try {
+      await unminimizeMainWindow();
+      await new Promise<void>((resolve) => setTimeout(resolve, BROWSER_CAPTURE_UNMINIMIZE_WAIT_MS));
+      live = await nativeWindowMetrics();
+    } catch {
+      // The un-minimize command itself failed (bridge gone mid-call, the
+      // window API refusing) — the honest refusal below owns the answer.
+    }
+    if (live === null || live.x <= -10_000 || live.y <= -10_000) {
+      throw new Error(
+        "screenshot_capture: the app window is minimized — restored the window and retried, but it still reports minimized coordinates; keep the app un-minimized in the background and retry (a minimized window paints nothing on screen to capture)",
+      );
+    }
+    metrics = live;
   }
   // ── the staged geometry (clamp-to-window law) ────────────────────────────
   const clientArea =

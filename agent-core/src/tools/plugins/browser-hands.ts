@@ -420,15 +420,27 @@ return { installed: true, adopted: booted !== null };`;
  * once per navigation, never once per action (the v0.91.0 Windows failure:
  * the old 17-19KB monoliths were the only evals failing while ~2KB evals
  * on the same pages worked).
+ *
+ * ROUND-128 (R128-W7a) — THE RETURN-STYLE LAW. The Rust `browser_tab_eval`
+ * command (src-tauri/src/browser.rs) wraps the script as a FUNCTION BODY
+ * and captures the inner function's RETURN VALUE. A bare IIFE EXPRESSION
+ * STATEMENT — the pre-R128 shape — has its value DISCARDED by that wrap (a
+ * function body without a `return` statement yields undefined → the
+ * envelope answers value:null), so the panel could never see
+ * {installed:true} and the install verification could never fire. Both
+ * builders below therefore emit `return (function(){…})();` — a return
+ * statement whose value IS the inner function's result. Pinned by the
+ * return-style law tests (browser-tool.test.ts, R128-W7a) and the
+ * Rust-wrap-faithful nativeTabEval mock (BrowserPanel.test.tsx, R128-W7a).
  */
 export function buildHandsInstallScript(): string {
-  return `(function () {
+  return `return (function () {
   try {
     return (function () { ${buildHandsRuntime()} })();
   } catch (e) {
     return { error: String((e && e.message) || e) };
   }
-})()`;
+})();`;
 }
 
 /** Wrap a driver body so the ONE eval starts the async job and returns
@@ -437,9 +449,16 @@ export function buildHandsInstallScript(): string {
  * R94-F: the runtime is NO LONGER EMBEDDED here — this script must stay
  * TINY (that is the fix). A page without the runtime answers
  * {needInstall:true} and the panel installs it from the command's
- * installScript payload, then re-runs this script once. */
+ * installScript payload, then re-runs this script once.
+ *
+ * R128-W7a: RETURN-STYLED (see buildHandsInstallScript's law note) — the
+ * pre-R128 IIFE shape's value was discarded by the Rust function-body wrap,
+ * so {needInstall:true}/{started:true} could NEVER reach the panel and every
+ * click/type/press_key/mouse action failed with "evalJob: unexpected start
+ * payload — got: {}" (the owner's most-repeated tool failure, 5 ledger
+ * entries). The leading `return` is load-bearing — do not remove it. */
 function buildHandsActionScript(driverBody: string): string {
-  return `(function () {
+  return `return (function () {
   try {
     if (!window.__acuteHands) return { needInstall: true };
     ${driverBody}
@@ -447,7 +466,7 @@ function buildHandsActionScript(driverBody: string): string {
   } catch (e) {
     return { error: String((e && e.message) || e) };
   }
-})()`;
+})();`;
 }
 
 /** The element-finder shared by the click/type drivers — by CSS selector

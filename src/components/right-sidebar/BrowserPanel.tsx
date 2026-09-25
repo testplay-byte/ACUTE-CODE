@@ -1170,15 +1170,33 @@ export function BrowserPanel({
             installRan = true;
             continue; // re-run the start once (the runtime is now in the page)
           }
+          // ── R128-W7a (the belt): a NULL start value is the OLD-FORMAT ──
+          // script shape from an OLDER agent-core sidecar — the Rust
+          // browser_tab_eval wrap turns the script into a function BODY, so
+          // a bare IIFE expression statement's value is discarded and the
+          // envelope answers value:null (the {needInstall}/{started}
+          // handshake can never arrive through that shape). Probe the job
+          // once — a job that started anyway is recovered — then retry the
+          // start once before the honest error below.
+          if ((start.value === null || start.value === undefined) && starts < 2) {
+            const recovered = await probeJob();
+            if (recovered !== null) return recovered;
+            continue; // one retry (with install if the retry asks for it)
+          }
           // UNEXPECTED start payload — the owner's exact v0.91.0 failure.
           if (starts < 2) {
             const recovered = await probeJob();
             if (recovered !== null) return recovered;
             continue; // one retry (with install if the retry asks for it)
           }
+          // R128-W7a: report the value the envelope ACTUALLY carried —
+          // `null` for the discarded-value shapes (JSON.stringify(undefined)
+          // is not a string, so both nullish cases render as "null").
+          const gotRaw = JSON.stringify(start.value);
+          const got = typeof gotRaw === "string" ? gotRaw.slice(0, 200) : "null";
           return {
             ok: false,
-            error: `evalJob: unexpected start payload (no job started) — got: ${JSON.stringify(value).slice(0, 200)}`,
+            error: `evalJob: unexpected start payload (no job started) — got: ${got}`,
           };
         }
       }

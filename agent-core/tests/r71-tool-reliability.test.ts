@@ -239,21 +239,28 @@ describe("R71-e2 D2: edit-failure escalation — through the real toolset", () =
   it("consecutive anchor failures escalate (2nd → 3rd → 5th) and append AFTER the honest base error", async () => {
     const edit = tool(tools, "edit_file");
     // 1st failure: the R127-W6 base error (historic PREFIX + recovery
-    // recipe + anchor echo), no escalation suffix.
+    // recipe + anchor echo) + the R128-W7b closest-match tail, no escalation
+    // suffix.
     const first = await edit.execute({ path: "edit-target.txt", oldString: "nope", newString: "x" });
     expect(first.ok).toBe(false);
     expect(first.output.startsWith("edit failed: oldString not found in 'edit-target.txt'")).toBe(true);
     expect(first.output).toContain("re-read JUST the region");
     expect(first.output).toContain('you tried to match: "nope"');
+    // R128-W7b (FIX 5): the no-match case names the file's line count (the
+    // anchor "nope" shares nothing with alpha/beta/gamma).
+    expect(first.output).toContain("the file has 3 lines — no close match for the anchor was found");
     expect(first.output).not.toContain("consecutive edit failure");
-    // 2nd failure: tier-2 suffix appended to the SAME base error.
+    // 2nd failure: tier-2 suffix appended to the SAME base error (now with
+    // the R128-W7b closest-match line between the recipe and the suffix).
     const second = await edit.execute({ path: "edit-target.txt", oldString: "nope", newString: "x" });
     expect(second.ok).toBe(false);
     expect(second.output).toBe(
       "edit failed: oldString not found in 'edit-target.txt' — the file may have changed since your last read; " +
         "re-read JUST the region (read_file with offset/limit around where you expected it, or the whole file — " +
         "files under 128KB return whole in one call) and re-anchor on CURRENT content; " +
-        "you tried to match: \"nope\" (2nd consecutive edit failure — re-read the file with read_file and copy the anchor EXACTLY from the current content.)",
+        "you tried to match: \"nope\"\n" +
+        "the file has 3 lines — no close match for the anchor was found" +
+        " (2nd consecutive edit failure — re-read the file with read_file and copy the anchor EXACTLY from the current content.)",
     );
     // 3rd: change-approach tier.
     const third = await edit.execute({ path: "edit-target.txt", oldString: "still nope", newString: "x" });

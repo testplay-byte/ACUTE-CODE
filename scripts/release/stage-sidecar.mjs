@@ -192,11 +192,13 @@ writeFileSync(
     "before `pnpm tauri build` in the release workflow (`.github/workflows/",
     "release.yml` → the `desktop-installer` job): the pinned Node runtime",
     "(`node.exe`), the runnable agent-core tree (`app/dist` + pruned production",
-    "`node_modules/` + the vendored `shared` package), and the Node `LICENSES/`",
-    "folder. The bundle's `resources` map in `tauri.conf.json` copies its CONTENTS",
-    "into the installed app's `sidecar/` resource directory, where the Rust shell's",
-    "release-mode spawn finds them (`resolve_sidecar_command` in `src-tauri/src/",
-    "sidecar.rs`).",
+    "`node_modules/` + the vendored `shared` package), the Node `LICENSES/`",
+    "folder, and the external update supervisor (`update-supervisor.mjs`,",
+    "R128-W1 — spawned detached by update.rs before every install leg so the",
+    "restart guarantee outlives the app's exit). The bundle's `resources` map in",
+    "`tauri.conf.json` copies its CONTENTS into the installed app's `sidecar/`",
+    "resource directory, where the Rust shell's release-mode spawn finds them",
+    "(`resolve_sidecar_command` in `src-tauri/src/sidecar.rs`).",
     "",
     "Why this placeholder exists: `tauri-build` (build.rs — which runs for EVERY",
     "`cargo check`, not just bundling) validates that every configured resource",
@@ -209,6 +211,19 @@ writeFileSync(
   ].join("\n") + "\n",
 );
 cpSync(resolve(repoRoot, "agent-core", "dist"), resolve(appDir, "dist"), { recursive: true });
+
+// ── 3b. ROUND-128 (R128-W1): the external update supervisor ────────────────
+// A plain-Node, ZERO-dependency script staged BESIDE the pinned node.exe (the
+// resource dir's sidecar/ root — the same place sidecar.rs resolves the
+// runtime from, and the place update.rs's spawn_update_supervisor looks).
+// The shell spawns it detached before every install leg so the restart
+// guarantee + the OS completion toast outlive the app's own exit (the
+// owner's v0.120.0 "it did not auto-start at all" report). On a dev/web
+// checkout it never exists and every consumer handles that honestly.
+cpSync(
+  resolve(repoRoot, "scripts", "release", "update-supervisor.mjs"),
+  resolve(outDir, "update-supervisor.mjs"),
+);
 
 const stagedPkg = {
   name: "agent-core-sidecar",
@@ -338,6 +353,8 @@ const required = [
   ["SQL migrations", resolve(appDir, "dist", "storage", "migrations", "0001_init.sql")],
   ["SQLite native addon", resolve(appDir, "node_modules", "better-sqlite3", "prebuilds")],
   ["vendored shared", resolve(appDir, "node_modules", "shared", "dist", "index.js")],
+  // R128-W1: the supervisor rides the staged tree (beside node.exe).
+  ["update supervisor", resolve(outDir, "update-supervisor.mjs")],
 ];
 for (const [label, path] of required) {
   if (!existsSync(path)) fail(`verification failed: ${label} missing at ${path}`);

@@ -23,14 +23,16 @@
  * is therefore web-only now (isTauri() guard there); this module is the
  * ONE Tauri-side spelling.
  *
- * The three rules every notifyDesktop call follows:
+ * The rules every notifyDesktop call follows:
  *   1. WEB MODE is a no-op (isTauri() from lib/sidecar — one source of
  *      truth for shell detection; the plain browser keeps using the
  *      Web-Notification path in Toaster.tsx).
  *   2. VISIBILITY: fires only when document.visibilityState !== "visible"
- *      — the Toaster's existing ROUND-42 rule, made uniform for all three
+ *      — the Toaster's existing ROUND-42 rule, made uniform for the task
  *      kinds (a watching owner sees the in-app toast; a backgrounded one
- *      gets the OS notification; never both).
+ *      gets the OS notification; never both). R128-W1 EXCEPTION:
+ *      update_installed is allowed through while visible — a completion
+ *      confirmation, not an interruption nudge.
  *   3. THE SETTINGS GATE: an in-memory cached enabled flag (default ON —
  *      the pre-R98 behavior shipped notifications enabled). The settings
  *      card (SettingsPage's DesktopNotificationsCard) pushes every
@@ -45,9 +47,18 @@
  */
 import { isTauri } from "./sidecar";
 
-/** The three kinds that graduate from in-app toast to the owner's PC.
- * subagent_* transitions stay in-app ONLY (chatter, not decisions). */
-export type DesktopNotificationKind = "task_complete" | "task_failed" | "permission_request";
+/** The kinds that graduate from in-app toast to the owner's PC.
+ * subagent_* transitions stay in-app ONLY (chatter, not decisions).
+ * R128-W1: "update_installed" — the update's completion confirmation
+ * (the owner's "it did not show me any system or anything" report): a
+ * CONFIRMATION of something the owner already chose, never an
+ * interruption nudge, so it is the ONE kind allowed while the window is
+ * VISIBLE (see notifyDesktop's gate). */
+export type DesktopNotificationKind =
+  | "task_complete"
+  | "task_failed"
+  | "permission_request"
+  | "update_installed";
 
 export interface DesktopNotificationInput {
   title: string;
@@ -105,15 +116,25 @@ async function permissionGranted(): Promise<boolean> {
 }
 
 /**
- * Fire one desktop notification (the three rules in the module docblock:
+ * Fire one desktop notification (the rules in the module docblock:
  * settings gate → web no-op → visibility rule → permission). Always
  * resolves — the SSE fan-out must never await-and-die on this.
+ * R128-W1: the visibility rule's ONE exception — update_installed fires
+ * even while the window IS visible (a completion confirmation, not an
+ * interruption nudge; the "Setting up v…" splash and this toast tell the
+ * same story from two surfaces, never competing for attention).
  */
 export async function notifyDesktop(input: DesktopNotificationInput): Promise<void> {
   if (!enabled) return; // the settings gate
   const invoke = tauriInvoke();
   if (invoke === null) return; // web mode — the Toaster owns that path
-  if (typeof document !== "undefined" && document.visibilityState === "visible") return;
+  if (
+    typeof document !== "undefined" &&
+    document.visibilityState === "visible" &&
+    input.kind !== "update_installed"
+  ) {
+    return;
+  }
   if (!(await permissionGranted())) return;
   try {
     await invoke("plugin:notification|notify", {

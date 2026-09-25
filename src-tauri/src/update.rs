@@ -14,6 +14,56 @@
 //! half: taking the verified file the sidecar produced and making it THE
 //! APP — the one thing only the OS-side process can do.
 //!
+//! ── ROUND-128 (R128-W1): THE EXTERNAL UPDATE SUPERVISOR — the restart
+//! guarantee that does not live inside the app.
+//!
+//! The owner's v0.120.0 report: "it updated successfully, downloaded, it
+//! updated, and then it closed properly without any problem. But then it
+//! did not auto-start at all. It did not show me any system or anything
+//! like that… maybe we should have a separate system for updating the
+//! application, which would be separate from the app, so that it does not
+//! get affected by the application." The pre-R128 answer had every restart
+//! path owned by the app itself (the overlay/deb watchers, the sh -c
+//! relauncher, and — the incident's shape — the Windows FALLBACK leg's
+//! NSIS-template `.onInstSuccess` /R hook: UNOWNED, UNOBSERVABLE, and on
+//! the owner's machine it never fired).
+//!
+//! `scripts/release/update-supervisor.mjs` (staged beside node.exe, mod
+//! supervisor below) is that separate system: a plain-Node, ZERO-dependency
+//! process spawned DETACHED before every install leg. It survives the
+//! app's exit by construction and owns exactly one guarantee — wait for
+//! the app to close, wait for the install to land, GUARD against a live
+//! instance (never double-launch), relaunch detached with verification +
+//! retries, and fire the OS completion notification. Mode by leg:
+//!   · Windows OVERLAY  → "watch" (the overlay watcher stays primary; the
+//!     supervisor is the belt if the watcher dies with a failed relaunch).
+//!   · Windows FALLBACK → "run" (the supervisor OWNS the whole flow: wait
+//!     exit → installer `/S` → guard → relaunch → notify — the NSIS /R
+//!     hook becomes irrelevant; the app's own `/S /R` launch runs ONLY when
+//!     the supervisor could not be staged, the pre-R128 behavior verbatim).
+//!   · Linux AppImage   → "watch" (the sh -c pid-wait relauncher stays
+//!     primary; the supervisor guards).
+//!   · Linux .deb       → "watch" (the dpkg watcher stays primary).
+//! The INTERACTIVE wizard leg deliberately gets NO supervisor: the wizard
+//! is the user's own hands-on flow, the exe at the original path is never
+//! renamed there, and a watch-mode belt would relaunch the OLD exe while
+//! the wizard is mid-install — the freshly relaunched process would lock
+//! the very file NSIS is about to replace (the v0.93 "Error opening file
+//! for writing" shape, self-inflicted).
+//!
+//! Spawn points: at each leg's decision point — the earliest moment the
+//! MODE is knowable (the overlay-vs-fallback split only exists after the
+//! rename attempt). For every leg that point still precedes any way the
+//! app can die: the Linux legs spawn before their module-internal kills,
+//! the overlay/deb watchers only ever exit this process AFTER a completed
+//! install + their own relaunch, and the fallback leg spawns before its
+//! 1.5s exit timer. The pre-install sidecar kill itself cannot touch the
+//! supervisor — it is not a sidecar child and joins no Job-Object leash
+//! (the same detachment family the installer legs ride, proven since R91).
+//! A dev/web checkout has no staged supervisor: every spawn logs the
+//! absence honestly and continues WITHOUT it (never block an update on
+//! the belt).
+//!
 //! ── ROUND-123 (R123): THE VISIBLE INSTALL — no more dark period.
 //!
 //! The owner's report: "it does not show me any kind of animation while it
@@ -76,7 +126,8 @@
 //!                   the sidecar tree, rename over the AppImage path, spawn
 //!                   a delayed detached relaunch, exit. Refused on any
 //!                   other platform.
-//! `run_update_installer(path, silent?)`:
+//! `run_update_installer(path, silent?, version?)` — R128-W1 added the
+//! optional `version` (the supervisor's log + toast name the release):
 //!  · validates `path` — it must EXIST, be a regular file, be the platform's
 //!    own update kind (`.exe` on Windows / `.AppImage` on Linux), and be a
 //!    plausible size (> 10 MB for the setup.exe, > 50 MB for the AppImage —
@@ -168,17 +219,21 @@ const MIN_DEB_BYTES: u64 = 20 * 1024 * 1024;
 /// failure the app can recover from, not an eternal splash).
 const INSTALL_WAIT_BUDGET_SECS: u64 = 600;
 
-/// `run_update_installer(path, silent?)` — install the downloaded update
-/// and schedule the app's exit. See the module header for the contract.
+/// `run_update_installer(path, silent?, version?)` — install the downloaded
+/// update and schedule the app's exit. See the module header for the contract.
 /// R99-C: `silent: Some(true)` runs the NSIS installer with `/S /R` (silent
 /// install + the template's post-success relaunch); `None`/`Some(false)`
 /// keeps the interactive setup wizard. R104: on Linux the argument is
-/// ignored — the AppImage replace is the install.
+/// ignored — the AppImage replace is the install. R128-W1: `version` is the
+/// NEW version string the frontend hands down (the supervisor's log lines
+/// + completion toast name it); absent callers pass nothing and the
+/// supervisor honestly says "unknown".
 #[tauri::command]
 pub async fn run_update_installer(
     app: AppHandle,
     path: String,
     silent: Option<bool>,
+    version: Option<String>,
 ) -> Result<(), String> {
     let parsed = Path::new(&path);
     if parsed.is_absolute() {
@@ -263,14 +318,43 @@ pub async fn run_update_installer(
     // before the kill can fail harmlessly (the app + engine live on
     // untouched); the kill is inside the module so the Windows ordering
     // contract stays the single place it lives.
+    //
+    // R128-W1: each leg spawns the EXTERNAL UPDATE SUPERVISOR (mode
+    // "watch") BEFORE the module-internal kill — the restart guarantee is
+    // alive before anything drastic happens, while each leg's own
+    // relauncher stays PRIMARY (the supervisor's guard stands down the
+    // moment it sees the primary's relaunched instance). The exe it guards
+    // is the APPIMAGE path when running from one (current_exe resolves
+    // inside the mounted squashfs — useless as a relaunch target), the
+    // packaged exe otherwise.
+    #[cfg(target_os = "linux")]
+    let supervisor_app_exe: Option<std::path::PathBuf> = std::env::var("APPIMAGE")
+        .ok()
+        .filter(|value| !value.is_empty() && Path::new(value).is_absolute())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_exe().ok());
     #[cfg(target_os = "linux")]
     {
         if is_appimage {
+            supervisor::spawn_update_supervisor(
+                &app,
+                supervisor_app_exe.as_deref(),
+                Some(parsed),
+                version.as_deref(),
+                "watch",
+            );
             appimage::install(&app, parsed)?;
             schedule_exit(&app);
             return Ok(());
         }
         if is_linux_deb {
+            supervisor::spawn_update_supervisor(
+                &app,
+                std::env::current_exe().ok().as_deref(),
+                Some(parsed),
+                version.as_deref(),
+                "watch",
+            );
             deb::install(&app, parsed)?;
             // R123: the deb leg's WATCHER owns the exit — dpkg runs while
             // this window stays open on the Restarting splash, and the
@@ -321,6 +405,22 @@ pub async fn run_update_installer(
                 // install's visibility, the relaunch, and this process's
                 // exit — no schedule_exit (the window must SURVIVE until
                 // the new exe is ready to take over).
+                //
+                // R128-W1: the OVERLAY leg's supervisor (mode "watch") —
+                // the restart guarantee if the watcher above ever dies
+                // with a failed relaunch (a crash mid-install leaves the
+                // supervisor as the ONLY thing that can bring the app
+                // back). Spawned HERE — the earliest point the leg is
+                // knowable — which still precedes every path this process
+                // can exit on: the watcher only exits it AFTER a completed
+                // install + its own relaunch.
+                supervisor::spawn_update_supervisor(
+                    &app,
+                    std::env::current_exe().ok().as_deref(),
+                    Some(parsed),
+                    version.as_deref(),
+                    "watch",
+                );
                 crate::sidecar::log_line(
                     "update: the OVERLAY install is live — the window stays open until the new version is ready",
                 );
@@ -330,11 +430,35 @@ pub async fn run_update_installer(
                 crate::sidecar::log_line(
                     "update: the overlay rename was refused — falling back to the /S /R silent flow",
                 );
+                // R128-W1: the FALLBACK leg — the supervisor in RUN mode
+                // OWNS the whole flow: wait for this process to exit → run
+                // the installer `/S` itself → guard → relaunch → notify.
+                // The NSIS template's .onInstSuccess `/R` hook becomes
+                // IRRELEVANT (the owner's incident: the hook never fired,
+                // unowned and unobservable) — so the app-side `/S /R`
+                // launch runs ONLY when the supervisor could not be staged
+                // (dev/web build: the pre-R128 behavior verbatim; NEVER
+                // block an update on the belt). Two concurrent NSIS
+                // installers on one $INSTDIR is exactly the corruption the
+                // ownership split avoids.
+                let supervisor_owns_install = supervisor::spawn_update_supervisor(
+                    &app,
+                    std::env::current_exe().ok().as_deref(),
+                    Some(parsed),
+                    version.as_deref(),
+                    "run",
+                );
+                if supervisor_owns_install {
+                    crate::sidecar::log_line(
+                        "update: the external supervisor owns the fallback install — wait exit → installer /S → guard → relaunch → notify",
+                    );
+                } else {
+                    silent_launch::open_with_parameters(&path, silent_launch::ARGS)
+                        .map_err(|e| format!("launching the silent installer failed: {e}"))?;
+                }
             }
             Err(e) => return Err(e),
         }
-        silent_launch::open_with_parameters(&path, silent_launch::ARGS)
-            .map_err(|e| format!("launching the silent installer failed: {e}"))?;
     } else {
         use tauri_plugin_shell::ShellExt;
         #[allow(deprecated)]
@@ -1133,6 +1257,274 @@ pub(crate) mod overlay {
     }
 }
 
+// ── ROUND-128 (R128-W1): THE EXTERNAL UPDATE SUPERVISOR SPAWN ───────────────
+//
+// The Rust half of the owner's "a separate system for updating the
+// application, which would be separate from the app": spawn
+// `update-supervisor.mjs` (staged beside node.exe by
+// scripts/release/stage-sidecar.mjs) DETACHED before every install leg, so
+// the restart guarantee + the OS completion toast outlive this process's
+// own exit. The script's full behavior lives in its own header — this
+// module only resolves the staged files, builds the argv, and launches
+// node the same detached way the installer legs ride (survives app exit,
+// joins no Job-Object leash — proven since R91).
+//
+// FAILURE HONESTY: every way this can fail logs to sidecar.log and returns
+// false — the caller then runs its leg WITHOUT the belt (dev/web checkouts
+// have no staged supervisor at all; a belt never blocks an update).
+mod supervisor {
+    use std::path::{Path, PathBuf};
+    use tauri::{AppHandle, Manager};
+
+    /// The supervisor's log file, inside the app's per-user state dir (the
+    /// same writable dir sidecar.log lives in — one diagnostics home).
+    pub(crate) const LOG_FILE_NAME: &str = "update-supervisor.log";
+
+    /// The argv AFTER the script path — the exact contract
+    /// scripts/release/update-supervisor.mjs's parseSupervisorArgs pins
+    /// (and the unit tests below re-pin from the Rust side). `installer:
+    /// None` spells "none" (the app's own flow owns the install — watch
+    /// mode's informational shape); `log_path: None` omits the flag (the
+    /// supervisor then logs console-only, which a detached process drops —
+    /// only reachable when the state dir itself cannot be resolved).
+    pub(crate) fn supervisor_args(
+        app_exe: &str,
+        installer: Option<&str>,
+        version: &str,
+        app_pid: u32,
+        mode: &str,
+        log_path: Option<&str>,
+    ) -> Vec<String> {
+        let mut args = vec![
+            "--app-exe".to_string(),
+            app_exe.to_string(),
+            "--installer".to_string(),
+            installer.unwrap_or("none").to_string(),
+            "--version".to_string(),
+            version.to_string(),
+            "--app-pid".to_string(),
+            app_pid.to_string(),
+            "--mode".to_string(),
+            mode.to_string(),
+            // The SAME budget the in-app watchers honor (one spelling of
+            // "how long any install leg may take" across both systems).
+            "--max-wait-secs".to_string(),
+            super::INSTALL_WAIT_BUDGET_SECS.to_string(),
+        ];
+        if let Some(log_path) = log_path {
+            args.push("--log".to_string());
+            args.push(log_path.to_string());
+        }
+        args
+    }
+
+    /// Resolve the staged supervisor pair (node runtime + script) from the
+    /// resource dir — the SAME resolution sidecar::resolve_sidecar_command
+    /// rides (`<resource_dir>/sidecar/`, verbatim-prefix stripped via the
+    /// R55 lesson). None on dev/web checkouts (nothing is staged).
+    fn resolve_supervisor(app: &AppHandle) -> Option<(PathBuf, PathBuf)> {
+        let resource_dir = app.path().resource_dir().ok()?;
+        // R55 via sidecar::simplified_path: the \\?\ verbatim prefix must go
+        // before node's module resolver sees the script path (the owner's
+        // 0.54.0 EISDIR crash — applied to the supervisor's node child too).
+        let resource_dir = crate::sidecar::simplified_path(&resource_dir);
+        let sidecar_dir = resource_dir.join("sidecar");
+        let script = sidecar_dir.join("update-supervisor.mjs");
+        if !script.is_file() {
+            return None;
+        }
+        let node_exe = ["node.exe", "node"]
+            .iter()
+            .map(|name| sidecar_dir.join(name))
+            .find(|path| path.is_file())?;
+        Some((node_exe, script))
+    }
+
+    /// Spawn the supervisor. `app_exe` is the executable it guards +
+    /// relaunches; `installer` the staged update file; `version` the NEW
+    /// version (its log + toast); `mode` is "watch" (the app's own flow
+    /// stays primary; this process is the restart guarantee) or "run" (the
+    /// supervisor owns the install itself). Returns true when the
+    /// supervisor is LIVE; every failure logs honestly and returns false —
+    /// the update proceeds without the belt, exactly as pre-R128.
+    pub(crate) fn spawn_update_supervisor(
+        app: &AppHandle,
+        app_exe: Option<&Path>,
+        installer: Option<&Path>,
+        version: Option<&str>,
+        mode: &str,
+    ) -> bool {
+        let Some(app_exe) = app_exe else {
+            crate::sidecar::log_line(&format!(
+                "update: the supervisor was skipped — this app's own executable path could not be resolved (mode {mode})"
+            ));
+            return false;
+        };
+        let Some((node_exe, script)) = resolve_supervisor(app) else {
+            crate::sidecar::log_line(
+                "update: the external update supervisor is not staged (dev/web build) — the app's own restart legs carry the flow",
+            );
+            return false;
+        };
+        let installer_arg = installer.map(|path| path.to_string_lossy().into_owned());
+        let log_path = crate::sidecar::state_dir()
+            .ok()
+            .map(|dir| dir.join(LOG_FILE_NAME).to_string_lossy().into_owned());
+        let args = supervisor_args(
+            &app_exe.to_string_lossy(),
+            installer_arg.as_deref(),
+            version.unwrap_or("unknown"),
+            std::process::id(),
+            mode,
+            log_path.as_deref(),
+        );
+        match spawn_detached(&node_exe, &script, &args) {
+            Ok(()) => {
+                crate::sidecar::log_line(&format!(
+                    "update: the external update supervisor is live (mode {mode}) — node \"{}\" \"{}\"",
+                    node_exe.display(),
+                    script.display()
+                ));
+                true
+            }
+            Err(e) => {
+                // NEVER block an update on the belt — the leg's own
+                // restart machinery stays primary either way.
+                crate::sidecar::log_line(&format!(
+                    "update: spawning the external update supervisor failed ({e}) — continuing without it"
+                ));
+                false
+            }
+        }
+    }
+
+    /// Windows: the overlay module's own proven CreateProcessW mechanics
+    /// (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — off this console, out
+    /// of Ctrl+C groups, no job object), fire-and-forget: nobody waits on
+    /// the handle, the supervisor owns its lifetime (its own hard bound).
+    #[cfg(windows)]
+    fn spawn_detached(node_exe: &Path, script: &Path, args: &[String]) -> Result<(), String> {
+        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Threading::{
+            CreateProcessW, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, PROCESS_INFORMATION,
+            STARTUPINFOW,
+        };
+
+        fn wide(text: &str) -> Vec<u16> {
+            text.encode_utf16().chain(std::iter::once(0)).collect()
+        }
+
+        // The command line: quoted program + quoted script + the quoted
+        // flags — a Windows username with a space must never split an
+        // argument in two (CommandLineToArgvW semantics).
+        let mut cmdline = format!(
+            "\"{}\" \"{}\"",
+            node_exe.to_string_lossy(),
+            script.to_string_lossy()
+        );
+        for arg in args {
+            cmdline.push(' ');
+            cmdline.push_str(&quote_windows_arg(arg));
+        }
+        let mut cmdline_wide = wide(&cmdline);
+        let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+        startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        let mut proc_info = PROCESS_INFORMATION {
+            hProcess: INVALID_HANDLE_VALUE,
+            hThread: INVALID_HANDLE_VALUE,
+            dwProcessId: 0,
+            dwThreadId: 0,
+        };
+        // SAFETY: mirrors the overlay module's spawn exactly (its own SAFETY
+        // note applies verbatim): live NUL-bearing buffers this frame owns,
+        // zeroed OUT structs of the exact windows-sys types, plain flag
+        // constants; the returned BOOL is checked before any handle is used.
+        let ok = unsafe {
+            CreateProcessW(
+                std::ptr::null(),
+                cmdline_wide.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut proc_info,
+            )
+        };
+        if ok == 0 {
+            // RESTORE nothing (nothing was touched) — the caller continues
+            // without the belt; the honest OS error rides the log.
+            let code = unsafe { GetLastError() };
+            let err = std::io::Error::from_raw_os_error(code as i32);
+            return Err(format!("CreateProcessW answered {err}"));
+        }
+        // Fire-and-forget: unlike the overlay's watcher nobody waits on this
+        // handle — close both immediately, the supervisor owns its lifetime.
+        unsafe {
+            CloseHandle(proc_info.hThread);
+            CloseHandle(proc_info.hProcess);
+        }
+        Ok(())
+    }
+
+    /// Non-Windows: the appimage module's detached-spawn family (null stdio
+    /// so no terminal fd is held), plus a process group of its own — a
+    /// terminal window closing mid-update cannot SIGHUP the belt.
+    #[cfg(not(windows))]
+    fn spawn_detached(node_exe: &Path, script: &Path, args: &[String]) -> Result<(), String> {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        let mut command = Command::new(node_exe);
+        command
+            .arg(script)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0);
+        command
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("spawning node failed: {e}"))
+    }
+
+    /// Quote one argument for a CreateProcessW command line
+    /// (CommandLineToArgvW semantics — pure string logic, so it lives
+    /// ungated and is unit-tested on every platform). Plain args pass
+    /// through untouched; spaces/quotes get the backslash-doubling dance.
+    pub(crate) fn quote_windows_arg(arg: &str) -> String {
+        if arg.is_empty() {
+            return "\"\"".to_string();
+        }
+        if !arg.contains([' ', '\t', '"']) {
+            return arg.to_string();
+        }
+        let mut out = String::from("\"");
+        let mut backslashes = 0usize;
+        for ch in arg.chars() {
+            match ch {
+                '\\' => backslashes += 1,
+                '"' => {
+                    out.push_str(&"\\".repeat(backslashes * 2 + 1));
+                    out.push('"');
+                    backslashes = 0;
+                }
+                _ => {
+                    out.push_str(&"\\".repeat(backslashes));
+                    backslashes = 0;
+                    out.push(ch);
+                }
+            }
+        }
+        out.push_str(&"\\".repeat(backslashes * 2));
+        out.push('"');
+        out
+    }
+}
+
 /// ROUND-123 (R123): the `.old` startup cleanup — remove any stale
 /// `<current_exe>.old` left behind by a previous overlay flow (a crash
 /// mid-install, or a machine that powered off before the exit). The file
@@ -1168,3 +1560,98 @@ pub(crate) fn cleanup_renamed_exe() {
 /// flow's .old file); the call site in lib.rs is cfg-gated to match.
 #[cfg(not(windows))]
 pub(crate) fn cleanup_renamed_exe() {}
+
+// ── R128-W1: the supervisor spawn's pure parts ──────────────────────────────
+//
+// The crate's convention (sidecar.rs/wincred.rs/browser.rs/mini.rs/keys.rs
+// all carry #[cfg(test)] modules for their pure helpers) applied to this
+// module for the first time: every leg here is process-side, but the
+// supervisor's ARGV CONTRACT is pure string work — pinned on EVERY platform
+// (CI's Linux Rust Checks run these; the Windows quoting logic is pure so
+// it is tested cross-platform by design).
+#[cfg(test)]
+mod tests {
+    use super::supervisor::{quote_windows_arg, supervisor_args};
+
+    /// The exact argv the Rust side passes, re-pinning the .mjs's
+    /// parseSupervisorArgs contract from the producer side (the two sides
+    /// can never drift silently — the node tests pin the parser, these pin
+    /// the builder).
+    #[test]
+    fn supervisor_args_match_the_scripts_contract() {
+        let args = supervisor_args(
+            "C:\\Apps\\ACUTE-CODE\\ACUTE-CODE.exe",
+            Some("C:\\Users\\o\\AppData\\Local\\Temp\\ACUTE-CODE_0.121.0_x64-setup.exe"),
+            "0.121.0",
+            4242,
+            "run",
+            Some("C:\\Users\\o\\AppData\\Roaming\\acute-code\\update-supervisor.log"),
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--app-exe".to_string(),
+                "C:\\Apps\\ACUTE-CODE\\ACUTE-CODE.exe".to_string(),
+                "--installer".to_string(),
+                "C:\\Users\\o\\AppData\\Local\\Temp\\ACUTE-CODE_0.121.0_x64-setup.exe".to_string(),
+                "--version".to_string(),
+                "0.121.0".to_string(),
+                "--app-pid".to_string(),
+                "4242".to_string(),
+                "--mode".to_string(),
+                "run".to_string(),
+                "--max-wait-secs".to_string(),
+                // The SHARED install budget — one spelling across the
+                // in-app watchers and the external supervisor.
+                super::INSTALL_WAIT_BUDGET_SECS.to_string(),
+                "--log".to_string(),
+                "C:\\Users\\o\\AppData\\Roaming\\acute-code\\update-supervisor.log".to_string(),
+            ]
+        );
+        assert_eq!(super::INSTALL_WAIT_BUDGET_SECS, 600);
+    }
+
+    /// The normalization legs: a missing installer spells "none" (watch
+    /// mode's informational shape) and an unresolvable log path OMITS the
+    /// flag entirely (the supervisor's parse requires a value for --log).
+    #[test]
+    fn supervisor_args_normalize_the_missing_legs() {
+        let args = supervisor_args("/opt/ACUTE-CODE.AppImage", None, "1.0.0", 7, "watch", None);
+        assert_eq!(
+            args,
+            vec![
+                "--app-exe".to_string(),
+                "/opt/ACUTE-CODE.AppImage".to_string(),
+                "--installer".to_string(),
+                "none".to_string(),
+                "--version".to_string(),
+                "1.0.0".to_string(),
+                "--app-pid".to_string(),
+                "7".to_string(),
+                "--mode".to_string(),
+                "watch".to_string(),
+                "--max-wait-secs".to_string(),
+                super::INSTALL_WAIT_BUDGET_SECS.to_string(),
+            ]
+        );
+        assert!(!args.contains(&"--log".to_string()));
+    }
+
+    /// A Windows username with a space must never split an argument in two
+    /// (CommandLineToArgvW semantics; the trivial path passes through so
+    /// the common case stays byte-readable in the log).
+    #[test]
+    fn windows_arg_quoting_survives_spaces_and_quotes() {
+        assert_eq!(quote_windows_arg("plain.exe"), "plain.exe");
+        assert_eq!(quote_windows_arg(""), "\"\"");
+        assert_eq!(
+            quote_windows_arg("C:\\Users\\John Smith\\AppData\\Roaming\\acute-code\\update-supervisor.log"),
+            "\"C:\\Users\\John Smith\\AppData\\Roaming\\acute-code\\update-supervisor.log\""
+        );
+        // Trailing backslashes before the closing quote double (the rules'
+        // one sharp edge: 2n backslashes + the quote).
+        assert_eq!(quote_windows_arg("a b\\"), "\"a b\\\\\"");
+        // An embedded quote escapes with the backslash-doubling dance.
+        assert_eq!(quote_windows_arg("a\"b c"), "\"a\\\"b c\"");
+    }
+}

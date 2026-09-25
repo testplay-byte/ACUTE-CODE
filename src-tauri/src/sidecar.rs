@@ -968,7 +968,10 @@ fn mint_token() -> Result<String, String> {
 /// agent-core". Verbatim prefixes exist to exceed MAX_PATH (260 chars);
 /// the install tree is nowhere near that, so stripping is always safe
 /// here. `\\?\UNC\server\share` maps to `\\server\share`.
-fn simplified_path(path: &Path) -> PathBuf {
+/// R128-W1: `pub(crate)` — update.rs's supervisor spawn resolves the staged
+/// node + script through the SAME simplified resource dir (the supervisor's
+/// node child deserves the identical verbatim-path protection).
+pub(crate) fn simplified_path(path: &Path) -> PathBuf {
     let text = path.as_os_str().to_string_lossy();
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
         return PathBuf::from(format!(r"\\{rest}"));
@@ -981,7 +984,10 @@ fn simplified_path(path: &Path) -> PathBuf {
 
 /// Per-user state dir holding the DB + sidecar.log. Windows: `%APPDATA%\acute-code`
 /// (the pre-R53 behavior). Other platforms (dev runs): XDG data dir.
-fn state_dir() -> Result<PathBuf, String> {
+/// R128-W1: `pub(crate)` — update.rs's supervisor spawn derives its log
+/// path here (`<state_dir>/update-supervisor.log`, the same writable
+/// per-user dir sidecar.log lives in).
+pub(crate) fn state_dir() -> Result<PathBuf, String> {
     #[cfg(windows)]
     {
         let appdata = std::env::var("APPDATA").map_err(|_| "APPDATA is not set".to_string())?;
