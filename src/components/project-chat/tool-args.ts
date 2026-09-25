@@ -10,8 +10,10 @@
  * 80 chars with "…", and turns content/newString into "N chars"):
  *   · file family   "path: src/app.ts, content: 20 chars"   → the path
  *   · run_command   "command: pnpm exec vitest run"         → the command's
- *                   first line (commands can be multi-line scripts; the
- *                   headline line is the segment worth a glance)
+ *                   first top-level command, plus "· N commands" when the
+ *                   string chains several (R128-W5: && / ; / newlines,
+ *                   split outside quotes — the glance names the batch, the
+ *                   expanded card lists them one by one)
  *   · delegate_task "task: Fix login, role: coder, task_id: 4f2a"
  *                                                             → "coder · 4f2a"
  * Pure; exported for tests (the assignDelegateChildren pattern).
@@ -32,6 +34,77 @@ export type ToolTarget =
   | { kind: "text"; value: string };
 
 /**
+ * ROUND-128 (R128-W5): split a chained shell command into its top-level
+ * COMMANDS — breaks on `&&`, `;`, and newlines OUTSIDE single/double quotes
+ * (a quoted `;` is an argument, never a chain). Backslash escapes the next
+ * character outside single quotes (the common shells); inside single quotes
+ * every character is literal. Whitespace-only segments drop. Pure;
+ * exported for tests + the terminal card's numbered COMMAND LIST.
+ */
+export function splitShellCommands(command: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  const flush = (): void => {
+    const trimmed = current.trim();
+    if (trimmed !== "") parts.push(trimmed);
+    current = "";
+  };
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (inSingle) {
+      // Inside single quotes everything is literal until the closing '.
+      if (ch === "'") inSingle = false;
+      current += ch;
+      continue;
+    }
+    if (ch === "\\") {
+      // Escape: keep the pair verbatim (the shell sees the escaped char).
+      current += ch + (command[i + 1] ?? "");
+      i += 1;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      current += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = !inDouble;
+      current += ch;
+      continue;
+    }
+    if (!inDouble && (ch === "\n" || ch === ";")) {
+      flush();
+      continue;
+    }
+    if (!inDouble && ch === "&" && command[i + 1] === "&") {
+      flush();
+      i += 1;
+      continue;
+    }
+    current += ch;
+  }
+  flush();
+  return parts;
+}
+
+/**
+ * ROUND-128 (R128-W5): the run_command row's COMMAND LIST — the raw
+ * `command:` segment of the argsSummary split into its top-level commands
+ * (the terminal card renders one numbered mono row per command, in order;
+ * the output below stays the merged truth). Falls back to the whole summary
+ * for legacy shapes that carry the bare command with no `command:` key;
+ * empty when the summary carries nothing. Pure.
+ */
+export function toolCommandList(argsSummary: string): string[] {
+  if (argsSummary === "") return [];
+  const command = argValue(argsSummary, "command") ?? argsSummary;
+  return splitShellCommands(command);
+}
+
+/**
  * The per-tool formatter — the clean target a collapsed ToolLine shows in
  * place of the raw argsSummary, or null (→ the raw string) when the summary
  * carries nothing worth extracting. Deliberately per-tool, not generic:
@@ -43,10 +116,19 @@ export function formatToolTarget(toolName: string, argsSummary: string): ToolTar
     case "run_command": {
       // The command segment — fall back to the whole summary for fixture /
       // legacy shapes that carry the bare command with no "command:" key.
+      // R128-W5: a CHAINED command (top-level && / ; / newlines, split
+      // outside quotes) shows the FIRST command plus the honest count —
+      // "cmd · N commands" — instead of one merged blob (the whole chained
+      // string executes as ONE shell invocation; the glance says how many
+      // commands that is, the expand lists them one by one).
       const command = argValue(argsSummary, "command") ?? argsSummary;
-      const firstLine = command.split("\n")[0] ?? "";
-      const trimmed = firstLine.trim();
-      return trimmed !== "" ? { kind: "text", value: trimmed } : null;
+      const commands = splitShellCommands(command);
+      const first = (commands[0] ?? "").trim();
+      if (first === "") return null;
+      if (commands.length > 1) {
+        return { kind: "text", value: `${first} · ${commands.length} commands` };
+      }
+      return { kind: "text", value: first };
     }
     case "delegate_task": {
       // The R117-d1 addressability pair: role + task_id (the task text stays

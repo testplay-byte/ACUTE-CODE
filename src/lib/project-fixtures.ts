@@ -14,6 +14,11 @@ const uid = (prefix: string) => `${prefix}_${Math.random().toString(36).slice(2,
 /** Round-robin palette reusing the sidebar's PROJECT_COLORS starters. */
 const PALETTE = ["#FF6B2C", "#6366F1", "#D6FF57", "#FF7A3D", "#5A8CFF", "#7A5CFA"];
 
+/** R128-W3 (SCREENS.md §2 law #9): the General project's protected id —
+ * mirrors the sidecar's storage/general-project.ts + the DELETE route's
+ * 409 general_protected guard, so demo mode behaves like the live app. */
+const GENERAL_PROJECT_ID = "general";
+
 const SEED: Project[] = [
   {
     id: "prj_seed_acute",
@@ -28,6 +33,21 @@ const SEED: Project[] = [
     rootPath: "/home/dev/marketing-site",
     color: "#6366F1",
     createdAt: "2026-08-21T12:00:00Z",
+  },
+  // R128-W3 (SCREENS.md §2 law #9 — the General conversation): the internal
+  // workspace project the sidecar seeds at boot (agent-core
+  // storage/general-project.ts), mirrored here for fixture parity — same id,
+  // same neutral slate color, rootPath under the fixture "data dir".
+  // Seeded LAST deliberately: the fixture list() keeps insertion order, and
+  // every existing `projects[0]` call site (AgentChatPanel tests, the
+  // dashboard's newest-project quick action) must keep resolving to
+  // ACUTE-CODE — the SIDEBAR does the General-first pinning itself.
+  {
+    id: "general",
+    name: "General",
+    rootPath: "/home/dev/.acute/general",
+    color: "#64748B",
+    createdAt: "2026-08-19T00:00:00Z",
   },
 ];
 
@@ -127,6 +147,15 @@ export function createFixtureProjects(seed: Project[] = SEED): ProjectsBackend {
     },
     get: (id) => ok({ ...find(id) }),
     remove: (id) => {
+      // R128-W3: the General project is delete-protected (mirrors the live
+      // DELETE /projects/:id → 409 general_protected).
+      if (id === GENERAL_PROJECT_ID) {
+        throw new ApiError(
+          409,
+          "general_protected",
+          "The General project is the app's internal workspace — it cannot be deleted",
+        );
+      }
       find(id);
       projects.delete(id);
       return ok(undefined);

@@ -184,6 +184,27 @@ export const FOLDER_TYPE_META: FileTypeMeta = {
   Icon: Folder,
 };
 
+/** ROUND-128 (R128-W5, COMPONENTS §6 — the ToolLine SINGLE-ICON anatomy): the
+ * FILE-family tool names — the tools whose target IS a path, so their rows
+ * render the per-extension identity glyph (FileTypeIcon) before the mono
+ * target. A file-family tool row carries exactly ONE file glyph: the generic
+ * TOOL_ICONS family chip/icon is DROPPED for these rows and the path pill
+ * renders without its internal icon (the owner's "first a file icon, then
+ * the action, then the colored icon, then the filename, then the simple
+ * white image again" — five marks is clutter; status → verb → colored icon
+ * → filename → chevron is the whole row). Non-file tools keep their family
+ * glyph exactly as before. ONE spelling, consumed by WorkingSection's
+ * ToolLine + LiveWritePendingRow (the narrower FILE_MUTATION_TOOLS fold
+ * visibility set stays a WorkingSection concern). */
+export const FILE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "write_file",
+  "edit_file",
+  "read_file",
+  "delete_file",
+  "create_dir",
+  "list_dir",
+]);
+
 /** The lowercase extension of a path/bare filename ("" when none).
  * Handles both separators, dotfiles (".env" → "env"), and case. Pure. */
 export function fileExtension(filename: string): string {

@@ -11,7 +11,7 @@
  *   data: {"type":"hello"}                        — once, on every (re)connect
  *   data: {"type":"session","sessionId","projectId","kind":"event"|"status"|"created","seq?","status?"}
  *   data: {"type":"turn","sessionId","frame":<exact StreamTurnEvent>}
- *   data: {"type":"project","projectId","kind":"created"|"updated"}
+ *   data: {"type":"project","projectId","kind":"created"|"updated"|"deleted"}
  *   data: {"type":"settings","domain","value"}
  *   : ping                                      — comment heartbeat, 10s
  * hello = "resync everything": a fresh/reconnected watcher refetches its
@@ -83,7 +83,7 @@ export type EventsStreamFrame =
       selectedModel?: { providerId: string; model: string } | null;
     }
   | { type: "turn"; sessionId: string; frame: unknown }
-  | { type: "project"; projectId: string; kind: "created" | "updated" }
+  | { type: "project"; projectId: string; kind: "created" | "updated" | "deleted" }
   | { type: "settings"; domain: string; value: unknown };
 
 // ── The pure parser ──────────────────────────────────────────────────────────

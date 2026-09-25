@@ -34,12 +34,12 @@
  *   · applyServerAppearanceValue()    — PURE-ish: shape-check + the echo
  *     guard around an injected control (the theme provider's setters).
  *   · pushAppearancePatch()           — the guarded write-through (the local
- *     flip already applied optimistically; the PUT is fire-and-forget and a
- *     failure is silent — the local value stays, the next successful PUT
- *     re-converges the devices).
+ *     flip already applied optimistically; the PUT is fire-and-forget — and
+ *     R128-W6: a PUT that cannot land is recorded PENDING, not lost — see
+ *     the pending-patch machinery below).
  *   · startAppearanceSync()           — the live leg: hydrate on (re)connect
- *     AND on every hello (the resync — "server wins when reachable"),
- *     apply settings/appearance frames as they land. The theme provider
+ *     AND on every hello (the resync — "server wins when reachable"), apply
+ *     settings/appearance frames as they land. The theme provider
  *     mounts this once; tests drive it with fake manager/events.
  *
  * The theme module itself (src/design/theme.tsx) owns the appearance VALUE
@@ -51,6 +51,7 @@
  */
 
 import { apiJson, type ApiOutcome, type ApiSender } from "./api";
+import { mobLog, mobWarn } from "@/lib/log";
 // The theme module owns the appearance VALUE + its parser; this module never
 // imports it at eval-danger (theme's require of THIS module is lazy, so the
 // arrow is one-directional at load time: appearance-sync → design/theme).
@@ -106,9 +107,14 @@ export async function putAppearance(
  * write-through in pushAppearancePatch checks this and skips the PUT. */
 let applyingRemoteAppearance = false;
 
-/** Test seam: clear the echo guard between cases. */
+/** Test seam: clear the echo guard + the pending-patch machinery between cases. */
 export function resetAppearanceSyncForTest(): void {
   applyingRemoteAppearance = false;
+  pendingAppearancePatch = null;
+  pendingFlushAttempts = 0;
+  appearanceSyncError = null;
+  for (const listener of appearanceSyncListeners) listener();
+  appearanceSyncListeners.clear();
 }
 
 /** Test seam: read the guard (the "remote apply doesn't echo" pin). */
@@ -164,24 +170,181 @@ export interface AppearancePushTarget extends ApiSender {
   subscribe(listener: () => void): () => void;
 }
 
+// ── R128-W6 — the pending-patch machinery (no silent hello-revert) ──────────
+//
+// The round's smoking gun's second half: the OLD write-through dropped a PUT
+// that could not go out (offline) or failed (transport/HTTP) — "the local
+// value stands, the next successful PUT re-converges". But the next thing to
+// happen after a relay blip is a RECONNECT: the hello hydrates the SERVER's
+// value back over the local fix, so a flip made while disconnected was
+// silently reverted ("hidden" came back every time). The cure: a patch that
+// cannot land is recorded PENDING, and every connect/hello boundary FLUSHES
+// it BEFORE the server→local apply — the pending flush WINS over the server
+// apply, so the hydrate then reads the server ECHOING our own fix. Bounded at
+// PENDING_FLUSH_MAX_ATTEMPTS failed flushes: the patch is dropped (the local
+// change is honestly lost), an error state surfaces (appearanceSyncStatus +
+// the Appearance settings screen's inline row + the [ACUTE-MOB] logcat
+// trail), and the hydration proceeds — converge with the story told.
+
+/** The flush bound — after this many FAILED flush attempts the patch gives up. */
+export const PENDING_FLUSH_MAX_ATTEMPTS = 3;
+
+let pendingAppearancePatch: AppearancePatch | null = null;
+let pendingFlushAttempts = 0;
+let appearanceSyncError: string | null = null;
+const appearanceSyncListeners = new Set<() => void>();
+
+/** The surfaced sync state (the Appearance settings screen's inline error row
+ * + the tests' observable seam; purely informational — no data integrity
+ * rides it, the values below are the sync story, never the pref values). */
+export interface AppearanceSyncStatus {
+  /** The un-acknowledged patch awaiting its flush (null when none). */
+  pending: AppearancePatch | null;
+  /** Failed flush attempts of the CURRENT pending patch (0 when none). */
+  flushAttempts: number;
+  /** The give-up error (null while healthy; cleared by the next landed PUT). */
+  error: string | null;
+}
+
+/** Read the sync state (pure — the tests + the settings row's source). */
+export function appearanceSyncStatus(): AppearanceSyncStatus {
+  return {
+    pending: pendingAppearancePatch,
+    flushAttempts: pendingFlushAttempts,
+    error: appearanceSyncError,
+  };
+}
+
+/** Subscribe to sync-state changes (the Appearance settings screen's inline
+ * row re-renders off this; the unsubscribe exists for unmount/tests). */
+export function subscribeAppearanceSyncStatus(listener: () => void): () => void {
+  appearanceSyncListeners.add(listener);
+  return () => {
+    appearanceSyncListeners.delete(listener);
+  };
+}
+
+function notifyAppearanceSyncListeners(): void {
+  for (const listener of appearanceSyncListeners) listener();
+}
+
+/** Record a patch that could not land — merged field-by-field into any
+ * existing pending (a second offline flip widens the pending set; a re-flip
+ * of the same field wins, exactly like the server's partial-PUT semantics). */
+function recordPendingPatch(patch: AppearancePatch): void {
+  if (Object.keys(patch).length === 0) return;
+  pendingAppearancePatch =
+    pendingAppearancePatch === null
+      ? { ...patch }
+      : { ...pendingAppearancePatch, ...patch };
+  notifyAppearanceSyncListeners();
+}
+
+/** A patch (or its fields) LANDED on the server: drop those fields from the
+ * pending set; an emptied pending resets the attempt count, and any surfaced
+ * error clears (the connection is proven healthy again). */
+function markPatchLanded(patch: AppearancePatch): void {
+  let changed = false;
+  if (pendingAppearancePatch !== null) {
+    const next: Record<string, unknown> = { ...pendingAppearancePatch };
+    for (const key of Object.keys(patch)) delete next[key];
+    if (Object.keys(next).length === 0) {
+      pendingAppearancePatch = null;
+      pendingFlushAttempts = 0;
+    } else {
+      pendingAppearancePatch = next as AppearancePatch;
+    }
+    changed = true;
+  }
+  if (appearanceSyncError !== null) {
+    appearanceSyncError = null;
+    changed = true;
+  }
+  if (changed) notifyAppearanceSyncListeners();
+}
+
+/** The give-up copy (pinned by the tests; the Appearance settings screen's
+ * inline row renders the same string). */
+export const APPEARANCE_SYNC_GAVE_UP =
+  "Appearance change didn't reach the desktop after 3 tries — set it again once reconnected.";
+
+/** Flush the pending patch at a connect/hello boundary. Returns true
+ * SYNCHRONOUSLY when nothing was pending (the normal path keeps the
+ * pre-R128 synchronous hydration shape — no promise hop between a hello and
+ * its GET); otherwise a promise of whether the hydration should proceed:
+ * true when the flush landed or after the give-up (the patch is dropped +
+ * the error surfaced — converge honestly), false while a failed flush still
+ * has attempts left (the local value stands this round; the next hello
+ * retries). */
+function flushPendingAppearancePatch(target: AppearancePushTarget): true | Promise<boolean> {
+  if (pendingAppearancePatch === null) return true;
+  const patch = pendingAppearancePatch;
+  return putAppearance(target, patch)
+    .then(
+      (outcome) => (outcome.ok ? "landed" : "failed"),
+      () => "failed", // transport — the attempt accounting owns it
+    )
+    .then((result) => {
+      if (result === "landed") {
+        markPatchLanded(patch);
+        mobLog("sync", "appearance patch flushed on reconnect", { ...patch });
+        return true;
+      }
+      return noteFailedFlush(patch);
+    });
+}
+
+/** A failed flush attempt: count it; at the bound, give up (drop the patch,
+ * surface the honest error) and let the hydration converge; below the bound,
+ * keep protecting the local value for the next boundary. */
+function noteFailedFlush(patch: AppearancePatch): boolean {
+  pendingFlushAttempts += 1;
+  if (pendingFlushAttempts >= PENDING_FLUSH_MAX_ATTEMPTS) {
+    // Give up: the change is honestly lost — say so, converge, move on.
+    pendingAppearancePatch = null;
+    pendingFlushAttempts = 0;
+    appearanceSyncError = APPEARANCE_SYNC_GAVE_UP;
+    mobWarn("sync", "appearance patch flush gave up after 3 attempts", { ...patch });
+    notifyAppearanceSyncListeners();
+    return true;
+  }
+  mobWarn("sync", "appearance patch flush failed — retrying at the next hello", {
+    attempt: pendingFlushAttempts,
+  });
+  notifyAppearanceSyncListeners();
+  return false;
+}
+
 /**
  * Push one local appearance change to the server (the optimistic
  * write-through behind the theme provider's setters). STRICTLY optional:
  * the local flip already applied (the click is the UX source; the server is
  * the sync backbone). Skipped while applying a remote value (the echo
- * guard) and while not connected (the local value stands as the offline
- * fallback — the next successful PUT re-converges). A failed PUT is a
- * silent no-op.
+ * guard). R128-W6: a PUT that cannot go out (not connected) or fails
+ * (transport/HTTP) is recorded PENDING — the next connect/hello flushes it
+ * BEFORE the server→local apply, so a local flip can never again be silently
+ * reverted by the hydration that follows a relay blip.
  */
 export function pushAppearancePatch(
   target: AppearancePushTarget,
   patch: AppearancePatch,
 ): void {
   if (applyingRemoteAppearance) return; // echo guard — see the doc above
-  if (target.getStatus() !== "connected") return;
-  void putAppearance(target, patch).catch(() => {
-    // transport loss — silent; the local value stays the offline fallback
-  });
+  if (target.getStatus() !== "connected") {
+    recordPendingPatch(patch); // offline — pending, not lost
+    return;
+  }
+  void putAppearance(target, patch)
+    .then((outcome) => {
+      if (outcome.ok) {
+        markPatchLanded(patch);
+        return;
+      }
+      recordPendingPatch(patch); // HTTP-level failure — pending, not lost
+    })
+    .catch(() => {
+      recordPendingPatch(patch); // transport loss — pending, not lost
+    });
 }
 
 // ── the live leg ────────────────────────────────────────────────────────────
@@ -196,22 +359,26 @@ export interface AppearanceSyncEnv {
  * Start the live sync (the theme provider mounts this once, for the app's
  * lifetime — the returned unsubscribe exists for correctness/tests):
  *
- *   · on (re)connect  → hydrate: GET the server's appearance and apply it
- *     (the server wins when reachable — the spec's sync semantic);
- *   · on hello        → hydrate again (the resync — the phone may have
- *     missed changes while its events stream was down; a double GET right
- *     after a connect is the honest price, idempotent by construction);
+ *   · on (re)connect  → FLUSH any pending patch first (R128-W6), then
+ *     hydrate: GET the server's appearance and apply it (the server wins
+ *     when reachable — the spec's sync semantic, now never able to silently
+ *     revert an un-acknowledged local fix);
+ *   · on hello        → the same flush-then-hydrate (the resync — the phone
+ *     may have missed changes while its events stream was down; a double GET
+ *     right after a connect is the honest price, idempotent by construction);
  *   · on settings/appearance frames → apply live (the echo guard inside
  *     applyServerAppearanceValue stops the PUT-back loop).
  *
- * A transport failure anywhere is silent — the locally persisted value is
- * the offline fallback and the next successful round re-converges.
+ * A transport failure of the HYDRATION is silent — the locally persisted
+ * value is the offline fallback; a failure of a local flip's PUT is NOT
+ * silent anymore: the patch goes pending and rides the next boundary (the
+ * machinery above), bounded at 3 attempts with an honest give-up.
  */
 export function startAppearanceSync(
   apply: (value: unknown) => boolean,
   env: AppearanceSyncEnv,
 ): () => void {
-  const hydrate = (): void => {
+  const hydrateFromServer = (): void => {
     void fetchAppearance(env.manager)
       .then((outcome) => {
         if (outcome.ok) apply(outcome.data);
@@ -219,6 +386,24 @@ export function startAppearanceSync(
       .catch(() => {
         // transport — silent; the local persisted value stands
       });
+  };
+  const hydrate = (): void => {
+    // R128-W6 — THE PENDING FLUSH WINS OVER THE SERVER APPLY: any patch the
+    // phone could not PUT goes out FIRST; only after it lands (or nothing
+    // was pending, or the bound was hit) does the hydration read the server
+    // — which now echoes our own fix instead of silently reverting it.
+    const flushed = flushPendingAppearancePatch(env.manager);
+    if (flushed === true) {
+      // nothing pending — the pre-R128 synchronous hydration shape
+      hydrateFromServer();
+      return;
+    }
+    void flushed.then((proceed) => {
+      if (!proceed) {
+        return; // the flush failed with attempts left — the local value stands
+      }
+      hydrateFromServer();
+    });
   };
   let lastStatus = env.manager.getStatus();
   if (lastStatus === "connected") hydrate();

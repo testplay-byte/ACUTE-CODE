@@ -25,6 +25,9 @@ import {
   listProjects,
   projectRootPathExists,
 } from "../storage/projects.js";
+// R128-W3 (SCREENS §2 law #9): the General project's protected id — the
+// DELETE guard below returns 409 general_protected for it.
+import { GENERAL_PROJECT_ID } from "../storage/general-project.js";
 import { searchIndexSymbols } from "../storage/index.js";
 // R113-a: the events-bus publish for project creations (watchers on
 // GET /events/stream refresh their project lists).
@@ -80,10 +83,9 @@ export function registerProjectRoutes(scope: FastifyInstance, ctx: RouteContext)
     const color = typeof raw.color === "string" && /^#[0-9a-fA-F]{6}$/.test(raw.color) ? raw.color : undefined;
     const project = createProject(db, { name, rootPath, ...(color !== undefined ? { color } : {}) });
     // R113-a: announce the new project on the events bus — watchers
-    // (desktop sidebar / phone project list) refresh. No project-update
-    // route exists today (create/delete only), so "created" is the only
-    // frame this domain publishes in v1; DELETE stays unannounced (clients
-    // refetch on their next poll or reconnect hello).
+    // (desktop sidebar / phone project list) refresh. R128-W3: "created"
+    // is no longer the only frame this domain publishes — DELETE announces
+    // "deleted" below (with the cascade counts on the HTTP response).
     getEventsBus().publishProjectFrame(project.id, "created");
     return reply.code(201).send(project);
   });
@@ -99,10 +101,31 @@ export function registerProjectRoutes(scope: FastifyInstance, ctx: RouteContext)
 
   scope.delete("/projects/:id", async (request, reply) => {
     const { id } = request.params as Record<string, string>;
-    if (!deleteProject(db, id)) {
+    // R128-W3 (SCREENS §2 law #9): the General project is the app's internal
+    // workspace — delete-PROTECTED here (and in the storage layer as the
+    // belt-and-braces leg). The 409 carries a dedicated code so honest
+    // clients can name exactly what happened.
+    if (id === GENERAL_PROJECT_ID) {
+      return reply.code(409).send(
+        errorBody(
+          "general_protected",
+          "The General project is the app's internal workspace — it cannot be deleted",
+        ),
+      );
+    }
+    // R128-W3 (SCREENS §2 law #8's backend half): the delete CASCADES the
+    // project's sessions (session_events / usage_events / approvals /
+    // file_snapshots / sessions, one transaction) and returns the counts —
+    // the pre-R128 route deleted only the project row, orphaning sessions.
+    const counts = deleteProject(db, id);
+    if (counts === undefined) {
       return reply.code(404).send(errorBody("NOT_FOUND", `no project with id ${id}`));
     }
-    return reply.code(204).send();
+    // R128-W3: announce the deletion — watchers (desktop sidebar / phone
+    // project list) refresh instead of waiting for the next poll/reconnect
+    // hello (the R113-a gap: deletes were the only unannounced mutation).
+    getEventsBus().publishProjectFrame(id, "deleted");
+    return reply.code(200).send({ id, deleted: counts });
   });
 
   scope.get("/projects/:id/tree", async (request, reply) => {

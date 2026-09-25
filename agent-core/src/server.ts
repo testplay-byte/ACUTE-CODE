@@ -11,6 +11,8 @@ import { aiSdkChat, type ChatFn } from "./agents/chat.js";
 import { pickFiles, pickFolder } from "./dialogs.js";
 import { ProviderKeyring } from "./providers/registry.js";
 import { getProject } from "./storage/projects.js";
+// R128-W3 (SCREENS §2 law #9): the General conversation's boot seed.
+import { ensureGeneralProject } from "./storage/general-project.js";
 import { getSession } from "./storage/sessions.js";
 import { Orchestrator } from "./agents/orchestrator.js";
 import {
@@ -2327,6 +2329,20 @@ function isNonLoopbackAcuteHost(raw: string | undefined): boolean {
 /** Opens the database, binds 127.0.0.1 (loopback only), prints the ready line. */
 export async function startServer(options: StartServerOptions): Promise<RunningSidecar> {
   const db = openDatabase(options.dbPath);
+  // R128-W3 (SCREENS §2 law #9 — the General conversation): seed the app's
+  // internal workspace project (id "general", root <dataDir>/general)
+  // idempotently at boot. Best-effort by design — a seeding failure is
+  // logged and NEVER kills boot (the app still serves everything else; the
+  // seed retries on the next restart).
+  try {
+    ensureGeneralProject(db, dirname(options.dbPath));
+  } catch (err) {
+    // The boot.device_link_failed / boot.cloud_connector_failed idiom
+    // exactly: never-fatal, structured, named.
+    log("warn", "boot.general_project_failed", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
   const app = buildServer({
     token: options.token,
     db,

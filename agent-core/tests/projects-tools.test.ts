@@ -181,7 +181,17 @@ describe("/api/v1/projects", () => {
     const id = (listed.json().projects as Array<{ id: string }>)[0].id;
 
     const removed = await authInject({ method: "DELETE", url: `/api/v1/projects/${id}` });
-    expect(removed.statusCode).toBe(204);
+    // R128-W3: the delete now CASCADES the project's sessions and returns
+    // the honest counts (200 + body) instead of the bare 204 — files on
+    // disk are still never touched.
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json().deleted).toEqual({
+      sessions: 0,
+      sessionEvents: 0,
+      usageEvents: 0,
+      approvals: 0,
+      fileSnapshots: 0,
+    });
     expect(readFileSync(join(tempDir, "keep.txt"), "utf8")).toContain("persist me");
   });
 

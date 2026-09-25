@@ -501,6 +501,12 @@ function buildModel(input: ChatTurnInput): LanguageModel {
 
 export interface ChatToolCall {
   name: string;
+  /** ROUND-128 (R128-W5): the call's SDK toolCallId, threaded additively so
+   * the sync path's persisted tool.use payload can carry the same call
+   * identity the streamed path persists (the fold's id/callSeq ordering +
+   * the live store's id-first attachment). Absent on older adapters/mock
+   * shapes — every consumer treats it as optional. */
+  toolCallId?: string;
   argsSummary: string;
   /** ROUND-96 (R96-B, the owner's loop-guard report: "the model was reading
    * a file: it read the first half, then the second, then the fourth… our
@@ -731,14 +737,20 @@ function extractToolCalls(steps: Array<unknown>): ChatToolCall[] {
   const calls: ChatToolCall[] = [];
   if (!Array.isArray(steps)) return calls;
   for (const step of steps) {
-    const responses = (step as { toolResults?: Array<{ toolName?: unknown; input?: unknown; output?: unknown }> })
-      .toolResults;
+    const responses = (
+      step as {
+        toolResults?: Array<{ toolCallId?: unknown; toolName?: unknown; input?: unknown; output?: unknown }>;
+      }
+    ).toolResults;
     if (!Array.isArray(responses)) continue;
     for (const r of responses) {
       if (typeof r.toolName !== "string") continue;
       // ROUND-117 (R117-e): the missing-ok honesty fold — see foldToolOk.
       const folded = foldToolOk(r.output, r.toolName);
       calls.push({
+        // R128-W5: the SDK result's toolCallId rides the call (optional —
+        // older fixtures' toolResults shapes never carried one).
+        ...(typeof r.toolCallId === "string" && r.toolCallId !== "" ? { toolCallId: r.toolCallId } : {}),
         name: r.toolName,
         argsSummary: summarizeArgs(r.input),
         // ROUND-96 (R96-B): the RAW input rides the call — the loop guard's
@@ -917,11 +929,18 @@ export type StreamChatEvent =
    * loop guard's repeat detection needs them (paged reads differ by offset,
    * not by the string-only display summary). Consumed by the runtime's guard
    * feed ONLY; never forwarded over SSE (the runtime strips the field before
-   * emitting) and never persisted. */
-  | { type: "tool-call"; toolName: string; argsSummary: string; args?: unknown }
+   * emitting) and never persisted.
+   * ROUND-128 (R128-W5): the SDK part's toolCallId rides ADDITIVELY so the
+   * live store can attach results to the RIGHT in-flight row (parallel
+   * same-tool calls completed out of order used to cross-attach under the
+   * toolName-only matching). Optional: mock generators and older adapters
+   * may omit it — downstream matchers fall back to the legacy behavior. */
+  | { type: "tool-call"; toolCallId?: string; toolName: string; argsSummary: string; args?: unknown }
   /** ROUND-96 (R96-B): same raw-args threading on the result (the guard
-   * fires per EXECUTED call — the result is the honest per-call feed). */
-  | { type: "tool-result"; toolName: string; argsSummary: string; args?: unknown; ok: boolean; outputSummary?: string }
+   * fires per EXECUTED call — the result is the honest per-call feed).
+   * ROUND-128 (R128-W5): the result carries its toolCallId too — the live
+   * row's id-first attachment (see the tool-call variant above). */
+  | { type: "tool-result"; toolCallId?: string; toolName: string; argsSummary: string; args?: unknown; ok: boolean; outputSummary?: string }
   | {
       type: "finish";
       usage: { inputTokens: number; outputTokens: number; totalTokens: number };
@@ -1156,7 +1175,16 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
         };
       } else if (part.type === "tool-call") {
         const argsSummary = summarizeArgs(part.input);
-        yield { type: "tool-call", toolName: part.toolName, argsSummary, args: part.input };
+        // R128-W5: the SDK part's toolCallId rides the frame — the live
+        // store's id-first attachment (parallel same-tool calls completing
+        // out of order) and the persisted tool.use payload's call identity.
+        yield {
+          type: "tool-call",
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          argsSummary,
+          args: part.input,
+        };
       } else if (part.type === "tool-result") {
         const output = part.output as unknown;
         // ROUND-117 (R117-e): the missing-ok honesty fold — see foldToolOk
@@ -1164,6 +1192,9 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
         const folded = foldToolOk(output, part.toolName);
         yield {
           type: "tool-result",
+          // R128-W5: the result's toolCallId (same threading as the
+          // tool-call frame above).
+          toolCallId: part.toolCallId,
           toolName: part.toolName,
           argsSummary: summarizeArgs(part.input),
           // ROUND-96 (R96-B): the raw input for the guard's exact-match identity.

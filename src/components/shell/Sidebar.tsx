@@ -14,6 +14,7 @@ import {
   LayoutDashboard,
   LoaderCircle,
   MessageSquare,
+  MessageSquarePlus,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
@@ -36,6 +37,13 @@ import { useCreateSession, useDeleteSession, useRenameSession, useSessions } fro
 import { useAgents } from "../../hooks/use-agents";
 import { useActiveStreams } from "../../lib/active-streams";
 import { useProjectChatStore } from "../../lib/project-chat-store";
+// R128-W3 (SCREENS.md §2 law #8): every sidebar delete rides the shared
+// danger ConfirmDialog — the R95-A styled replacement, imported (the one
+// spelling rule; the pre-R128 sidebar deleted with NO ask at all).
+import { ConfirmDialog } from "../settings/ConfirmDialog";
+// R128-W3 (SCREENS.md §2 law #9): the honest-degradation toast leg of the
+// General conversation's start button (older sidecar, no seeded row).
+import { pushLocalToast } from "../../hooks/use-notifications";
 // R99-C: the app-wide "an update is pending" signal — drives the accent dot
 // on the sidebar's Settings entries (the store persists across restarts and
 // self-heals at boot via initUpdateChecker).
@@ -58,6 +66,25 @@ async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): 
 }
 
 const EXPANDED_KEY = "acute-code.sidebar.expandedProjects";
+
+/** R128-W3 (SCREENS §2 law #9 — the General conversation): the id of the
+ * app's internal workspace project. The BACKEND owns the row (the boot seed
+ * in agent-core storage/general-project.ts, delete-protected at
+ * DELETE /projects/:id); the sidebar only pins it first in the list, hides
+ * its delete affordance, and offers the header's start-a-general-chat
+ * button. The spelling lives once here so it can never drift from the row
+ * the sidecar seeds. */
+const GENERAL_PROJECT_ID = "general";
+const GENERAL_PROJECT_NAME = "General";
+
+/** R128-W3: the projects list renders General pinned FIRST, then the
+ * backend's order (created_at DESC) untouched — a stable sort, so every
+ * other row keeps exactly the position it had. */
+function pinGeneralFirst(list: Project[]): Project[] {
+  return [...list].sort((a, b) =>
+    a.id === GENERAL_PROJECT_ID ? -1 : b.id === GENERAL_PROJECT_ID ? 1 : 0,
+  );
+}
 
 function readExpanded(): string[] {
   try { return JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]") as string[]; } catch { return []; }
@@ -240,7 +267,11 @@ export function AcuteLogo({
  *   back affordance the R95-A owner directive assigned to the left sidebar.
  * - GENEROUS spacing between NAVIGATION and PROJECTS (owner: "way too close
  *   together").
- * - PROJECTS: no chevron, no session-count chip; the "+ new session" button
+ * - PROJECTS: R128-W3 (SCREENS.md §2 law #2, REWRITTEN): the project ROW
+ *   is the tree toggle — the whole row expands/collapses its sessions,
+ *   nothing else (no navigation from the row; the dedicated chevron button
+ *   is retired, a presentation glyph keeps the state readable). No
+ *   session-count chip; the "+ new session" button
  *   lives ON the project row itself (owner directive); sessions are
  *   renameable (round-33).
  * - FOOTER: a PROMINENT Settings button (card-style, not a plain nav row).
@@ -283,6 +314,29 @@ export function Sidebar() {
   // top. Orthogonal to the full hide; persisted in the project-chat store.
   const minimized = useProjectChatStore((s) => s.appSidebarMinimized);
   const setAppSidebarMinimized = useProjectChatStore((s) => s.setAppSidebarMinimized);
+
+  // R128-W3 (SCREENS.md §2 law #2, REWRITTEN — the project row expands/
+  // collapses its sessions, nothing else): the expanded-projects tree state
+  // lives HERE (the panel's own level) so it survives minimize/restore —
+  // the rail's project tiles toggle it without navigating, and the
+  // re-expanded panel starts with the SAME tree the user left. Persistence
+  // (localStorage) + the active-project auto-expand move with it verbatim.
+  const [expandedProjects, setExpandedProjects] = useState<string[]>(readExpanded);
+  const toggleProject = useCallback((projectId: string) => {
+    setExpandedProjects((prev) =>
+      prev.includes(projectId) ? prev.filter((id) => id !== projectId) : [...prev, projectId],
+    );
+  }, []);
+  const sidebarActiveProjectId = pathname.match(/^\/project\/([^/]+)/)?.[1] ?? null;
+  // Auto-expand the active project (ROUND-30 behavior, kept verbatim).
+  useEffect(() => {
+    if (sidebarActiveProjectId && !expandedProjects.includes(sidebarActiveProjectId)) {
+      setExpandedProjects((prev) => [...prev, sidebarActiveProjectId]);
+    }
+  }, [sidebarActiveProjectId]);
+  useEffect(() => {
+    try { localStorage.setItem(EXPANDED_KEY, JSON.stringify(expandedProjects)); } catch { /* */ }
+  }, [expandedProjects]);
 
   return (
     <>
@@ -389,6 +443,7 @@ export function Sidebar() {
       {minimized ? (
         <MinimizedRail
           onExpand={() => setAppSidebarMinimized(false)}
+          onToggleProject={toggleProject}
           variant={isSettingsRoute ? "settings" : "normal"}
           activeSettingsTab={isSettingsRoute ? activeSettingsTab : undefined}
         />
@@ -443,7 +498,10 @@ export function Sidebar() {
 
           {/* PROJECTS SECTION — expandable tree */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            <ProjectSection />
+            <ProjectSection
+              expandedProjects={expandedProjects}
+              onToggleProject={toggleProject}
+            />
           </div>
 
           {/* FOOTER — a PROMINENT Settings button (owner round-33) + the
@@ -475,7 +533,8 @@ export function Sidebar() {
  * just hiding it completely") — the sidebar's MINIMIZED icon rail: a 48px
  * column (R100-F: 64→48px, the activity-bar standard) with the restore
  * button at the very top, then Dashboard/Usage, the
- * project tiles (click → that project's chat; the running dot carries the
+ * project tiles (R128-W3: a tile's click EXPANDS the sidebar + toggles that
+ * project's session tree — never navigates; the running dot carries the
  * live-work signal), a +N overflow tile when the 10-tile cap cuts the list
  * (R101-C), a flexible spacer, and the collapsed bell + settings
  * gear at the bottom. Every button keeps its `title` tooltip AND carries a
@@ -678,10 +737,16 @@ function SettingsSidebarBody({
 
 function MinimizedRail({
   onExpand,
+  onToggleProject,
   variant = "normal",
   activeSettingsTab,
 }: {
   onExpand: () => void;
+  /** R128-W3 (SCREENS.md §2 law #2, REWRITTEN): a project tile's click
+   * expands the sidebar AND toggles that project's session tree — the
+   * expanded-projects state lives at the Sidebar level, so the tree the
+   * tiles toggled is exactly the tree the re-expanded panel renders. */
+  onToggleProject: (projectId: string) => void;
   /** R102-C: the rail's settings variant (R66's behavior restored) — on
    * /settings the rail renders back-to-dashboard + the section icons,
    * never the projects tiles (minimizing a settings page must not teleport
@@ -694,7 +759,9 @@ function MinimizedRail({
   const { pathname } = useLocation();
   const projectsQuery = useProjects();
   const sessionsQuery = useSessions();
-  const projects = projectsQuery.data ?? [];
+  // R128-W3 (SCREENS §2 law #9): General pinned FIRST — the rail's tiles
+  // read in the same order the expanded panel's rows do.
+  const projects = pinGeneralFirst(projectsQuery.data ?? []);
   const sessions = sessionsQuery.data ?? [];
   // ROUND-42 parity: a project with any running session shows the live dot.
   const runningSessions = useActiveStreams((s) => s.active);
@@ -791,16 +858,22 @@ function MinimizedRail({
             "rail-back-dashboard",
           )}
           <div className="w-9 shrink-0 border-t my-1" style={{ borderColor: styles.borderSubtle }} />
-          {SETTINGS_SECTIONS.map(({ id, label, icon: Icon }) =>
-            railBtn(
-              label,
-              <Icon size={16} strokeWidth={2} />,
-              activeSettingsTab === id,
-              () => navigate(`/settings?tab=${id}`),
-              `rail-settings-${id}`,
-              id === "about",
-            ),
-          )}
+          {/* R128-W3 (drive-by, surfaced by the rail test's settings leg):
+              the section icons are a LIST — keyed by section id (the
+              pre-existing map rendered keyless buttons; React's key warning
+              fired on every settings-variant rail mount). */}
+          {SETTINGS_SECTIONS.map(({ id, label, icon: Icon }) => (
+            <Fragment key={id}>
+              {railBtn(
+                label,
+                <Icon size={16} strokeWidth={2} />,
+                activeSettingsTab === id,
+                () => navigate(`/settings?tab=${id}`),
+                `rail-settings-${id}`,
+                id === "about",
+              )}
+            </Fragment>
+          ))}
           {/* Spacer + the collapsed bell — footer parity with the normal
               rail (notifications stay reachable while browsing settings). */}
           <div className="flex-1 min-h-2" />
@@ -819,14 +892,13 @@ function MinimizedRail({
               proportion). */}
           <div className="w-9 shrink-0 border-t my-1" style={{ borderColor: styles.borderSubtle }} />
 
-      {/* PROJECT TILES — click opens the project's chat; the tile is the
-          project's own color mark (ProjectTile), so color identity
-          survives minimization; running projects get the live dot.
-          R87-A1 (owner: "if I click on any one of the projects, then the
-          left sidebar should apparently expand fully"): the click EXPANDS
-          the sidebar first (the same onExpand the rail's top restore button
-          uses), then navigates — a rail tile is a shortcut INTO the project
-          world, and the projects list lives in the full panel. */}
+      {/* PROJECT TILES — R128-W3 (SCREENS.md §2 law #2, REWRITTEN): a tile's
+          click EXPANDS the sidebar (the R87-A1 expand-first pattern) and
+          toggles that project's session tree in the same gesture — it NEVER
+          navigates anymore (the expanded panel's row is the tree's toggle
+          too; entering a conversation is a SESSION row's job). The tile
+          stays the project's own color mark (ProjectTile), so color identity
+          survives minimization; running projects get the live dot. */}
       <div className="flex flex-col items-center gap-1.5 py-0.5" data-testid="rail-projects">
         {projectsQuery.isPending ? (
           /* R97-I part 2 (owner: a UI "aware of its states"): the projects
@@ -848,9 +920,9 @@ function MinimizedRail({
                 key={project.id}
                 onClick={() => {
                   onExpand();
-                  navigate(`/project/${project.id}/chat`);
+                  onToggleProject(project.id);
                 }}
-                aria-label={`Open ${project.name}`}
+                aria-label={`Show ${project.name} sessions`}
                 title={project.name}
                 aria-current={active ? "page" : undefined}
                 // R100-F: rounded-lg; the active tint follows the
@@ -1017,6 +1089,14 @@ function SettingsButton() {
   );
 }
 
+/** R128-W3 (SCREENS §2 law #8 — deletes confirm): the armed target of the
+ * section's ONE danger ConfirmDialog. A session row arms {kind:"session"};
+ * a project row arms {kind:"project"} with the enumerated blast radius
+ * (its live session count from the sessions query). */
+type PendingSidebarDelete =
+  | { kind: "session"; id: string; projectId: string; title: string }
+  | { kind: "project"; id: string; name: string; sessionCount: number };
+
 /** Projects section — expandable tree with sessions under each project.
  * ROUND-42 (owner): refreshed visuals — section header with a count chip +
  * ghost Add button, gradient project tiles, a smoother expand animation, and
@@ -1024,16 +1104,32 @@ function SettingsButton() {
  * sessions is running (even when the project is collapsed — the owner: "the
  * animation should move on to the project itself so I can clearly know which
  * project is active"). R60-C: expanded layout only (the rail is gone). */
-function ProjectSection() {
+function ProjectSection({
+  expandedProjects,
+  onToggleProject,
+}: {
+  /** R128-W3: the tree state lives at the Sidebar level (it survives
+   * minimize/restore — the rail's tiles toggle the same list). */
+  expandedProjects: string[];
+  onToggleProject: (projectId: string) => void;
+}) {
   const styles = useThemeStyles();
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
   const projectsQuery = useProjects();
   const sessionsQuery = useSessions();
-  const projects = projectsQuery.data ?? [];
+  // R128-W3 (SCREENS §2 law #9): General pinned FIRST, then the backend's
+  // order untouched.
+  const projects = pinGeneralFirst(projectsQuery.data ?? []);
   const sessions = sessionsQuery.data ?? [];
-  const [expandedProjects, setExpandedProjects] = useState<string[]>(readExpanded);
   const [showAddDialog, setShowAddDialog] = useState(false);
+
+  // R128-W3 (SCREENS §2 law #8 — deletes confirm): the ONE dialog instance
+  // for the whole section; a session row or a project row's delete button
+  // only ARMS it — the mutation runs solely on the dialog's confirm.
+  const [pendingDelete, setPendingDelete] = useState<PendingSidebarDelete | null>(null);
+  const deleteSession = useDeleteSession();
+  const deleteProject = useDeleteProject();
 
   // ROUND-42: the set of running session ids (SSE/stream-driven store) →
   // which PROJECTS currently have live work. Drives the animation on the
@@ -1050,23 +1146,6 @@ function ProjectSection() {
   // panel binds to it too) — highlight the matching session row.
   const activeSessionId = new URLSearchParams(search).get("session");
 
-  // Auto-expand the active project
-  useEffect(() => {
-    if (activeProjectId && !expandedProjects.includes(activeProjectId)) {
-      setExpandedProjects((prev) => [...prev, activeProjectId]);
-    }
-  }, [activeProjectId]);
-
-  useEffect(() => {
-    try { localStorage.setItem(EXPANDED_KEY, JSON.stringify(expandedProjects)); } catch { /* */ }
-  }, [expandedProjects]);
-
-  const toggleProject = (projectId: string) => {
-    setExpandedProjects((prev) =>
-      prev.includes(projectId) ? prev.filter((id) => id !== projectId) : [...prev, projectId],
-    );
-  };
-
   const projectSessions = (projectId: string) =>
     sessions.filter((s) => s.projectId === projectId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
@@ -1075,9 +1154,11 @@ function ProjectSection() {
   // INSTANTLY (owner: "I have to refresh the whole page" — the old raw-fetch
   // button never invalidated the sessions query).
   const createSession = useCreateSession();
-  const createSessionFor = async (projectId: string, projectName: string) => {
+  // R128-W3: returns whether the session landed (the General button's
+  // honest-degradation leg needs to know — the row buttons ignore it).
+  const createSessionFor = async (projectId: string, projectName: string): Promise<boolean> => {
     const agentId = agentsForNewSessions();
-    if (!agentId) return;
+    if (!agentId) return false;
     try {
       const created = await createSession.mutateAsync({
         mode: "single" as const,
@@ -1086,12 +1167,53 @@ function ProjectSection() {
         title: `New chat · ${projectName}`,
       });
       navigate(`/project/${projectId}/chat?session=${created.id}`);
+      return true;
     } catch {
       /* surfaced by the mutation state; keep the sidebar stable */
+      return false;
     }
   };
   const agentsQueryForSessions = useAgents(false);
   const agentsForNewSessions = () => (agentsQueryForSessions.data ?? [])[0]?.id ?? null;
+
+  // R128-W3 (SCREENS §2 law #9): the header's start-a-general-conversation
+  // button — the ONE navigation trigger this wave adds. The General row is
+  // pinned first in the list; when it is missing (an older sidecar without
+  // the boot seed) the button still tries the normal createSession path
+  // against the "general" id, and degrades to a quiet toast when the
+  // backend refuses — the frontend NEVER auto-creates the project row.
+  const startGeneralConversation = async () => {
+    const general = projects.find((p) => p.id === GENERAL_PROJECT_ID);
+    if (general !== undefined) {
+      await createSessionFor(general.id, general.name);
+      return;
+    }
+    const created = await createSessionFor(GENERAL_PROJECT_ID, GENERAL_PROJECT_NAME);
+    if (!created) {
+      pushLocalToast("General workspace unavailable", undefined, "task_failed");
+    }
+  };
+
+  // R128-W3 (SCREENS §2 law #8): the confirm leg — ONLY the dialog's
+  // confirm button reaches the mutations. Deleting the ACTIVE session
+  // still navigates the chat pane away from the dead conversation (the
+  // pre-R128 remove() contract, kept verbatim).
+  const confirmPendingDelete = () => {
+    const target = pendingDelete;
+    setPendingDelete(null);
+    if (target === null) return;
+    if (target.kind === "session") {
+      deleteSession.mutate(target.id, {
+        onSuccess: () => {
+          if (activeSessionId === target.id) {
+            navigate(`/project/${target.projectId}/chat`, { replace: true });
+          }
+        },
+      });
+    } else {
+      deleteProject.mutate(target.id);
+    }
+  };
 
   // R60-C: the collapsed-rail early return is DELETED (along with the rail
   // itself) — the expanded tree below is the only layout.
@@ -1100,7 +1222,10 @@ function ProjectSection() {
     <>
       {/* R100-F: the header rides THE one kicker (ui/Kicker) + the
           meta-mono count chip (10px floor, 500) + a 28px Add button on the
-          accent-soft leg (the ROUND-42 black-cap + scale hover is retired). */}
+          accent-soft leg (the ROUND-42 black-cap + scale hover is retired).
+          R128-W3 (SCREENS §2 law #9): a SECOND small button sits beside the
+          Add — the start-a-general-conversation affordance (conversations
+          that need no folder). */}
       <div className="flex items-center justify-between px-4 pb-2">
         <div className="flex items-center gap-1.5 min-w-0">
           <Kicker>Projects</Kicker>
@@ -1115,28 +1240,43 @@ function ProjectSection() {
             </span>
           ) : null}
         </div>
-        <button
-          onClick={() => setShowAddDialog(true)}
-          title="Add project"
-          aria-label="Add project"
-          // R100-F: a ≥28px target on the CSS-var leg. R126: the accent TINT
-          // container + the DEEP glyph (the ClayIconChip recipe) — hover
-          // deepens the tint, never a fidget.
-          className="w-7 h-7 grid place-items-center rounded-lg bg-accent-tint text-accent-deep transition-colors hover:bg-accent-faded"
-        >
-          <Plus size={14} strokeWidth={2.5} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => void startGeneralConversation()}
+            aria-label="Start a general conversation"
+            title="Start a general conversation — no folder needed"
+            data-testid="start-general-conversation"
+            // R128-W3: the same ClayIconChip recipe as the Add button beside
+            // it (28px target, accent tint + deep glyph, hover deepens the
+            // tint) — one spelling, two affordances.
+            className="w-7 h-7 grid place-items-center rounded-lg bg-accent-tint text-accent-deep transition-colors hover:bg-accent-faded"
+          >
+            <MessageSquarePlus size={14} strokeWidth={2.5} />
+          </button>
+          <button
+            onClick={() => setShowAddDialog(true)}
+            title="Add project"
+            aria-label="Add project"
+            // R100-F: a ≥28px target on the CSS-var leg. R126: the accent TINT
+            // container + the DEEP glyph (the ClayIconChip recipe) — hover
+            // deepens the tint, never a fidget.
+            className="w-7 h-7 grid place-items-center rounded-lg bg-accent-tint text-accent-deep transition-colors hover:bg-accent-faded"
+          >
+            <Plus size={14} strokeWidth={2.5} />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-2.5 pb-2 space-y-0.5" style={{ scrollbarWidth: "thin" }}>
         {/* R97-I part 2 (owner: a UI "aware of its states") — LOADING: 4
-            skeleton rows in the real ProjectRow's exact geometry (R100-F:
-            h-[30px], the list's space-y-0.5 rhythm) hold the
-            section open while the query is in flight. Pre-R97 this area
-            flashed the FALSE "Add your first project" on every first paint. */}
+            skeleton rows in the real ProjectRow's exact geometry (R128-W3:
+            h-[34px] — the row's new height; the list's space-y-0.5 rhythm)
+            hold the section open while the query is in flight. Pre-R97 this
+            area flashed the FALSE "Add your first project" on every first
+            paint. */}
         {projectsQuery.isPending && (
           <div role="status" aria-label="Loading projects" data-projects-skeleton>
-            <SkeletonRows rows={4} rowClassName="h-[30px]" gap={0.5} />
+            <SkeletonRows rows={4} rowClassName="h-[34px]" gap={0.5} />
           </div>
         )}
 
@@ -1193,24 +1333,41 @@ function ProjectSection() {
           const isExpanded = expandedProjects.includes(project.id);
           const isActive = activeProjectId === project.id;
           const projSessions = projectSessions(project.id);
+          const isGeneral = project.id === GENERAL_PROJECT_ID;
 
           return (
             <div key={project.id}>
-              {/* Project row — R126 (SCREENS.md §2 law #2, the navigation
-                  decision): the row body NAVIGATES into the project's chat
-                  (the pre-R126 body only toggled expansion — entering a
-                  project required hunting a session row), and a dedicated
-                  chevron hit area toggles the session tree. The + button
-                  starts a new session directly (owner round-33). ROUND-42:
-                  the running animation lives HERE when collapsed. */}
+              {/* Project row — R128-W3 (SCREENS.md §2 law #2, REWRITTEN —
+                  the R128 owner directive): the row body EXPANDS/COLLAPSES
+                  its sessions, NOTHING else ("clicking on any of the
+                  projects should not automatically switch the view to that
+                  specific project — it should only expand or collapse the
+                  sessions of it"). The dedicated chevron BUTTON is retired
+                  (a presentation glyph keeps the state readable); entering
+                  a conversation is a SESSION row's job. The + button starts
+                  a new session directly (owner round-33). ROUND-42: the
+                  running animation lives HERE when collapsed. */}
               <ProjectRow
                 project={project}
                 active={isActive}
                 expanded={isExpanded}
                 running={runningProjects.has(project.id)}
-                onToggle={() => toggleProject(project.id)}
-                onOpen={() => navigate(`/project/${project.id}/chat`)}
+                onToggle={() => onToggleProject(project.id)}
                 onNewSession={() => void createSessionFor(project.id, project.name)}
+                // R128-W3 (law #9): the General project row carries NO
+                // delete affordance — the backend refuses its deletion
+                // (409 general_protected) and the UI never offers it.
+                onDeleteRequest={
+                  isGeneral
+                    ? undefined
+                    : () =>
+                        setPendingDelete({
+                          kind: "project",
+                          id: project.id,
+                          name: project.name,
+                          sessionCount: projSessions.length,
+                        })
+                }
               />
               {/* Sessions underneath */}
               <AnimatePresence initial={false}>
@@ -1254,6 +1411,17 @@ function ProjectSection() {
                             session={session}
                             projectId={project.id}
                             active={session.id === activeSessionId}
+                            // R128-W3 (SCREENS.md §2 law #8): the delete
+                            // button ARMS the section's confirm dialog — the
+                            // mutation itself runs only on its confirm.
+                            onDeleteRequest={() =>
+                              setPendingDelete({
+                                kind: "session",
+                                id: session.id,
+                                projectId: project.id,
+                                title: session.title ?? "Untitled",
+                              })
+                            }
                           />
                         </Fragment>
                       ))}
@@ -1297,12 +1465,34 @@ function ProjectSection() {
       {showAddDialog && (
         <AddProjectDialog onCreated={(id) => navigate(`/project/${id}/chat`)} onClose={() => setShowAddDialog(false)} />
       )}
+
+      {/* R128-W3 (SCREENS.md §2 law #8 — deletes confirm, ROUND-128): the
+          section's ONE danger dialog. The cancel button takes focus on open
+          (the R95-A contract — a stray Enter never deletes), ESC +
+          outside-click dismiss, and ONLY the confirm button reaches the
+          mutations. */}
+      {pendingDelete !== null && (
+        <ConfirmDialog
+          danger
+          title={pendingDelete.kind === "session" ? "Delete session?" : "Delete project?"}
+          message={
+            pendingDelete.kind === "session"
+              ? `Delete "${pendingDelete.title}"? This permanently removes the session's messages, tool history, and usage rows.`
+              : `Delete "${pendingDelete.name}" and its ${pendingDelete.sessionCount} ${
+                  pendingDelete.sessionCount === 1 ? "session" : "sessions"
+                }? Their messages and tool history will be permanently removed.`
+          }
+          confirmLabel="Delete"
+          onConfirm={confirmPendingDelete}
+          onClose={() => setPendingDelete(null)}
+        />
+      )}
     </>
   );
 }
 
 function ProjectRow({
-  project, active, expanded, running, onToggle, onOpen, onNewSession,
+  project, active, expanded, running, onToggle, onNewSession, onDeleteRequest,
 }: {
   project: Project;
   active: boolean;
@@ -1312,28 +1502,34 @@ function ProjectRow({
    * session is going on and I collapse the project, the animation should
    * move on to the project itself"). */
   running: boolean;
-  /** R126 (SCREENS.md §2 law #2): the row body's destination — the
-   * project's chat. The chevron owns the tree toggle. */
+  /** R128-W3 (SCREENS.md §2 law #2, REWRITTEN): the WHOLE row body is the
+   * tree toggle (click + Enter/Space) — nothing else. The dedicated
+   * chevron button is retired; entering a conversation is a session
+   * row's job. */
   onToggle: () => void;
-  onOpen: () => void;
   onNewSession: () => void;
+  /** R128-W3 (SCREENS.md §2 law #8): arms the section's danger confirm.
+  * Absent for the General project (law #9 — no delete affordance). */
+  onDeleteRequest?: () => void;
 }) {
   const styles = useThemeStyles();
 
   return (
     <div
-      // R100-F (research §C2 P2): 44→30px (the row table), rounded-lg, the
-      // flat 24px tile, a 12px/400 label (500 + ink when active). Hover =
-      // the CSS wash + group-hover action reveal — the JS hovered state is
-      // retired (TOKENS §6); the border drops 1.5→1px.
-      // R126: the row is a NAVIGATION row (SCREENS.md §2 law #2) — the
-      // body opens the project's chat; the CHEVRON button toggles the
-      // session tree (hover-revealed, rotating with the expand state). The
-      // round-33 "no chevron" verdict was about RESTING noise — a
-      // hover-revealed affordance keeps the clean rest while making the
-      // toggle explicit (the explorer-class row/chevron split every modern
-      // file navigator uses).
-      className="group relative h-[30px] flex items-center gap-2 rounded-lg px-2 cursor-pointer transition-colors hover:bg-hover"
+      // R100-F (research §C2 P2): the row table — rounded-lg, the flat 24px
+      // tile, a 12px/400 label (500 + ink when active). Hover = the CSS
+      // wash + group-hover action reveal — the JS hovered state is retired
+      // (TOKENS §6); the border drops 1.5→1px.
+      // R126: the row was a NAVIGATION row (body opened the chat, chevron
+      // toggled). R128-W3 (SCREENS.md §2 law #2, REWRITTEN — the owner's
+      // directive): the WHOLE row is the TREE TOGGLE now — the dedicated
+      // chevron BUTTON is retired (the glyph below is a presentation mark),
+      // and NO navigation fires from the row. Entering a conversation is a
+      // session row's job.
+      // R128-W3 (law #2, the height law): project rows sit a notch TALLER
+      // than session rows (h-[30px] → h-[34px]) — the project is the
+      // heavier object.
+      className="group relative h-[34px] flex items-center gap-2 rounded-lg px-2 cursor-pointer transition-colors hover:bg-hover"
       style={{
         // ROUND-48 (R48-a): the active highlight follows the PROJECT'S OWN
         // color (withAlpha tint), not the theme accent — with per-project
@@ -1342,27 +1538,30 @@ function ProjectRow({
         border: active ? `1px solid ${withAlpha(project.color, 0.4)}` : "1px solid transparent",
         background: active ? withAlpha(project.color, 0.1) : undefined,
       }}
-      onClick={onOpen}
+      onClick={onToggle}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === "Enter") onOpen(); }}
-      aria-label={`Open ${project.name}${running ? " (working)" : ""}`}
+      aria-expanded={expanded}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onToggle();
+        }
+      }}
+      aria-label={`${expanded ? "Collapse" : "Expand"} ${project.name} sessions${running ? " (working)" : ""}`}
     >
-      {/* R126: the tree toggle — its own button with its own aria-expanded,
-          hover-revealed exactly like the + new-session action beside it. */}
-      <button
-        onClick={(e) => { e.stopPropagation(); onToggle(); }}
-        aria-label={`${expanded ? "Collapse" : "Expand"} ${project.name} sessions`}
-        title={`${expanded ? "Collapse" : "Expand"} sessions`}
-        aria-expanded={expanded}
-        data-testid={`project-toggle-${project.id}`}
-        className="relative z-20 w-6 h-6 grid place-items-center rounded-lg transition-opacity duration-150 hover:bg-hover"
+      {/* R128-W3: the disclosure glyph — PRESENTATION ONLY (aria-hidden, no
+          click handler): the whole row is the toggle, so the chevron merely
+          keeps the expand state readable, rotating with it. */}
+      <span
+        aria-hidden
+        className="w-6 shrink-0 grid place-items-center"
         style={{ color: styles.textTertiary }}
       >
         <span className="grid place-items-center transition-transform duration-200" style={{ transform: expanded ? "rotate(0deg)" : "rotate(-90deg)" }}>
           <ChevronDown size={12} />
         </span>
-      </button>
+      </span>
       {/* R100-F: the flat tile (see ProjectTile) — the ROUND-42 gradient
           decoration is retired. */}
       <ProjectTile color={project.color} name={project.name} />
@@ -1387,19 +1586,42 @@ function ProjectRow({
           <span /><span /><span /><span />
         </span>
       ) : null}
-      {/* ROUND-33 (owner): the "+ new session" button lives ON the project row
-          itself; no chevron, no session count. R100-F: a ≥28px target,
-          rounded-lg, revealed by the CSS group-hover (no JS state, no
-          scale fidget). */}
-      <button
-        onClick={(e) => { e.stopPropagation(); onNewSession(); }}
-        aria-label={`Start new session in ${project.name}`}
-        title="New session"
-        className="relative z-20 w-7 h-7 grid place-items-center rounded-lg bg-accent-tint text-accent-deep opacity-0 transition-opacity group-hover:opacity-100"
-      >
-        <Plus size={14} strokeWidth={2.5} />
-      </button>
-      <DeleteProjectButton projectId={project.id} projectName={project.name} />
+      {/* R128-W3 (SCREENS.md §2 law #2, the full-names law): the hover
+          actions live in an ABSOLUTE overlay cluster at the row's right
+          edge — they reserve NO layout width while hidden, so the name
+          renders FULLY whenever the cluster is not revealed (truncate stays
+          the last resort only). The cluster rides the row's own hover
+          background (bg-hover + rounded corners) so the name text beneath
+          it stays readable; it reveals on group-hover AND group-focus-within
+          (keyboard parity — the buttons stay focusable, pointer-events is
+          mouse-only). */}
+      <div className="absolute right-1 top-1/2 -translate-y-1/2 z-20 flex items-center gap-0.5 rounded-lg bg-hover pl-1.5 pr-0.5 opacity-0 transition-opacity duration-150 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+        {/* ROUND-33 (owner): the "+ new session" button lives ON the project
+            row itself; no chevron, no session count. R100-F: a ≥28px
+            target, rounded-lg (no JS state, no scale fidget). */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onNewSession(); }}
+          aria-label={`Start new session in ${project.name}`}
+          title="New session"
+          className="w-7 h-7 grid place-items-center rounded-lg bg-accent-tint text-accent-deep"
+        >
+          <Plus size={14} strokeWidth={2.5} />
+        </button>
+        {/* R128-W3 (SCREENS §2 law #8): the delete arms the section's danger
+            confirm — never an immediate delete. Absent entirely for the
+            General project (law #9). */}
+        {onDeleteRequest !== undefined && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onDeleteRequest(); }}
+            aria-label={`Delete ${project.name}`}
+            title={`Delete ${project.name}`}
+            className="w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover"
+            style={{ color: styles.textTertiary }}
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1432,21 +1654,27 @@ export function deriveSessionRowState(session: Session, running: boolean): Sessi
  * with the running icon (rail-side flourish + at-a-glance state).
  * ACTIVE session (matching the ?session= URL param) keeps the accent tint,
  * 500-weight text + the indicator bar. Hover reveals RENAME (round-33) and
- * DELETE (round-30). Rename switches to an inline input (Enter · Escape).
+ * DELETE (round-30 — R128-W3: the delete ARMS the section's danger confirm
+ * instead of deleting immediately). Rename switches to an inline input
+ * (Enter · Escape). R128-W3 (SCREENS §2 law #2, the full-names law): the
+ * rename/delete actions live in the same ABSOLUTE overlay cluster grammar
+ * the project row uses — no reserved layout width, full session titles.
  */
 function SessionRow({
   session,
   projectId,
   active,
+  onDeleteRequest,
 }: {
   session: Session;
   projectId: string;
   active: boolean;
+  /** R128-W3 (SCREENS §2 law #8): arms the section's danger confirm — the
+   * mutation runs only on the dialog's confirm. */
+  onDeleteRequest: () => void;
 }) {
   const styles = useThemeStyles();
   const navigate = useNavigate();
-  const location = useLocation();
-  const deleteSession = useDeleteSession();
   const renameSession = useRenameSession();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title ?? "");
@@ -1456,16 +1684,6 @@ function SessionRow({
   // ROUND-43: coherent row state (icon + tint + test attributes).
   const state = deriveSessionRowState(session, streaming);
   const running = state === "running";
-
-  const remove = () => {
-    deleteSession.mutate(session.id, {
-      onSuccess: () => {
-        if (location.search.includes(session.id)) {
-          navigate(`/project/${projectId}/chat`, { replace: true });
-        }
-      },
-    });
-  };
 
   const commitRename = () => {
     const next = draft.trim();
@@ -1582,28 +1800,38 @@ function SessionRow({
         )}
         <span className="truncate">{session.title ?? "Untitled"}</span>
       </button>
-      {/* Rename (round-33) — revealed by the CSS group-hover (R100-F: the
-          JS opacity state + the fixed black/10 overlay are retired for the
-          theme-correct hover wash). */}
-      <button
-        onClick={(e) => { e.stopPropagation(); setDraft(session.title ?? ""); setEditing(true); }}
-        aria-label={`Rename session ${session.title ?? "Untitled"}`}
-        title="Rename session"
-        className="relative z-10 w-6 h-6 grid place-items-center rounded-lg transition-opacity duration-150 opacity-0 group-hover:opacity-100 hover:bg-hover"
-        style={{ color: styles.textTertiary }}
-      >
-        <Pencil size={12} />
-      </button>
-      <button
-        onClick={(e) => { e.stopPropagation(); remove(); }}
-        disabled={deleteSession.isPending}
-        aria-label={`Delete session ${session.title ?? "Untitled"}`}
-        title="Delete session"
-        className="relative z-10 w-6 h-6 grid place-items-center rounded-lg transition-opacity duration-150 opacity-0 group-hover:opacity-100 hover:bg-hover"
-        style={{ color: styles.textTertiary }}
-      >
-        <Trash2 size={12} />
-      </button>
+      {/* R128-W3 (SCREENS §2 law #2, the full-names law — the same overlay
+          cluster grammar the project row uses): rename + delete sit in an
+          ABSOLUTE cluster at the row's right edge, reserving NO layout
+          width while hidden, so the session title renders FULLY at rest
+          (truncate stays the last resort). The cluster rides the row's
+          hover background so the title beneath stays readable; it reveals
+          on group-hover AND group-focus-within (keyboard parity). The
+          running pixel-stream below stays in-flow — the live signal must
+          be visible at rest, and the cluster covers it only while hovered. */}
+      <div className="absolute right-0.5 top-1/2 -translate-y-1/2 z-10 flex items-center gap-0.5 rounded-lg bg-hover pl-1 pr-0.5 opacity-0 transition-opacity duration-150 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+        {/* Rename (round-33). */}
+        <button
+          onClick={(e) => { e.stopPropagation(); setDraft(session.title ?? ""); setEditing(true); }}
+          aria-label={`Rename session ${session.title ?? "Untitled"}`}
+          title="Rename session"
+          className="w-6 h-6 grid place-items-center rounded-lg transition-colors hover:bg-hover"
+          style={{ color: styles.textTertiary }}
+        >
+          <Pencil size={12} />
+        </button>
+        {/* R128-W3 (SCREENS §2 law #8): delete ARMS the section's danger
+            confirm — the mutation runs only on its confirm. */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onDeleteRequest(); }}
+          aria-label={`Delete session ${session.title ?? "Untitled"}`}
+          title="Delete session"
+          className="w-6 h-6 grid place-items-center rounded-lg transition-colors hover:bg-hover"
+          style={{ color: styles.textTertiary }}
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
       {/* ROUND-38 (owner: "the currently running session will have some
           animation to it, like a pixelated kind of animation playing along
           on the right side"). Shown only while a turn is in flight —
@@ -1623,36 +1851,9 @@ function SessionRow({
   );
 }
 
-function DeleteProjectButton({
-  projectId, projectName,
-}: {
-  projectId: string; projectName: string;
-}) {
-  const styles = useThemeStyles();
-  const { remove } = useDeleteProjectSimple();
-  return (
-    <button
-      onClick={(e) => { e.stopPropagation(); remove(projectId); }}
-      aria-label={`Delete ${projectName}`}
-      title={`Delete ${projectName}`}
-      // R100-F: revealed by the CSS group-hover (the `visible` prop + the
-      // parent's JS hovered state are retired); rounded-lg + the hover wash.
-      className="relative z-20 w-6 h-6 grid place-items-center rounded-lg transition-opacity opacity-0 group-hover:opacity-100 hover:bg-hover"
-      style={{ color: styles.textTertiary }}
-    >
-      <Trash2 size={12} />
-    </button>
-  );
-}
-
-function useDeleteProjectSimple() {
-  const deleteProject = useDeleteProject();
-  const remove = useCallback(
-    (id: string) => deleteProject.mutate(id),
-    [deleteProject],
-  );
-  return { remove };
-}
+// R128-W3: DeleteProjectButton + useDeleteProjectSimple are RETIRED — the
+// project delete now arms the section's danger ConfirmDialog (SCREENS.md
+// §2 law #8) and the mutation lives in ProjectSection's confirm handler.
 
 
 

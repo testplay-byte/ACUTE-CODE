@@ -29,8 +29,17 @@ export const bdr = (width: string, color: string): string => `${width} solid ${c
 /* ── ROUND-127 (the chart-interaction laws — COMPONENTS §6): the canonical
  * tooltip edge-clamp is the usage wave's shared helper (read-only import —
  * ONE implementation app-wide); re-exported here so the dashboard's charts
- * spell the import from their local helper seam. */
-export { clampTooltipX, TOOLTIP_EDGE_INSET_PX } from "../usage/usage-helpers";
+ * spell the import from their local helper seam. ROUND-128 adds the
+ * side-placement law's placeTooltipBeside + the fill law's
+ * stretchDayBarGeometry to the same seam (the R127 center-on-bar spelling
+ * clampTooltipX is retired from every caller but stays exported for
+ * back-compat + its pure-law pins). */
+export {
+  clampTooltipX,
+  placeTooltipBeside,
+  stretchDayBarGeometry,
+  TOOLTIP_EDGE_INSET_PX,
+} from "../usage/usage-helpers";
 
 /* ── ROUND-127 (SCREENS §3 — the DASHBOARD BOLDNESS LAW): the
  * recent-activity TIMELINE's day-grouping helpers. Pure UTC — the same

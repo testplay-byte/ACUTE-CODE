@@ -758,31 +758,39 @@ describe("collapsed-row icon chips (ROUND-51 R51-d)", () => {
     expect(row.querySelector('[data-tool-status-kind="ok"]')).not.toBeNull();
   });
 
-  it("a completed write_file/edit_file row renders the calm subtle chip", () => {
+  it("a completed write_file/edit_file row renders NO family chip — the extension icon is the ONE file mark (R128-W5 single-icon anatomy)", () => {
     renderCollapsedRow(EDIT_TOOL); // ok: true
 
-    const chip = screen.getByTestId("tool-icon-chip");
-    // Calm treatment: subtle background + textSecondary glyph — the chip
-    // SHAPE differentiates edits, not a loud color. (Whitespace-normalized:
-    // happy-dom re-serializes rgba() with spaces; themes.ts writes it tight.)
-    const tight = (v: string): string => v.replace(/\s+/g, "");
-    expect(tight(chip.style.background)).toBe(tight(theme.subtle));
-    expect(tight(chip.style.color)).toBe(tight(theme.textSecondary));
+    // R128-W5 re-pin (COMPONENTS §6, ROUND-128): a file-family row carries
+    // exactly ONE file glyph — the per-extension FileTypeIcon before the
+    // path pill. The ROUND-51 subtle chip (and the in-flight accent chip
+    // below) are GONE for file rows; the pill's internal icon is
+    // suppressed too (asserted in the R127-W5 ext-icon describe below).
+    expect(screen.queryByTestId("tool-icon-chip")).toBeNull();
+    const row = screen.getByRole("button", { name: /^Edited / });
+    expect(row.querySelectorAll('[data-testid="file-type-icon"]')).toHaveLength(1);
+    // The whole row head carries exactly THREE svg marks: the status glyph
+    // + the extension icon + the expand chevron (the generic family glyph
+    // AND the pill's internal icon both died — the owner's five-marks
+    // complaint: pre-R128 this head rendered FIVE svgs).
+    expect(row.querySelectorAll("svg")).toHaveLength(3);
     expect(screen.getByRole("button", { name: /^Edited / })).toBeTruthy();
   });
 
-  it("an in-flight edit row (ok === null) borrows the RUNNING ACCENT in-flight tint (R125: the theme accent, RUNNING_BLUE retired)", () => {
+  it("an in-flight edit row (ok === null) is single-icon too — no RUNNING accent chip, the extension glyph stays (R125 accent retired from this row by R128-W5)", () => {
     renderCollapsedRow({ ...EDIT_TOOL, ok: null, outputSummary: undefined }, true);
 
-    const chip = screen.getByTestId("tool-icon-chip");
-    // R125 re-pin: the running voice is the THEME ACCENT now (the owner's
-    // "It shows me in the blue colored area" verdict retired the hard-coded
-    // #3b82f6 from this file); the wash + glyph follow styles.accent.
-    expect(chip.style.background).toBe(withAlpha(theme.accent, 0.12));
-    expect(chip.style.color).toBe(theme.accent);
-    // R127-W5: the in-flight row AUTO-EXPANDS now (MOTION §4) — the chip is
-    // still the row head's live signal; the body beneath it is the
-    // auto-expanded DiffDetail loading state, not a delegate view.
+    // R128-W5 re-pin: the in-flight row keeps the single-icon law — no
+    // accent chip, exactly one FileTypeIcon; the running state rides the
+    // status glyph + the auto-expanded body (MOTION §4).
+    expect(screen.queryByTestId("tool-icon-chip")).toBeNull();
+    const row = screen.getByRole("button", { name: /^Edited / });
+    expect(row.querySelectorAll('[data-testid="file-type-icon"]')).toHaveLength(1);
+    // Status glyph + extension glyph + chevron = the whole head's svgs.
+    expect(row.querySelectorAll("svg")).toHaveLength(3);
+    // R127-W5: the in-flight row AUTO-EXPANDS now (MOTION §4) — the body
+    // beneath the head is the auto-expanded DiffDetail loading state, not
+    // a delegate view.
     expect(screen.getByRole("button", { name: /^Edited / })).toBeTruthy();
     expect(screen.queryByTestId("live-delegate-row")).toBeNull();
   });
@@ -1077,6 +1085,13 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
     const row = screen.getByTestId("live-write-pending-row");
     expect(row.textContent).toContain("Writing");
     expect(row.textContent).toContain("path: src/generated.ts");
+    // R128-W5 (the single-icon anatomy): the pending write row renders NO
+    // family chip — the path's extension glyph is its ONE file mark (the
+    // generated .ts target). A pending row carries no status glyph either,
+    // so the extension glyph is the row's only svg.
+    expect(row.querySelector('[data-testid="tool-icon-chip"]')).toBeNull();
+    expect(row.querySelectorAll('[data-testid="file-type-icon"]')).toHaveLength(1);
+    expect(row.querySelectorAll("svg")).toHaveLength(1);
     const preview = screen.getByTestId("live-write-preview");
     expect(preview.textContent).toContain("writing generated.ts");
     expect(preview.textContent).toContain("export const A = 1;");
@@ -2193,7 +2208,7 @@ describe("R117-f humanized tool args (the collapsed row's glance)", () => {
     expect(screen.getByText("of 42 total")).toBeTruthy();
   });
 
-  it("R127-W5: every file-family row renders the target path's EXTENSION-IDENTITY icon BEFORE the path pill (dir tools take the Folder glyph)", () => {
+  it("R127-W5 + R128-W5: every file-family row renders the target path's EXTENSION-IDENTITY icon before the path pill, ONE glyph total — the pill suppresses its own icon (dir tools take the Folder glyph)", () => {
     renderWithProviders(
       <WorkingSection
         entries={[
@@ -2219,6 +2234,16 @@ describe("R117-f humanized tool args (the collapsed row's glance)", () => {
       fileIcon.compareDocumentPosition(pill) & Node.DOCUMENT_POSITION_FOLLOWING,
       "the file-type icon rides BEFORE the path pill",
     ).toBeTruthy();
+    // R128-W5 (the single-icon anatomy): the pill renders WITHOUT its
+    // internal icon inside tool rows — no svg ever inside the pill (the
+    // row's FileTypeIcon is the one file mark).
+    expect(pill.querySelector("svg")).toBeNull();
+    // And the row head carries exactly ONE file-type icon + NO generic
+    // family glyph: 3 svgs total (status glyph + extension glyph + the
+    // expand chevron — pre-R128 this head rendered FIVE).
+    expect(readRow.querySelectorAll('[data-testid="file-type-icon"]')).toHaveLength(1);
+    expect(readRow.querySelectorAll("svg")).toHaveLength(3);
+    expect(readRow.querySelector('[data-testid="tool-icon-chip"]')).toBeNull();
     // The tinted stroke resolves the fixed pair's dark leg (nova dark is the
     // pinned theme): TS violet.
     const svg = fileIcon.querySelector("svg") as SVGElement;
@@ -2228,11 +2253,17 @@ describe("R117-f humanized tool args (the collapsed row's glance)", () => {
     const dirRow = screen.getByRole("button", { name: /^Listed path: src\/components — completed$/ });
     const dirIcon = dirRow.querySelector('[data-testid="file-type-icon"]') as HTMLElement;
     expect(dirIcon.getAttribute("data-file-ext")).toBe("dir");
+    // R128-W5: the dir row is single-icon too (no family glyph, no pill icon):
+    // status + Folder glyph + chevron.
+    expect(dirRow.querySelectorAll("svg")).toHaveLength(3);
+    expect(dirRow.querySelector('[data-testid="tool-icon-chip"]')).toBeNull();
 
-    // run_command (no path target) renders NO file icon — the family glyph
-    // alone stays.
+    // run_command (no path target) keeps its FAMILY glyph exactly as
+    // before (non-file tools are untouched by the single-icon law): status
+    // glyph + the Terminal family glyph + chevron — the same count as ever.
     const cmdRow = screen.getByRole("button", { name: /^Ran cmd: ls — completed$/ });
     expect(cmdRow.querySelector('[data-testid="file-type-icon"]')).toBeNull();
+    expect(cmdRow.querySelectorAll("svg")).toHaveLength(3);
   });
 
   it("run_command shows the command headline; delegate shows role · task_id; the raw string stays the fallback", () => {
@@ -2339,6 +2370,98 @@ describe("R117-f terminal polish (the colored exit chip + Copy)", () => {
     fireEvent.click(screen.getByRole("button", { name: "+3 more lines" }));
     expect(screen.getByText("line 4")).toBeTruthy();
     expect(screen.getByText("line 6")).toBeTruthy();
+  });
+});
+
+describe("R128-W5 batch commands (the one-by-one COMMAND LIST)", () => {
+  /** Expand a settled chained run_command row and return its card. */
+  function renderChainedTerminal(): HTMLElement {
+    renderWithProviders(
+      <WorkingSection
+        entries={[
+          {
+            type: "tool",
+            tool: {
+              seq: 95,
+              toolName: "run_command",
+              // The whole chained string runs as ONE shell invocation — the
+              // argsSummary carries it verbatim (under the 80-char cap).
+              argsSummary: "command: pnpm install && pnpm build; pnpm test",
+              ok: true,
+              ts: "t",
+              outputSummary: "installed\nbuilt\n3 passed\n[exit code: 0]",
+            },
+          },
+        ]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Ran / }));
+    return screen.getByTestId("terminal-detail");
+  }
+
+  it("a chained command renders ONE NUMBERED ROW PER command, in order, above the merged output", () => {
+    const card = renderChainedTerminal();
+    // Three commands → three numbered rows, in call order.
+    const rows = card.querySelectorAll('[data-testid="terminal-command-row"]');
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.textContent).toBe("1.pnpm install");
+    expect(rows[1]?.textContent).toBe("2.pnpm build");
+    expect(rows[2]?.textContent).toBe("3.pnpm test");
+    // The command list rides ABOVE the merged output body (the combined
+    // truth — pinned against an output LINE; the exit chip rides the card
+    // header above both).
+    const list = card.querySelector('[data-testid="terminal-command-list"]') as HTMLElement;
+    expect(list).not.toBeNull();
+    const outputLine = screen.getByText("3 passed");
+    expect(
+      list.compareDocumentPosition(outputLine) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the command list rides ABOVE the merged output",
+    ).toBeTruthy();
+    // N > 1 → the merged body is honestly labeled COMBINED OUTPUT.
+    expect(card.querySelector('[data-testid="terminal-combined-output-label"]')?.textContent).toBe(
+      "combined output",
+    );
+  });
+
+  it("the collapsed row's glance shows the FIRST command + the honest count (the · N commands suffix)", () => {
+    renderChainedTerminal(); // (the click above only expands; the row head is what's pinned here)
+    const row = screen.getByRole("button", { name: /^Ran / });
+    expect(row.textContent).toContain("pnpm install · 3 commands");
+    // The raw record stays on the row's title (the glance never shrinks it).
+    expect(row.getAttribute("title")).toBe("run_command command: pnpm install && pnpm build; pnpm test");
+  });
+
+  it("a SINGLE command renders the list WITHOUT the combined-output label (no batch to disclaim)", () => {
+    renderWithProviders(
+      <WorkingSection
+        entries={[
+          {
+            type: "tool",
+            tool: {
+              seq: 96,
+              toolName: "run_command",
+              argsSummary: "command: pnpm test",
+              ok: true,
+              ts: "t",
+              outputSummary: "3 passed\n[exit code: 0]",
+            },
+          },
+        ]}
+        sessionId={SESSION_ID}
+        projectId="proj_probe"
+        defaultOpen
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Ran / }));
+    const card = screen.getByTestId("terminal-detail");
+    // One command → one row, NO combined-output label, no count suffix.
+    expect(card.querySelectorAll('[data-testid="terminal-command-row"]')).toHaveLength(1);
+    expect(card.querySelector('[data-testid="terminal-combined-output-label"]')).toBeNull();
+    expect(screen.getByRole("button", { name: /^Ran / }).textContent).toContain("pnpm test");
+    expect(screen.getByRole("button", { name: /^Ran / }).textContent).not.toContain("commands");
   });
 });
 

@@ -50,7 +50,9 @@ import { SubAgentCard } from "./SubAgentCard";
 import { CodeBlock, PathPill } from "./ChatMarkdown";
 // R117-f: the per-tool arg humanizer + the failed row's error excerpt (pure
 // formatters over the server's argsSummary/outputSummary display strings).
-import { formatToolTarget, toolErrorExcerpt } from "./tool-args";
+// R128-W5: toolCommandList joins — the run_command row's numbered COMMAND
+// LIST source (the batch one-by-one display).
+import { formatToolTarget, toolCommandList, toolErrorExcerpt } from "./tool-args";
 // R117-f: the terminal detail's Copy button rides the app's shared
 // copied-flash reset hook (the CodeBlock copy idiom).
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
@@ -94,7 +96,9 @@ import { DISCLOSURE_COLLAPSE_MS, DISCLOSURE_FADE_MS } from "../usage/usage-helpe
 // (the owner's "proper icons and proper colored icons based on their
 // extensions" ask) before the path pill / at the path's render points.
 // FileTypeIcon's `dir` prop swaps in the Folder meta (list_dir/create_dir).
-import { FileTypeIcon } from "./file-type";
+// R128-W5: FILE_TOOL_NAMES joins from the same module — the single-icon
+// anatomy's file-family set (COMPONENTS §6, the ROUND-128 amendment).
+import { FileTypeIcon, FILE_TOOL_NAMES } from "./file-type";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { withAlpha } from "../dashboard/helpers";
 // ROUND-38 (owner: "outright remove that option completely"): the
@@ -1462,13 +1466,20 @@ function LiveWritePendingRow({ toolName, raw }: { toolName: string; raw: string 
   const Icon = TOOL_ICONS[toolName] ?? FileCode2;
   const path = extractStringArg(raw, "path");
   const argsSummary = path.found ? `path: ${path.value}` : toolName;
+  // R128-W5 (the single-icon anatomy): a pending write is ALWAYS a
+  // file-family row — the ToolIconChip is dropped, the path's own
+  // extension glyph below is the row's ONE file mark (the same law as
+  // ToolLine). The gate keeps the chip for any non-file future caller.
+  const isFileFamilyTool = FILE_TOOL_NAMES.has(toolName);
   return (
     <div className="min-w-0" data-testid="live-write-pending-row">
       <div
         className="flex items-center gap-2 h-7 w-full max-w-full px-1 -ml-1"
         style={{ color: styles.textTertiary }}
       >
-        <ToolIconChip Icon={Icon} background={withAlpha(styles.accent, 0.12)} color={styles.accent} />
+        {isFileFamilyTool ? null : (
+          <ToolIconChip Icon={Icon} background={withAlpha(styles.accent, 0.12)} color={styles.accent} />
+        )}
         {/* R126-3d-3: the row title rides the tool-row mono 12px tier (one
             spelling with ToolLine's verb + target — the mobile's
             mono-medium head line, PC densities). */}
@@ -1480,8 +1491,8 @@ function LiveWritePendingRow({ toolName, raw }: { toolName: string; raw: string 
           title={path.found ? path.value : undefined}
         >
           {/* R127-W5 (TOKENS §1 exception #5): the pending write's target
-              path carries its extension glyph too (the row family icon
-              above says "tool"; this one says what KIND of file). */}
+              path carries its extension glyph too — R128-W5: now the row's
+              ONE file glyph (the family chip above is gone for writes). */}
           {path.found ? <FileTypeIcon filename={path.value} size={11} /> : null}
           <span className="min-w-0 truncate font-mono text-[12px]" style={{ color: styles.textTertiary }}>
             {argsSummary}
@@ -1499,6 +1510,36 @@ function LiveWritePendingRow({ toolName, raw }: { toolName: string; raw: string 
 
 // ─── Terminal detail (run_command expanded body) ────────────────────────────
 
+/**
+ * ROUND-128 (R128-W5): the numbered COMMAND LIST — one mono row per
+ * top-level command of the batched run_command invocation, in order (the
+ * whole chained string executes as ONE shell invocation; the owner's
+ * one-by-one ask). Shared by the settled terminal card (above the merged
+ * output) and the in-flight early paths (above the live tail). Decorative
+ * rows — the row's own title/aria carries the raw record.
+ */
+function TerminalCommandList({ commands }: { commands: string[] }) {
+  const styles = useThemeStyles();
+  return (
+    <div className="min-w-0" data-testid="terminal-command-list">
+      {commands.map((cmd, i) => (
+        <div
+          key={i}
+          className="flex items-baseline gap-1.5 min-w-0 font-mono text-[10px] leading-[1.55]"
+          data-testid="terminal-command-row"
+        >
+          <span className="shrink-0 tabular-nums" style={{ color: styles.textTertiary }}>
+            {i + 1}.
+          </span>
+          <span className="min-w-0 truncate" title={cmd} style={{ color: styles.textSecondary }}>
+            {cmd}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
   const styles = useThemeStyles();
   const [expanded, setExpanded] = useState(false);
@@ -1507,12 +1548,27 @@ function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
   const resetAfter = useTimeoutClear();
   const [copied, setCopied] = useState(false);
   const output = tool.outputSummary ?? null;
+  // ── R128-W5: the batch's COMMAND LIST — the chained command split into
+  //    its top-level commands (quote-aware), rendered one numbered row per
+  //    command ABOVE the merged output (the output stays the combined
+  //    truth — the shell ran it all as one invocation; the list says what
+  //    that invocation is, one by one). ──
+  const commands = toolCommandList(tool.argsSummary);
   // ROUND-52 (R52-c): an expanded in-flight run_command shows its LIVE
   // streaming tail (the same live view as under the pill — the "running…"
   // placeholder stays for calls with no output yet).
   const liveOutput = (tool as LiveToolUseEntry).liveOutput;
   if (output === null && tool.ok === null && liveOutput !== undefined && liveOutput !== "") {
-    return <LiveOutputTail output={liveOutput} />;
+    return (
+      <div className="min-w-0">
+        {commands.length > 0 ? (
+          <div className="px-1 py-1 mb-1 min-w-0">
+            <TerminalCommandList commands={commands} />
+          </div>
+        ) : null}
+        <LiveOutputTail output={liveOutput} />
+      </div>
+    );
   }
   const lines = output ? output.split("\n").filter((l) => l.length > 0) : [];
   // R117-f: the preview keeps its 3 lines (the rest behind the toggle).
@@ -1520,8 +1576,15 @@ function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
   const rest = lines.slice(3);
   if (output === null) {
     return (
-      <div className="px-1 py-1 text-[10px] font-mono" style={{ color: styles.textTertiary }}>
-        {tool.ok === null ? "running…" : "no output"}
+      <div className="min-w-0">
+        {commands.length > 0 ? (
+          <div className="px-1 py-1 mb-1 min-w-0">
+            <TerminalCommandList commands={commands} />
+          </div>
+        ) : null}
+        <div className="px-1 py-1 text-[10px] font-mono" style={{ color: styles.textTertiary }}>
+          {tool.ok === null ? "running…" : "no output"}
+        </div>
       </div>
     );
   }
@@ -1574,7 +1637,28 @@ function TerminalDetail({ tool }: { tool: ToolUseEntry }) {
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
+      {/* R128-W5: the batch's COMMAND LIST — one numbered mono row per
+          top-level command, in order, above the merged output below (the
+          whole chained string ran as ONE invocation; the list is the
+          one-by-one reading the owner asked for). */}
+      {commands.length > 0 ? (
+        <div className="px-3 py-2 border-b min-w-0" style={{ borderColor: styles.border }}>
+          <TerminalCommandList commands={commands} />
+        </div>
+      ) : null}
       <div className="px-3 py-2 font-mono text-[10px] leading-[1.55] max-h-56 overflow-y-auto auto-scroll">
+        {/* R128-W5: a batched invocation's output is the COMBINED truth of
+            N commands — the body's caption says so (it rides here, not in the
+            header, so it survives the exit chip's presence). */}
+        {commands.length > 1 ? (
+          <div
+            data-testid="terminal-combined-output-label"
+            className="pb-1 mb-1 border-b text-[10px] font-medium uppercase tracking-wide"
+            style={{ color: styles.textTertiary, borderColor: styles.border }}
+          >
+            combined output
+          </div>
+        ) : null}
         {preview.map((line, i) => (
           <div key={i} className="whitespace-pre-wrap break-words">{line}</div>
         ))}
@@ -2032,6 +2116,15 @@ function ToolLine({
 
   const Icon = TOOL_ICONS[tool.toolName] ?? Terminal;
   const label = TOOL_LABELS[tool.toolName] ?? tool.toolName;
+  // ── R128-W5 (COMPONENTS §6 — the ROUND-128 single-icon anatomy): a
+  //    FILE-family row (write/edit/read/delete/create_dir/list_dir — the
+  //    tools whose target IS a path) carries exactly ONE file glyph: the
+  //    per-extension FileTypeIcon before the mono target. The generic
+  //    TOOL_ICONS family glyph/chip is DROPPED for these rows (the owner's
+  //    five-marks complaint: "first a file icon, then the action, then the
+  //    colored icon, then the filename, then the simple white image
+  //    again"). Non-file tools keep their family glyph exactly as before. ──
+  const isFileFamilyTool = FILE_TOOL_NAMES.has(tool.toolName);
   const waitingApproval = tool.ok === null && !live && tool.toolName === "run_command";
   // ROUND-96 (R96-H): the row's status detail (exit code / line count /
   // match count / the edit's +A −B) — only what the tool's own summary
@@ -2230,7 +2323,11 @@ function ToolLine({
         >
           <StatusIcon size={12} style={{ color: statusColor }} strokeWidth={2.25} />
         </span>
-        {chipTone !== null ? (
+        {/* R128-W5 (the single-icon anatomy): file-family rows render NO
+            generic family glyph here — the per-extension FileTypeIcon before
+            the path pill below is the row's ONE file mark. Non-file tools
+            keep the chip/plain glyph exactly as before (ROUND-51). */}
+        {isFileFamilyTool ? null : chipTone !== null ? (
           <ToolIconChip Icon={Icon} background={chipTone.background} color={chipTone.color} />
         ) : (
           <Icon size={11} className="shrink-0" style={{ color: styles.textTertiary }} />
@@ -2259,7 +2356,10 @@ function ToolLine({
               size={11}
               dir={tool.toolName === "list_dir" || tool.toolName === "create_dir"}
             />
-            <PathPill path={target.value} projectId={projectId} />
+            {/* R128-W5: suppressIcon — the pill's internal glyph never
+                doubles the row's one file mark (prose answers keep theirs;
+                tool rows never do). */}
+            <PathPill path={target.value} projectId={projectId} suppressIcon />
           </span>
         ) : (
           <span

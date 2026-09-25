@@ -60,6 +60,17 @@ export function useDeleteProject() {
   const source = useDataSource();
   return useMutation({
     mutationFn: (id: string) => getProjectsBackend().remove(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["projects", source] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["projects", source] });
+      // R128-W3 (SCREENS §2 law #8's frontend half): the backend delete now
+      // CASCADES the project's sessions (session_events / usage_events /
+      // approvals / file_snapshots / sessions, one transaction) — the
+      // sessions LIST cache must converge with it or the deleted project's
+      // sessions ghost in every cross-project consumer (recent activity,
+      // the ⌘K session search) until an unrelated refetch. The per-session
+      // detail queries for the deleted ids are left to age out (their rows
+      // render nowhere — the project's route is gone with the row).
+      void qc.invalidateQueries({ queryKey: ["sessions", source] });
+    },
   });
 }

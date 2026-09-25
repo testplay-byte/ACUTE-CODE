@@ -907,6 +907,24 @@ export function wellDefaultOpen(live: boolean, toolRowCount: number): boolean {
   return live || toolRowCount > 0;
 }
 
+// ── R128-W6 — the settled tool row's status word (pure, pinned) ────────────
+
+/**
+ * The tool row's QUIET status word — the chip's and the a11y label's one
+ * vocabulary, pure so jest can pin it: "running" while the call runs,
+ * "interrupted" when the turn's terminal frame settled a still-running
+ * call (the live overlay's honest marker — sessions.ts's R128-W6 settle; the
+ * rehydrate swap remains the truth cure), "failed" when the call itself
+ * failed, null on success (the result rides the head line, never a badge).
+ */
+export function toolStatusWord(
+  item: Pick<ToolItem, "ok"> & { interrupted?: true },
+): "running" | "failed" | "interrupted" | null {
+  if (item.ok === null) return "running";
+  if (item.ok === true) return null;
+  return item.interrupted === true ? "interrupted" : "failed";
+}
+
 // ── R127-W8 — the tools-hidden hint (once per session screen mount) ──────
 //
 // The R127-Ra research verdict: toolActivity "hidden" is the ONLY render
@@ -1431,13 +1449,18 @@ function PulseDot({ color, size }: { color: string; size: number }) {
 //
 // The failed call's tell stays the R116-m grammar: the inline danger chip on
 // the head row + the row's quiet danger wash (visible at a glance inside the
-// well); running = the small warning chip; success = NOTHING.
+// well); running = the small warning chip; success = NOTHING. R128-W6: an
+// INTERRUPTED settle (the turn's terminal frame landed before the result —
+// sessions.ts settles the stuck running cards) reads NEUTRAL — the quiet
+// "interrupted" chip, no danger wash; the rehydrate swap remains the truth.
 
 function ToolRow({ item, expandable }: { item: ToolItem; expandable: boolean }) {
   const { tokens } = useTheme();
   const [expanded, setExpanded] = useState(false);
   const showDetails = expandable && expanded;
-  const failed = item.ok === false;
+  // R128-W6 — an INTERRUPTED settle (the turn ended before the result frame)
+  // is neutral, not a failure: no danger wash, the quiet "interrupted" chip.
+  const failed = item.ok === false && item.interrupted !== true;
   const running = item.ok === null;
   const isWrite = WRITE_TOOLS.has(item.toolName);
   const isTerminal = TERMINAL_TOOLS.has(item.toolName);
@@ -1569,18 +1592,29 @@ function ToolRow({ item, expandable }: { item: ToolItem; expandable: boolean }) 
 /**
  * R116-m — the head's QUIET status chip (donts #37: the right-side FAIL
  * text badge column is retired): "running" rides a small warning-tinted
- * chip only while the call runs, a compact danger chip when it failed —
- * and NOTHING on success (the result rides the head line itself, never a
- * badge). One quiet chip, never a shouty column.
+ * chip only while the call runs, a compact danger chip when it failed, a
+ * quiet neutral chip when the turn ended underneath it (R128-W6's
+ * "interrupted" settle) — and NOTHING on success (the result rides the head
+ * line itself, never a badge). One quiet chip, never a shouty column.
  */
-function ToolStatusChip({ ok }: { ok: boolean | null }) {
+function ToolStatusChip({ item }: { item: ToolItem }) {
   const { tokens } = useTheme();
-  if (ok === true) return null;
-  if (ok === null) {
+  const word = toolStatusWord(item);
+  if (word === null) return null;
+  if (word === "running") {
     return (
       <View style={[styles.statusChip, { backgroundColor: mixHex(tokens.card, tokens.warning, 0.12) }]}>
         <TypeMono style={{ color: tokens.warning, fontSize: 10, lineHeight: 13 }} numberOfLines={1}>
           running
+        </TypeMono>
+      </View>
+    );
+  }
+  if (word === "interrupted") {
+    return (
+      <View style={[styles.statusChip, { backgroundColor: mixHex(tokens.card, tokens.textSecondary, 0.1) }]}>
+        <TypeMono style={{ color: tokens.textSecondary, fontSize: 10, lineHeight: 13 }} numberOfLines={1}>
+          interrupted
         </TypeMono>
       </View>
     );
@@ -1640,6 +1674,10 @@ function ToolHeadRow({
   after?: React.ReactNode;
 }) {
   const { tokens } = useTheme();
+  // R128-W6 — the one status-word vocabulary ("interrupted" included — the
+  // a11y label hears exactly what the chip shows).
+  const statusWord = toolStatusWord(item);
+  const statusSuffix = statusWord === null ? " succeeded" : ` ${statusWord}`;
   const row = (
     <View style={styles.toolHead}>
       {icon}
@@ -1650,7 +1688,7 @@ function ToolHeadRow({
         {title}
       </TypeMono>
       {after}
-      <ToolStatusChip ok={item.ok} />
+      <ToolStatusChip item={item} />
       {expandable ? (
         expanded ? (
           <ChevronUp size={15} color={tokens.textTertiary} strokeWidth={2} />
@@ -1663,7 +1701,7 @@ function ToolHeadRow({
   if (onToggle === undefined) return row;
   return (
     <Pressable
-      accessibilityLabel={`Tool ${item.toolName}${item.ok === null ? " running" : item.ok === false ? " failed" : " succeeded"}${expanded ? ", expanded" : ""}`}
+      accessibilityLabel={`Tool ${item.toolName}${statusSuffix}${expanded ? ", expanded" : ""}`}
       accessibilityRole="button"
       onPress={onToggle}
     >

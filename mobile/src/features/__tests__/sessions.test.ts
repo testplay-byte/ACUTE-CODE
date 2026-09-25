@@ -660,6 +660,87 @@ describe("sessions — the live turn state machine", () => {
     expect(user?.kind === "user" && user.status).toBe("failed");
   });
 
+  // ── R128-W6 — the stuck running cards settle at the terminal frames ──────
+  // (the smoking gun's sibling: a tool whose result frame was missed kept its
+  // "Writing src/a.ts…" running chip FOREVER — the rehydrate swap was the
+  // only cure. The terminal frame now settles every ok===null tool item to
+  // the INTERRUPTED state; the rehydrate remains the truth cure.)
+
+  it("R128-W6: a tool with no result frame settles INTERRUPTED on done — no eternal running state", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(
+      turn,
+      { type: "tool-input-start", toolCallId: "tc_1", toolName: "edit_file" },
+      NOW + 1,
+    );
+    turn = applyLiveFrame(
+      turn,
+      { type: "tool-input-delta", toolCallId: "tc_1", inputTextDelta: '{"path":"src/a.ts","oldStr' },
+      NOW + 2,
+    );
+    // ...and then the turn simply ENDS — no tool-result ever arrives.
+    turn = applyLiveFrame(turn, { type: "done" }, NOW + 3);
+    const tool = turn.items.find((item) => item.kind === "tool");
+    expect(tool?.kind === "tool" && tool.ok).toBe(false); // settled, not running
+    expect(tool?.kind === "tool" && tool.interrupted).toBe(true); // the honest marker
+    expect(tool?.kind === "tool" && tool.live).toBe(false); // the turn block settles with it
+    expect(tool?.kind === "tool" && tool.inputRaw).toBeNull(); // the preview raw is spent
+    expect(tool?.kind === "tool" && tool.toolCallId).toBeNull();
+  });
+
+  it("R128-W6: stopped settles the stuck running card too (a stop can land mid-call)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, { type: "tool-call", toolName: "run_command", argsSummary: "pnpm test" }, NOW + 1);
+    turn = applyLiveFrame(turn, { type: "stopped" }, NOW + 2);
+    const tool = turn.items.find((item) => item.kind === "tool");
+    expect(tool?.kind === "tool" && tool.ok).toBe(false);
+    expect(tool?.kind === "tool" && tool.interrupted).toBe(true);
+    expect(tool?.kind === "tool" && tool.live).toBe(false);
+  });
+
+  it("R128-W6: the error terminal settles the stuck running cards (the turn died underneath them)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, { type: "tool-call", toolName: "write_file", argsSummary: "path: src/b.ts" }, NOW + 1);
+    turn = applyLiveFrame(turn, { type: "tool-call", toolName: "edit_file", argsSummary: "path: src/c.ts" }, NOW + 2);
+    turn = applyLiveFrame(
+      turn,
+      { type: "error", status: 502, code: "PROVIDER_ERROR", message: "the key was rejected" },
+      NOW + 3,
+    );
+    const tools = turn.items.filter((item) => item.kind === "tool");
+    expect(tools).toHaveLength(2);
+    for (const tool of tools) {
+      expect(tool.kind === "tool" && tool.ok).toBe(false);
+      expect(tool.kind === "tool" && tool.interrupted).toBe(true);
+    }
+  });
+
+  it("R128-W6: SETTLED tools are untouched by the terminal frame (the normal flow is unchanged)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, { type: "tool-call", toolName: "run_command", argsSummary: "make" }, NOW + 1);
+    turn = applyLiveFrame(
+      turn,
+      { type: "tool-result", toolName: "run_command", argsSummary: "make", ok: true, outputSummary: "built" },
+      NOW + 2,
+    );
+    turn = applyLiveFrame(turn, { type: "done" }, NOW + 3);
+    const tool = turn.items.find((item) => item.kind === "tool");
+    expect(tool?.kind === "tool" && tool.ok).toBe(true); // its own result stands
+    expect(tool?.kind === "tool" && tool.interrupted).toBeUndefined(); // never marked
+    // A FAILED tool keeps its plain failure (no interrupted marker).
+    let failedTurn = beginLiveTurn([], "go", NOW);
+    failedTurn = applyLiveFrame(failedTurn, { type: "tool-call", toolName: "run_command", argsSummary: "make" }, NOW + 1);
+    failedTurn = applyLiveFrame(
+      failedTurn,
+      { type: "tool-result", toolName: "run_command", argsSummary: "make", ok: false },
+      NOW + 2,
+    );
+    failedTurn = applyLiveFrame(failedTurn, { type: "done" }, NOW + 3);
+    const failedTool = failedTurn.items.find((item) => item.kind === "tool");
+    expect(failedTool?.kind === "tool" && failedTool.ok).toBe(false);
+    expect(failedTool?.kind === "tool" && failedTool.interrupted).toBeUndefined();
+  });
+
   it("tolerates unknown frames: message-carrying ones dim, the rest drop", () => {
     let turn = beginLiveTurn([], "go", NOW);
     turn = applyLiveFrame(turn, { type: "browser-viewport", message: "viewport changed" }, NOW + 1);

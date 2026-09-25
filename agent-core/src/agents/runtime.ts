@@ -2940,6 +2940,16 @@ export async function runSingleAgentTurn(
           ...(call.outputSummary !== undefined
             ? { outputSummary: scrubSecrets(call.outputSummary, keySecrets) }
             : {}),
+          // ── R128-W5: ADDITIVE call identity + call order (the streamed
+          //    twin's fields — see the tool-result persist site in
+          //    runStreamedAgentTurn). callSeq: turnToolCalls was JUST
+          //    incremented above, so it is this call's 1-based CALL index
+          //    within the turn (the batch iterates in call order); the fold
+          //    sorts contiguous tool rows by it, seq stays the tiebreak. ──
+          ...(typeof call.toolCallId === "string" && call.toolCallId !== ""
+            ? { toolCallId: call.toolCallId }
+            : {}),
+          callSeq: turnToolCalls,
         },
       });
       // ROUND-51 (R51-f) → ROUND-96 (R96-B): feed the loop-hygiene guard
@@ -3709,6 +3719,16 @@ export async function runStreamedAgentTurn(
   // output guard below needs "did ANY tool run this turn", not the
   // per-iteration count the conversational-break rule reads.
   let turnToolCalls = 0;
+  // ── R128-W5 (the toolCallId/callSeq threading): the per-turn CALL-ORDER
+  //    ledger. tool.use rows persist at RESULT time (completion order), so
+  //    the id→callSeq map recorded at the streamed tool-call emit site below
+  //    is what lets the persisted payload carry CALL order (the frontend
+  //    fold sorts contiguous tool rows by it; seq stays the tiebreak). This
+  //    declaration + the two emit/persist sites that consume it are the ONLY
+  //    R128-W5 footprint in this file (another round's wave owns the rest).
+  //    ──
+  let turnCallSeq = 0;
+  const callSeqByToolCallId = new Map<string, number>();
   // ROUND-49: the intent-nudge state (see TOOL_INTENT_NUDGE) — same contract
   // as the sync path: one nudge per turn, in-memory only, never persisted.
   let nudgeUsed = false;
@@ -4213,6 +4233,15 @@ export async function runStreamedAgentTurn(
           // exact-match identity — they are NEVER forwarded over SSE (write
           // bodies/paths ride them; the wire shape stays byte-identical to
           // the pre-R96-B frames).
+          // R128-W5: the frame's toolCallId (chat.ts threads the SDK part id
+          // now) rides the wire copy through the rest-spread — and is
+          // recorded HERE, at CALL time, with its per-turn callSeq: the
+          // tool.use row persists later (at result time — completion order),
+          // so this map is what restores CALL order for the fold.
+          turnCallSeq += 1;
+          if (typeof event.toolCallId === "string" && event.toolCallId !== "") {
+            callSeqByToolCallId.set(event.toolCallId, turnCallSeq);
+          }
           const { args: _toolArgs, ...wireToolCall } = event;
           emit(wireToolCall);
         } else {
@@ -4270,7 +4299,9 @@ export async function runStreamedAgentTurn(
               ? scrubSecrets(event.outputSummary, keySecrets)
               : null;
           // Always emit the tool-result (scrubbed when it carries output) —
-          // the UI's live rows key off these events.
+          // the UI's live rows key off these events. R128-W5: the frame's
+          // toolCallId rides the wire copy through the rest-spread (the
+          // id-first attachment in the stream store).
           const { args: _toolResultArgs, ...wireToolResult } = event;
           emit({ ...wireToolResult, ...(outputSummary !== null ? { outputSummary } : {}) });
           appendSessionEvent(db, session.id, {
@@ -4282,6 +4313,21 @@ export async function runStreamedAgentTurn(
               argsSummary: event.argsSummary,
               ok: event.ok,
               ...(outputSummary !== null ? { outputSummary } : {}),
+              // ── R128-W5: ADDITIVE call identity + call order. toolCallId
+              //    is the same id the wire frames carry (the live store's
+              //    id-first attachment); callSeq is the per-turn CALL-order
+              //    counter recorded at the tool-call emit site above — the
+              //    fold sorts contiguous tool rows by it (seq stays the
+              //    stable tiebreak). Old rows without either field keep
+              //    folding exactly as before. ──
+              ...(typeof event.toolCallId === "string" && event.toolCallId !== ""
+                ? { toolCallId: event.toolCallId }
+                : {}),
+              ...(typeof event.toolCallId === "string" && event.toolCallId !== ""
+                ? callSeqByToolCallId.has(event.toolCallId)
+                  ? { callSeq: callSeqByToolCallId.get(event.toolCallId) }
+                  : {}
+                : {}),
             },
           });
           logTool(session.id, event.toolName, event.argsSummary, event.ok);

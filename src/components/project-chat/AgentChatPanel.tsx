@@ -61,6 +61,9 @@ import {
   WorkingSection,
   type ApprovalDecisionChoice,
   type ApprovalRemember,
+  // R128-W5: the tool rows' auto-collapse hold — reused as the turn-end
+  // ledger row's brief success hold (same read-then-go duration contract).
+  TOOL_COLLAPSE_HOLD_MS,
 } from "./WorkingSection";
 // R88 (owner: the floating to-do widget — top-right of the chat window).
 import { TodoFloat } from "./TodoFloat";
@@ -2510,6 +2513,33 @@ export function AgentChatPanel({
     }
   }, [feedbackEvent]);
 
+  // ── R128-W5 (MOTION.md §4 — the LEDGER PROCESSING ROW): the turn-end
+  //    "writing…" stage now ALSO renders — a quiet live row at the
+  //    transcript's bottom edge (the same pulsing-dot grammar as the
+  //    mid-turn line), holding while the ledger writes, resolving briefly on
+  //    "written", staying honest on "failed". The toast above still fires on
+  //    written/failed — the row is the visible PROCESSING the owner asked
+  //    for ("it did not show me any processing for that — it only sends me
+  //    the message after it has done it"), the toast the durable ping.
+  //    The row reads the SLICE-level feedbackEvent (it survives the live
+  //    turn's teardown — the turn-end frames land AFTER res.end()). The
+  //    written row holds ~2.5s (the tool-collapse hold — long enough to
+  //    read, short enough to never squat) then unmounts; a fresh "writing"
+  //    frame re-shows it.
+  const [ledgerRowHiddenTs, setLedgerRowHiddenTs] = useState(0);
+  useEffect(() => {
+    if (feedbackEvent === null || feedbackEvent.phase !== "turn-end") return;
+    if (feedbackEvent.stage === "writing") {
+      // A new write cycle re-shows the row.
+      setLedgerRowHiddenTs(0);
+      return;
+    }
+    if (feedbackEvent.stage !== "written") return;
+    const ts = feedbackEvent.ts;
+    const timer = window.setTimeout(() => setLedgerRowHiddenTs(ts), TOOL_COLLAPSE_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [feedbackEvent]);
+
   // ── ROUND-119 (R119-C, owner: while a queued message waited, the transcript
   //    showed "the exact same thought process… the exact same reply" as the
   //    previous exchange — a folded/live DOUBLE render that self-cleared once
@@ -4632,6 +4662,47 @@ export function AgentChatPanel({
                 <Clock size={13} className="shrink-0 text-warning-deep" aria-hidden />
                 {queueKeptNotice} message{queueKeptNotice === 1 ? "" : "s"} stayed queued — they&apos;ll send
                 with your next message
+              </div>
+            ) : null}
+
+            {/* ── R128-W5 (MOTION.md §4 — the LEDGER PROCESSING ROW): the
+                turn-end feedback-ledger phase's LIVE line at the transcript's
+                BOTTOM EDGE — the same quiet pulsing-dot grammar as the
+                mid-turn checkpoint line above, so the owner WATCHES the
+                ledger being written after the turn ends instead of a silent
+                wait-then-toast. Deliberately OUTSIDE the liveTurn block:
+                the turn-end frames ride the events bus AFTER the own stream
+                closed (the slice-level feedbackEvent survives the teardown —
+                a watching surface gets it too). Auto-scroll contract: the row
+                mounts as bottom content only — no follow dep watches it and
+                none is added (a pinned reader sits within the 96px
+                stick-to-bottom window; the row never JUMPS the view). ── */}
+            {feedbackEvent !== null && feedbackEvent.phase === "turn-end" &&
+            !(feedbackEvent.stage === "written" && ledgerRowHiddenTs === feedbackEvent.ts) ? (
+              <div
+                data-testid="feedback-ledger-live-row"
+                // R126-3d-2: accentTint + accentDeep ink (TOKENS §10 — "hue
+                // without loudness"; the same container voice as the
+                // mid-turn line — ONE grammar for the ledger's two phases).
+                className="mt-2 mb-1 min-w-0 flex items-center gap-1.5 text-[11px] font-mono px-3 py-1.5 rounded-lg bg-accent-tint text-accent-deep"
+                title={feedbackEvent.detail ?? undefined}
+              >
+                {feedbackEvent.stage === "writing" ? (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full ac-pulse shrink-0"
+                    style={{ background: styles.accent }}
+                    aria-hidden
+                  />
+                ) : feedbackEvent.stage === "written" ? (
+                  <Check size={11} className="shrink-0" aria-hidden />
+                ) : null}
+                <span className="min-w-0 truncate">
+                  {feedbackEvent.stage === "writing"
+                    ? "writing the self-feedback ledger…"
+                    : feedbackEvent.stage === "written"
+                      ? `self-feedback ledger written${feedbackEvent.entries !== null ? ` · ${feedbackEvent.entries} entries` : ""}`
+                      : "the self-feedback ledger could not be written"}
+                </span>
               </div>
             ) : null}
           </div>

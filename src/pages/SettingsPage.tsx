@@ -469,16 +469,26 @@ function AppearanceTab() {
       {/* ── Tool activity (ROUND-35: the owner's tool-calls preferences) ── */}
       <section>
         <SettingsRow label="Tool activity" description="How the agent's tool activity appears in the chat." />
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {/* R97-J (m8): the section rides the shared ChoiceCard now — the
               R97-H extraction left this inline duplicate behind (byte-
               identical markup). ROUND-62 (2-a): the tiny inline mock previews
               are long gone — label + one-line description only. */}
+          {/* R128-W6 — the "Hidden" rung is RETIRED from the picker (the
+              round's smoking gun: the DESKTOP transcript never reads this
+              pref, but the PHONE syncs it server-side on every connect/hello
+              and renders text-only forever — the only code path that
+              reproduces "PC shows tools, phone doesn't"). Detailed and
+              Compact stay selectable (compact already reduces noise without
+              hiding everything). A PERSISTED "hidden" is never silently
+              overridden: it renders the explicit legacy row below with a
+              one-tap recovery to detailed — the same de-risking the phone's
+              own Appearance picker has carried since R127-W8, so the fix is
+              now one tap on BOTH surfaces. */}
           {(
             [
               { id: "detailed", label: "Detailed", desc: "Full timeline with diffs and command output" },
               { id: "compact", label: "Compact", desc: "One-line summary per turn" },
-              { id: "hidden", label: "Hidden", desc: "Never show tool activity" },
             ] as const
           ).map(({ id, label, desc }) => (
             <ChoiceCard
@@ -489,6 +499,31 @@ function AppearanceTab() {
               onSelect={() => setActivityMode(id)}
             />
           ))}
+          {/* R128-W6 — the retired rung's honest state row (the mobile
+              picker's legacy-row grammar at PC density): the quiet meta line
+              names the state, the chip is the one-tap fix. The click rides
+              the SAME write path a chip always has — setActivityMode flips
+              the store AND write-throughs the server PUT (theme-store's
+              pushAppearanceToServer), so the fix lands on every device
+              watching this sidecar, not just here. Rendered only while the
+              stored value is hidden; gone the moment the rung is left. */}
+          {activityMode === "hidden" && (
+            <div
+              data-testid="tool-activity-legacy-hidden"
+              className="flex flex-wrap items-center gap-3 rounded-2xl border border-clay-rim bg-well p-3 sm:col-span-2"
+            >
+              <p className="min-w-[200px] flex-1 text-[11px] leading-snug text-muted">
+                Hidden — tool cards never render on the phone
+              </p>
+              <button
+                type="button"
+                onClick={() => setActivityMode("detailed")}
+                className="inline-flex shrink-0 cursor-pointer items-center rounded-full border border-clay-rim bg-card px-3 py-1.5 text-[12px] font-medium text-ink transition-colors duration-100 hover:border-line-strong hover:bg-hover"
+              >
+                Show tool activity
+              </button>
+            </div>
+          )}
         </div>
       </section>
     </div>

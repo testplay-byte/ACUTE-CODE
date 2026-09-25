@@ -167,6 +167,29 @@ describe("streamAiSdkChat tool-input forwarding (ROUND-58 R58-c)", () => {
     expect(frames.some((f) => f.type === "tool-call")).toBe(true);
   });
 
+  it("R128-W5: tool-call AND tool-result frames carry the SDK part's toolCallId (the live store's id-first attachment)", async () => {
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        // fullStream part shapes per the AI SDK v7 types: tool-call/tool-result
+        // parts carry {toolCallId} — chat.ts threads it onto the normalized
+        // frames so parallel same-tool calls can attach by ID.
+        yield { type: "tool-call", toolCallId: "call-9", toolName: "run_command", input: { command: "echo a" } };
+        yield { type: "tool-result", toolCallId: "call-9", toolName: "run_command", input: { command: "echo a" }, output: { ok: true, output: "a\n" } };
+        yield { type: "finish-step", usage: { inputTokens: 1, outputTokens: 1 } };
+      })(),
+      totalUsage: Promise.resolve({ inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
+      usage: Promise.resolve({ inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
+    }));
+
+    const frames: StreamChatEvent[] = [];
+    for await (const event of streamAiSdkChat(baseInput)) frames.push(event);
+
+    const call = frames.find((f) => f.type === "tool-call");
+    expect(call).toMatchObject({ type: "tool-call", toolCallId: "call-9", toolName: "run_command" });
+    const result = frames.find((f) => f.type === "tool-result");
+    expect(result).toMatchObject({ type: "tool-result", toolCallId: "call-9", toolName: "run_command", ok: true });
+  });
+
   it("emits tool-input frames through runStreamedAgentTurn's SSE channel (the UI's live preview source)", async () => {
     const sessionId = await createSession();
     const seen: unknown[] = [];
@@ -214,6 +237,61 @@ describe("streamAiSdkChat tool-input forwarding (ROUND-58 R58-c)", () => {
           typeof e === "object" && e !== null && (e as { type?: string }).type === "tool-input-delta",
       ),
     ).toBe(true);
+  });
+
+  it("R128-W5: the persisted tool.use payload carries toolCallId + CALL-order callSeq (completion order is not call order)", async () => {
+    const sessionId = await createSession();
+    const seen: unknown[] = [];
+    // Two PARALLEL run_command calls: the model called slow FIRST, fast
+    // SECOND — but fast COMPLETED first (tool.use rows persist at RESULT
+    // time, so the event log lands fast-before-slow). The persisted payloads
+    // must still carry the CALL order via callSeq (1 = slow, 2 = fast).
+    const chatStream = async function* (): AsyncGenerator<StreamChatEvent> {
+      yield { type: "tool-call", toolCallId: "call_slow", toolName: "run_command", argsSummary: "command: slow" };
+      yield { type: "tool-call", toolCallId: "call_fast", toolName: "run_command", argsSummary: "command: fast" };
+      yield { type: "tool-result", toolCallId: "call_fast", toolName: "run_command", argsSummary: "command: fast", ok: true, outputSummary: "fast done" };
+      yield { type: "tool-result", toolCallId: "call_slow", toolName: "run_command", argsSummary: "command: slow", ok: true, outputSummary: "slow done" };
+      yield { type: "text-delta", delta: "Both commands ran." };
+      yield { type: "finish", usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 } };
+    };
+
+    const outcome = await runStreamedAgentTurn(
+      {
+        db,
+        keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: KEY }),
+        chat: streamTextMock as never,
+        chatStream,
+      },
+      sessionId,
+      "run both",
+      (event) => seen.push(event),
+    );
+    expect(outcome.ok).toBe(true);
+
+    // The WIRE frames thread the ids straight through (the rest-spreads at
+    // the emit sites keep every non-args field).
+    const wireCalls = seen.filter(
+      (e) => typeof e === "object" && e !== null && (e as { type?: string }).type === "tool-call",
+    ) as Array<{ toolCallId?: string }>;
+    expect(wireCalls.map((c) => c.toolCallId)).toEqual(["call_slow", "call_fast"]);
+    const wireResults = seen.filter(
+      (e) => typeof e === "object" && e !== null && (e as { type?: string }).type === "tool-result",
+    ) as Array<{ toolCallId?: string }>;
+    expect(wireResults.map((r) => r.toolCallId)).toEqual(["call_fast", "call_slow"]);
+
+    // The PERSISTED tool.use rows carry the call identity + CALL order.
+    const toolEvents = listSessionEvents(db, sessionId).filter((e) => e.type === "tool.use");
+    expect(toolEvents).toHaveLength(2);
+    const payloads = toolEvents.map(
+      (e) => e.payload as { toolCallId?: string; callSeq?: number; argsSummary?: string },
+    );
+    // Persisted in COMPLETION order (fast first)…
+    expect(payloads.map((p) => p.argsSummary)).toEqual(["command: fast", "command: slow"]);
+    // …but the callSeq fields say the CALL order: slow = 1, fast = 2.
+    expect(payloads.map((p) => [p.toolCallId, p.callSeq])).toEqual([
+      ["call_fast", 2],
+      ["call_slow", 1],
+    ]);
   });
 });
 

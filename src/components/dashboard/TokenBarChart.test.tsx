@@ -1,16 +1,27 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TokenBarChart } from "./TokenBarChart";
 import { deriveThemeStyles } from "../../lib/themes";
 import type { UsageDayBucket } from "../../lib/api";
 
-/** R127-W3 — the ROUND-127 chart-interaction laws (COMPONENTS §6) pinned at
- *  the dashboard's own series: the full-column hit-testing law + the tooltip
- *  edge law. Geometry facts the pins ride on: 14 buckets × (20px bar + 6px
- *  gap) − 6 = a 358px chart; bar centers at i×26+10; the w-44 tooltip is
- *  176px wide; clampTooltipX's inset is 8px → the clamped ends sit at left
- *  8px / 174px (174 + 176 = 350 = 358 − 8 — inside the chart's content box).
+/** R127-W3 → R128-W2 — the chart-interaction laws (COMPONENTS §6) pinned at
+ *  the dashboard's own series: the full-column hit-testing law (R127, kept)
+ *  + the side-placement tooltip law + the fill law (R128 — the R127
+ *  center-on-bar tooltip pins are RE-PINNED to the beside values).
+ *
+ *  Geometry facts the pins ride on (the UNSTRETCHED natural pitch — happy-dom
+ *  reports clientWidth 0, so the un-measured frame keeps the natural
+ *  geometry; the fill-law tests stub the ResizeObserver): 14 buckets ×
+ *  (20px bar + 6px gap) − 6 = a 358px chart; columns at [i×26, i×26+20];
+ *  the w-44 tooltip is 176px wide; placeTooltipBeside's inset is 8px and its
+ *  beside-gap is 8px →
+ *    · i=0 (left half) → side right, left = 20+8 = 28px;
+ *    · i=6 (center 166 < 179 → right, ideal 184 clamps to maxLeft 174 — the
+ *      358px plot cannot host 176px beside a column at 156, the near-
+ *      degenerate case; the flip keeps the roomier right side) = 174px;
+ *    · i=13 (right half) → side left, left = 338−176−8 = 154px, right edge
+ *      330 stops a full gap short of the column's 338 left edge.
  *
  *  The real-browser half of the hit-testing law (the pointer falling through
  *  a pointer-events:none painted bar onto the column UNDERNEATH) is DOM
@@ -20,10 +31,11 @@ import type { UsageDayBucket } from "../../lib/api";
  *  behavioral reads through the column rects. The live pointer pass is the
  *  orchestrator's consolidated post-wave browser sweep. */
 
-const BAR_PITCH = 26; // BAR_WIDTH 20 + BAR_GAP 6
-const CHART_WIDTH = 14 * BAR_PITCH - 6; // 358
+const BAR_PITCH = 26; // BAR_WIDTH 20 + BAR_GAP 6 (the natural, unstretched pitch)
+const CHART_WIDTH = 14 * BAR_PITCH - 6; // 358 (natural)
 const TOOLTIP_W = 176; // the tooltip card's w-44 class
-const TOOLTIP_INSET = 8; // clampTooltipX's TOOLTIP_EDGE_INSET_PX
+const TOOLTIP_INSET = 8; // placeTooltipBeside's TOOLTIP_EDGE_INSET_PX
+const BESIDE_GAP = 8; // placeTooltipBeside's default gap
 
 // The dashboard's default theme (resetTestState's nova/dark pair).
 const styles = deriveThemeStyles("nova", true);
@@ -85,37 +97,50 @@ describe("TokenBarChart (R127 chart-interaction laws)", () => {
     }
   });
 
-  it("tooltip edge law: centers mid-series, clamps inside the chart at the first/last bars", async () => {
+  it("R128 side-placement law: the tooltip renders BESIDE the hovered column — no -50% centering, no overlap at the ends", async () => {
     renderChart();
     const columns = document.querySelectorAll<SVGElement>("svg rect[data-bar-idx]");
 
-    // Middle bar (i=6, center x=166): the tooltip CENTERS on its bar —
-    // left is the bar's center, the -50% shift does the centering.
-    fireEvent.pointerMove(columns[6]);
+    // FIRST bar (i=0, column [0, 20], center in the left half): the tooltip
+    // sits to the column's RIGHT, one beside-gap past its right edge —
+    // left = 20 + 8 = 28px. NEVER a translateX(-50%) centered on the bar
+    // (the retired R127 spelling the owner's "centered on it" complaint
+    // killed — the transform carries no -50% translation).
+    fireEvent.pointerMove(columns[0]);
     let tip = tooltipEl();
     expect(tip).not.toBeNull();
-    expect(tip!.style.left).toBe("166px");
-    expect(screen.getByText("7,500")).toBeTruthy(); // 6.5k in + 0.5k out
+    expect(tip!.style.left).toBe("28px");
+    expect(tip!.style.transform).not.toContain("-50%");
+    expect(screen.getByText("1,500")).toBeTruthy();
 
-    // LAST bar (i=13, center x=348): a centered 176px tooltip would overflow
-    // the 358px chart's right edge — the clamp aligns its near edge inside
-    // (358 − 176 − 8 = 174px; 174 + 176 = 350 = the content box's edge).
+    // LAST bar (i=13, column [338, 358], center in the right half): the
+    // tooltip sits to the column's LEFT — left = 338 − 176 − 8 = 154px; its
+    // right edge (330) stops a full gap short of the column's left edge
+    // (338) — BESIDE the bar, never covering it.
     fireEvent.pointerMove(columns[13]);
+    tip = tooltipEl();
+    expect(tip).not.toBeNull();
+    expect(tip!.style.left).toBe("154px");
+    expect(tip!.style.transform).not.toContain("-50%");
+    expect(Number.parseFloat(tip!.style.left) + TOOLTIP_W).toBeLessThanOrEqual(
+      13 * BAR_PITCH - BESIDE_GAP,
+    );
+    expect(screen.getByText("14,500")).toBeTruthy();
+
+    // MIDDLE bar (i=6, column [156, 176], center 166 in the left half): side
+    // right, ideal 184 clamps to maxLeft 174 (358 − 176 − 8). A 358px plot
+    // cannot host the 176px tooltip beside a column at 156 on either side —
+    // the near-degenerate case; placeTooltipBeside's overlap net keeps the
+    // roomier right side and clamps to its edge (174). The tooltip still
+    // stays inside the content box's inset.
+    fireEvent.pointerMove(columns[6]);
     tip = tooltipEl();
     expect(tip).not.toBeNull();
     expect(tip!.style.left).toBe("174px");
     expect(Number.parseFloat(tip!.style.left) + TOOLTIP_W).toBeLessThanOrEqual(
       CHART_WIDTH - TOOLTIP_INSET,
     );
-    expect(screen.getByText("14,500")).toBeTruthy();
-
-    // FIRST bar (i=0, center x=10): the mirror clamp at the left end — the
-    // 8px inset, never a translateX(-50%) that pushes the card off-chart.
-    fireEvent.pointerMove(columns[0]);
-    tip = tooltipEl();
-    expect(tip).not.toBeNull();
-    expect(tip!.style.left).toBe("8px");
-    expect(screen.getByText("1,500")).toBeTruthy();
+    expect(screen.getByText("7,500")).toBeTruthy(); // 7k in + 0.5k out
   });
 
   it("the R121-d single pointer read: one onPointerMove resolves the bar; leaving the bars clears the tooltip", async () => {
@@ -143,5 +168,82 @@ describe("TokenBarChart (R127 chart-interaction laws)", () => {
     // only when they don't — no sparse ticks on the dashboard's fixed
     // 14-day window).
     expect(document.querySelectorAll("svg text")).toHaveLength(14);
+  });
+});
+
+/** ResizeObserver stub whose callbacks the test fires with synthetic widths
+ *  (the ChatFocusLayout.test.tsx pattern — happy-dom reports clientWidth 0
+ *  and its own ResizeObserver never fires, so the fill law's measured-width
+ *  leg is driven through this stub exactly like the established seam). */
+class MockResizeObserver {
+  static instances: MockResizeObserver[] = [];
+  cb: ResizeObserverCallback;
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb;
+    MockResizeObserver.instances.push(this);
+  }
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  static fire(width: number): void {
+    for (const inst of MockResizeObserver.instances) {
+      inst.cb(
+        [{ contentRect: { width } } as unknown as ResizeObserverEntry],
+        inst as unknown as ResizeObserver,
+      );
+    }
+  }
+}
+
+describe("TokenBarChart (R128-W2 — the fill law)", () => {
+  beforeEach(() => {
+    MockResizeObserver.instances = [];
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanup();
+  });
+
+  it("a fitting 14-day series stretches its pitch to FILL the measured card (no dead margins)", () => {
+    renderChart();
+    // A 716px card: the natural 358px chart doubles exactly — 40px bars +
+    // 12px gaps at a 52px pitch (716 = 14 × 52 − 12), the svg fills the card.
+    act(() => MockResizeObserver.fire(716));
+    const svg = document.querySelector('svg[role="img"]');
+    expect(svg!.getAttribute("width")).toBe("716");
+    for (const column of Array.from(svg!.querySelectorAll("rect[data-bar-idx]"))) {
+      expect(column.getAttribute("width")).toBe("40");
+    }
+  });
+
+  it("the stretch is CAPPED at 42px bars however wide the card", () => {
+    renderChart();
+    // A 1000px card wants factor 2.79; the cap is min(42/20, 16/6) = 2.1 →
+    // 42px bars / 12.6px gaps → 14 × 54.6 − 12.6 = 751.8px of chart.
+    act(() => MockResizeObserver.fire(1000));
+    const svg = document.querySelector('svg[role="img"]');
+    expect(svg!.getAttribute("width")).toBe("751.8");
+    for (const column of Array.from(svg!.querySelectorAll("rect[data-bar-idx]"))) {
+      expect(column.getAttribute("width")).toBe("42");
+    }
+  });
+
+  it("an overflowing card keeps the natural 20px pitch (the fill law never shrinks)", () => {
+    renderChart();
+    // A 200px card: the natural 358px chart overflows → natural geometry.
+    act(() => MockResizeObserver.fire(200));
+    const svg = document.querySelector('svg[role="img"]');
+    expect(svg!.getAttribute("width")).toBe(String(CHART_WIDTH));
+    for (const column of Array.from(svg!.querySelectorAll("rect[data-bar-idx]"))) {
+      expect(column.getAttribute("width")).toBe("20");
+    }
+  });
+
+  it("the chart keeps its fixed height under the stretch (no vertical fill)", () => {
+    renderChart();
+    act(() => MockResizeObserver.fire(716));
+    const svg = document.querySelector('svg[role="img"]');
+    expect(svg!.getAttribute("height")).toBe("168"); // 140 plot + 28 label band
   });
 });

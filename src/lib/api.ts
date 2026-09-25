@@ -1219,6 +1219,17 @@ export interface ToolUseEntry {
   /** ROUND-34: compact tool-output summary (what the tool DID) — shown in
    * the activity rows/terminal cards and used for live command output. */
   outputSummary?: string;
+  /** R128-W5: the call's SDK toolCallId (additive — live rows get it from
+   * the tool-call frame, persisted rows from the tool.use payload). The live
+   * store attaches results by it FIRST (parallel same-tool calls completing
+   * out of order); the fold uses it for call identity. Older rows/frames
+   * never carry it. */
+  toolCallId?: string;
+  /** R128-W5: the call's 1-based CALL index within its turn (persisted at
+   * emit time by agent-core). The fold sorts contiguous tool rows by it —
+   * tool.use rows persist at completion order, so a parallel batch can land
+   * out of call order; callSeq restores it (seq stays the tiebreak). */
+  callSeq?: number;
 }
 
 /** A write_file/edit_file call surfaced as a diff card (path/chars parsed
@@ -1442,6 +1453,10 @@ interface ToolUsePayload {
   argsSummary?: unknown;
   ok?: unknown;
   outputSummary?: unknown;
+  // R128-W5: the additive call identity + call order fields (absent on
+  // rows persisted before the round).
+  toolCallId?: unknown;
+  callSeq?: unknown;
 }
 
 function toToolUseEntry(event: SessionEvent): ToolUseEntry {
@@ -1457,6 +1472,14 @@ function toToolUseEntry(event: SessionEvent): ToolUseEntry {
     ts: event.ts,
     ...(typeof payload.outputSummary === "string" && payload.outputSummary.length > 0
       ? { outputSummary: payload.outputSummary }
+      : {}),
+    // R128-W5: additive call identity + call order (kept only when the
+    // persisted row carries a well-formed value).
+    ...(typeof payload.toolCallId === "string" && payload.toolCallId !== ""
+      ? { toolCallId: payload.toolCallId }
+      : {}),
+    ...(typeof payload.callSeq === "number" && Number.isFinite(payload.callSeq) && payload.callSeq > 0
+      ? { callSeq: payload.callSeq }
       : {}),
   };
 }
@@ -1503,6 +1526,10 @@ export function parseDiffArgs(argsSummary: string): { path: string | null; chars
  *   provider call). A turn with no working AND no finalText is dropped.
  * - approval.requested/resolved events fold into working entries; a resolved
  *   event updates its matching pending entry in place.
+ * - R128-W5: contiguous tool rows sort by their persisted callSeq (CALL
+ *   order) when present — tool.use rows persist at completion order, so a
+ *   parallel batch folds back into the order the model called them in; seq
+ *   stays the tiebreak and pre-R128 rows (no callSeq) keep their order.
  */
 interface TurnAccumulator {
   seq: number;
@@ -1809,6 +1836,36 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
 
       // Unknown event types are tolerated inside a turn (they keep the turn
       // alive for ts/endTs purposes but add no renderable entries).
+    }
+
+    // ── R128-W5 (the call-order restore): agent-core persists tool.use rows
+    //    at RESULT time — a parallel same-tool batch can land OUT of call
+    //    order (the completion order). Rows that carry callSeq (the per-turn
+    //    call-order counter stamped at emit time) sort back into CALL order
+    //    within each CONTIGUOUS tool run (parallel calls are contiguous —
+    //    steps are separated by narration/thinking rows, which stay put);
+    //    seq is the stable tiebreak. Rows without callSeq (pre-R128 logs)
+    //    keep their relative order — the fold is byte-identical for them. ──
+    const isToolWorkingEntry = (e: WorkingEntry): e is Extract<WorkingEntry, { type: "tool" }> =>
+      e.type === "tool";
+    for (let i = 0; i < working.length; ) {
+      if (working[i] === undefined || !isToolWorkingEntry(working[i])) {
+        i += 1;
+        continue;
+      }
+      let j = i;
+      while (j < working.length && working[j] !== undefined && isToolWorkingEntry(working[j])) j += 1;
+      const run = working.slice(i, j) as Extract<WorkingEntry, { type: "tool" }>[];
+      if (run.some((e) => e.tool.callSeq !== undefined)) {
+        run.sort((a, b) => {
+          const ca = a.tool.callSeq ?? Number.POSITIVE_INFINITY;
+          const cb = b.tool.callSeq ?? Number.POSITIVE_INFINITY;
+          if (ca !== cb) return ca - cb;
+          return a.tool.seq - b.tool.seq;
+        });
+        working.splice(i, j - i, ...run);
+      }
+      i = j;
     }
 
     if (working.length === 0 && lastTextSeq === -1 && acc.debugReport === undefined) return; // amendment 3e
@@ -3607,7 +3664,7 @@ export type SubAgentInnerEvent =
       decision: "approved" | "denied" | "expired";
       remember?: "once" | "always";
     }
-  | { type: "tool-call"; sessionId?: string; toolName: string; argsSummary: string }
+  | { type: "tool-call"; sessionId?: string; toolName: string; argsSummary: string; toolCallId?: string }
   | {
       type: "tool-result";
       sessionId?: string;
@@ -3615,6 +3672,9 @@ export type SubAgentInnerEvent =
       argsSummary?: string;
       ok: boolean;
       outputSummary?: string;
+      /** R128-W5: the streamed path's call identity (additive — the sync
+       * path's frames and older sidecars never carry it). */
+      toolCallId?: string;
     }
   /** ROUND-52 (R52-a, owner: "After running the commands, it should actually
    * show the terminal interface of those commands too"): live terminal
@@ -3671,14 +3731,30 @@ export type StreamTurnEvent =
   | { type: "tool-input-start"; toolCallId: string; toolName: string }
   /** ROUND-58 (R58-cf): one text chunk of a tool call's JSON args —
    * concatenated per toolCallId (e.g. for write_file the raw grows like
-   * `{"path":"a.txt","content":"<!DOCTYPE…`). The final tool-call frame (with
-   * the completed argsSummary, NO toolCallId) ends the accumulation. */
+   * `{"path":"a.txt","content":"<!DOCTYPE…`). The final tool-call frame
+   * ends the accumulation (R128-W5: it carries the same toolCallId when the
+   * sidecar threads it — the store matches the entry by ID first). */
   | { type: "tool-input-delta"; toolCallId: string; inputTextDelta: string }
-  | { type: "tool-call"; toolName: string; argsSummary: string }
-  | { type: "tool-result"; toolName: string; argsSummary: string; ok: boolean; outputSummary?: string }
+  /** R128-W5: toolCallId rides the completed call ADDITIVELY (the live
+   * store's id-first attachment — parallel same-tool calls completing out
+   * of order; the streamed-input accumulation ends by ID too). Older
+   * sidecars omit it — the store falls back to the legacy toolName
+   * matching. */
+  | { type: "tool-call"; toolCallId?: string; toolName: string; argsSummary: string }
+  | {
+      type: "tool-result";
+      toolCallId?: string;
+      toolName: string;
+      argsSummary: string;
+      ok: boolean;
+      outputSummary?: string;
+    }
   /** ROUND-52 (R52-a): live terminal output of a running tool call — the
-   * child's run_command streaming its output live inside the envelope. */
-  | { type: "tool-output"; toolName: string; argsSummary?: string; chunk: string }
+   * child's run_command streaming its output live inside the envelope.
+   * R128-W5: toolCallId is accepted additively (the exec tool's emit site
+   * does not know its call id today — the store matches by ID when a
+   * future emitter threads it, else falls back to toolName). */
+  | { type: "tool-output"; toolCallId?: string; toolName: string; argsSummary?: string; chunk: string }
   /** Round-32: the outer loop starts a new iteration — the live activity
    * block opens a new ROUND group on this event. */
   | { type: "meta.continuation"; iteration: number; reason?: string }

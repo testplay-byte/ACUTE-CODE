@@ -77,15 +77,23 @@ export function humanizeToolName(name: string): string {
   return name.replace(/_/g, " ");
 }
 
-/** The write row's file path: the streaming raw's `path` arg first (the
+/**
+ * The write row's file path: the streaming raw's `path` arg first (the
  * tolerant extractor — live, before the args complete), else the settled
- * argsSummary's `path: …` segment. */
+ * argsSummary's `path: …` segment. R128-W6 — the segment scan is UNANCHORED
+ * (first occurrence, same capture rules): the server's summarizeArgs orders
+ * its segments by the MODEL's JSON key order, so an edit_file emitted as
+ * {oldString, newString, path} lands as "oldString: …, newString: N chars,
+ * path: src/a.ts" — the leading-`path:` match the old regex required never
+ * fired, and the row lost its file name. A `path:` anywhere in the summary
+ * now answers; null only when no `path:` rides it at all.
+ */
 export function writePath(item: ToolItem): string | null {
   if (item.inputRaw !== null) {
     const preview = extractWritePreview(item.inputRaw);
     if (preview.path !== null) return preview.path;
   }
-  return item.argsSummary.match(/^path:\s*([^,]+)/)?.[1] ?? null;
+  return item.argsSummary.match(/path:\s*([^,]+)/)?.[1] ?? null;
 }
 
 /**

@@ -38,10 +38,18 @@ Workspace ── chat card ⇄ right sidebar (files/browser/terminal/…)
    hidden) + the settings mode + the mobile drawer. Every nav destination
    is reachable from it in ONE click; nothing is URL-only (`/demos`'s
    URL-only status is a defect the redesign fixes).
-2. **The project row navigates, the chevron expands.** (R126 decision —
-   the pre-R126 project row only toggled expansion, forcing users through
-   session rows to enter a project.) The row body click opens the
-   project's chat; a dedicated chevron hit area toggles the session tree.
+2. **The project row expands/collapses its sessions — nothing else.**
+   (R128 decision, reversing the R126 split — the owner's directive:
+   "clicking on any of the projects should not automatically switch the
+   view to that specific project — it should only expand or collapse the
+   sessions of it.") The whole project row is the toggle; the dedicated
+   chevron button is RETIRED (no separate toggle affordance). Entering a
+   conversation is a SESSION row's job. Hover actions (new session,
+   delete) stay on the row and stop propagation. Row names render FULLY
+   when the hover actions are not visible — the actions OVERLAY on hover,
+   never reserving layout width (the owner's "the name becomes dotted way
+   too early while the right side is empty"); project rows sit a notch
+   taller than session rows (the project is the heavier object).
 3. **Session switching lives in the sidebar's session tree** (per-project)
    — the owner's R49 directive: NO global sessions screen, ever.
 4. **The right sidebar is the workspace's tool belt** — browser-style tabs
@@ -56,6 +64,19 @@ Workspace ── chat card ⇄ right sidebar (files/browser/terminal/…)
 7. **Keyboard parity**: every nav row is a real `<button>`/`<a>` with
    `:focus-visible` (the global ring); ⌘K opens the palette; the sidebar
    rail's hover labels also carry `aria-label`.
+8. **Deletes confirm — ROUND-128**: deleting a session or a project
+   ALWAYS asks first — the danger `ConfirmDialog` (cancel takes focus,
+   ESC + outside-click dismiss; a project's dialog enumerates exactly
+   what dies — its sessions and their events). No sidebar delete is
+   immediate (the owner's "it should not be automatically deleted — the
+   confirmation should be asked, but it does not ask").
+9. **The General conversation — ROUND-128**: the projects section
+   carries a persistent General entry — conversations that need no
+   folder, living in the app's own internal folder under the sidecar
+   state dir (seeded by the backend, delete-protected, never a folder
+   picker). The owner's rule: "the user will not be required to select a
+   folder for that — it will select an internal folder and it will use
+   that."
 
 ## 3. Archetype recipes (the materials)
 

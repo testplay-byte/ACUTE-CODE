@@ -116,6 +116,7 @@ stream, the wizard's ambient set, the 9s chrome pass).
 | Message-timeline bar growth (R120-C-PC) | hover-proximity scaling: CSS height transition 200ms quick tier, linear falloff (28px peak / 8px rest / 56px radius); 0s jump under reduced motion |
 | **Tool section auto-lifecycle (R127)** | a tool/thinking row EXPANDS on DISCLOSURE_SPRING the moment it goes live; on completing (live→settled) it holds ~2.5s (the owner reads the outcome), then COLLAPSES via the timed close (200ms ease-out height + 150ms fade) — never instant, never a spring on the way down. A user's manual toggle always wins (and silences the automation for that row's lifetime). Failed rows never auto-collapse — a failure stays open with its error excerpt. |
 | **Scrollbar fade (R127)** | the thumb tints in with the scroll (CSS, 120ms), holds while scrolling, fades out ~700ms after the last scroll event (CSS transition on background-color); no layout animation ever (the gutter never appears/disappears — overlay law, TOKENS §6) |
+| **Ledger processing row (R128)** | the turn-end feedback-ledger phase renders a LIVE processing line at the transcript's bottom edge — the same quiet pulsing-dot grammar as the mid-turn line — the moment `meta.feedback {stage:"writing", phase:"turn-end"}` arrives, holding until `written`/`failed`. Never silent-then-toast: the owner must SEE the ledger thinking (the owner's "it did not show me any processing for that — it only sends me the message after it has done it"). |
 
 ## 5. What NEVER animates (mobile §5, adopted)
 

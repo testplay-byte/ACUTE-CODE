@@ -26,6 +26,9 @@ import {
   getSubAgentLiveEntry,
   selectSubAgentsLive,
   useStreamStore,
+  // R128-W5: the live write preview's liveInput field (the id-first
+  // streamed-input matching tests).
+  type LiveToolUseEntry,
 } from "./stream-store";
 import { useActiveStreams } from "./active-streams";
 // ROUND-65 (R65): the agent-browser activity signal the frames below bump.
@@ -1162,6 +1165,160 @@ describe("stream store tool-input streaming (ROUND-58 R58-cf)", () => {
     expect(inputs[0].raw.slice(0, 200_000)).toBe(big);
     // The second delta was truncated mid-way (not dropped entirely).
     expect(inputs[0].raw.endsWith("yyyy")).toBe(true);
+  });
+});
+
+// ── ROUND-128 (R128-W5): toolCallId-FIRST attachment ─────────────────────────
+// chat.ts threads the SDK part id on tool-call/tool-result frames now, so
+// PARALLEL same-tool calls completing OUT OF CALL ORDER attach to the RIGHT
+// rows by id — the legacy last-null-ok toolName matching cross-attached
+// them (the second result landed on the first row). Frames WITHOUT an id
+// (older sidecars / sync-path children) keep the legacy behavior exactly.
+
+describe("stream store toolCallId attachment (R128-W5)", () => {
+  it("two parallel run_command calls, results arriving OUT OF ORDER attach by ID to the right rows", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          // The model called slow-echo FIRST, fast-echo SECOND…
+          { type: "tool-call", toolCallId: "call_a", toolName: "run_command", argsSummary: "command: slow-echo" },
+          { type: "tool-call", toolCallId: "call_b", toolName: "run_command", argsSummary: "command: fast-echo" },
+          // …but fast-echo COMPLETED first (completion order ≠ call order).
+          { type: "tool-result", toolCallId: "call_b", toolName: "run_command", argsSummary: "command: fast-echo", ok: true, outputSummary: "fast done" },
+          { type: "tool-result", toolCallId: "call_a", toolName: "run_command", argsSummary: "command: slow-echo", ok: false, outputSummary: "slow failed" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "run both");
+
+    const working = useStreamStore.getState().bySession[PARENT]?.liveTurn?.working ?? [];
+    expect(working).toHaveLength(2);
+    const byId = new Map(
+      working
+        .filter((e): e is Extract<(typeof working)[number], { type: "tool" }> => e.type === "tool")
+        .map((e) => [e.tool.toolCallId ?? "", e.tool]),
+    );
+    // Each result landed on ITS OWN row — the cross-attachment the old
+    // toolName-only matching produced is gone.
+    expect(byId.get("call_a")).toMatchObject({
+      toolName: "run_command",
+      ok: false,
+      outputSummary: "slow failed",
+    });
+    expect(byId.get("call_b")).toMatchObject({
+      toolName: "run_command",
+      ok: true,
+      outputSummary: "fast done",
+    });
+    // The rows keep their call-order positions (the timeline order the
+    // tool-call frames arrived in).
+    expect(
+      working.map((e) => (e.type === "tool" ? e.tool.argsSummary : "?")),
+    ).toEqual(["command: slow-echo", "command: fast-echo"]);
+  });
+
+  it("the tool-call frame's streamed-input match prefers the ID (a parallel write pair never steals the other's preview)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-input-start", toolCallId: "call_w1", toolName: "write_file" },
+          { type: "tool-input-delta", toolCallId: "call_w1", inputTextDelta: '{"path":"a.ts","content":"AAA"' },
+          { type: "tool-input-start", toolCallId: "call_w2", toolName: "write_file" },
+          { type: "tool-input-delta", toolCallId: "call_w2", inputTextDelta: '{"path":"b.ts","content":"BBB"' },
+          // The SECOND call's args complete FIRST (out of order)…
+          { type: "tool-call", toolCallId: "call_w2", toolName: "write_file", argsSummary: "path: b.ts, content: 3 chars" },
+          // …then the first.
+          { type: "tool-call", toolCallId: "call_w1", toolName: "write_file", argsSummary: "path: a.ts, content: 3 chars" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "write both");
+
+    const working = useStreamStore.getState().bySession[PARENT]?.liveTurn?.working ?? [];
+    const byId = new Map(
+      working
+        .filter((e): e is Extract<(typeof working)[number], { type: "tool" }> => e.type === "tool")
+        .map((e) => [e.tool.toolCallId ?? "", e.tool as LiveToolUseEntry]),
+    );
+    // Each pending row carries ITS OWN accumulated raw as the live preview.
+    expect(byId.get("call_w1")?.liveInput).toBe('{"path":"a.ts","content":"AAA"');
+    expect(byId.get("call_w2")?.liveInput).toBe('{"path":"b.ts","content":"BBB"');
+    // Both streaming-input entries were consumed by their own calls.
+    expect(useStreamStore.getState().bySession[PARENT]?.liveTurn?.streamingToolInputs).toHaveLength(0);
+  });
+
+  it("a tool-result WITH an id that matches no unresolved row appends (never steals a different call's row)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          // Only ONE call frame seen (the viewer joined mid-stream and
+          // missed the other's tool-call)…
+          { type: "tool-call", toolCallId: "call_seen", toolName: "read_file", argsSummary: "path: a.ts" },
+          // …its own result arrives, then an UNSEEN call's result.
+          { type: "tool-result", toolCallId: "call_seen", toolName: "read_file", argsSummary: "path: a.ts", ok: true, outputSummary: "42 lines" },
+          { type: "tool-result", toolCallId: "call_missed", toolName: "read_file", argsSummary: "path: b.ts", ok: true, outputSummary: "7 lines" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "read both");
+
+    const working = useStreamStore.getState().bySession[PARENT]?.liveTurn?.working ?? [];
+    expect(working).toHaveLength(2);
+    // The seen row settled in place; the missed row APPENDED completed —
+    // it never cross-attached onto the seen row (the old toolName matching
+    // would have had nothing left to steal from, but the ID path must not
+    // regress that either).
+    expect(working[0]).toMatchObject({
+      type: "tool",
+      tool: { toolCallId: "call_seen", ok: true, outputSummary: "42 lines" },
+    });
+    expect(working[1]).toMatchObject({
+      type: "tool",
+      tool: { toolCallId: "call_missed", ok: true, outputSummary: "7 lines" },
+    });
+  });
+
+  it("BACK-COMPAT: frames WITHOUT toolCallId keep the legacy toolName matching (older sidecars, sync-path children)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "tool-call", toolName: "run_command", argsSummary: "command: one" },
+          { type: "tool-call", toolName: "run_command", argsSummary: "command: two" },
+          // No ids: the LAST null-ok row of the same name resolves first…
+          { type: "tool-result", toolName: "run_command", argsSummary: "command: two", ok: true, outputSummary: "two done" },
+          // …then the remaining one.
+          { type: "tool-result", toolName: "run_command", argsSummary: "command: one", ok: true, outputSummary: "one done" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+
+    await useStreamStore.getState().startStream(PARENT, "legacy pair");
+
+    const working = useStreamStore.getState().bySession[PARENT]?.liveTurn?.working ?? [];
+    expect(working).toHaveLength(2);
+    // Completion order attachment (the pre-R128 semantics, byte-identical):
+    // the first result settled the SECOND row, the second result the first.
+    expect(working[0]).toMatchObject({
+      type: "tool",
+      tool: { argsSummary: "command: one", ok: true, outputSummary: "one done" },
+    });
+    expect(working[1]).toMatchObject({
+      type: "tool",
+      tool: { argsSummary: "command: two", ok: true, outputSummary: "two done" },
+    });
+    // No id was invented on the legacy rows.
+    expect(working.every((e) => e.type !== "tool" || e.tool.toolCallId === undefined)).toBe(true);
   });
 });
 

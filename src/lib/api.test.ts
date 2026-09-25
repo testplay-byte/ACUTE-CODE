@@ -33,6 +33,8 @@ import {
   type ProviderModelConfig,
   type ProviderView,
   type SessionEvent,
+  // R128-W5: the folded tool entries' additive identity/order fields.
+  type ToolUseEntry,
 } from "./api";
 import { createFixtureAgents, getFixtureAgents, resetFixtureAgents } from "./agent-fixtures";
 import { useConfigStore } from "./config-store";
@@ -459,6 +461,74 @@ describe("toProjectChatItems (ROUND-37 turn model)", () => {
     if (entry.type !== "tool") throw new Error("expected tool entry");
     expect(entry.tool.toolName).toBe("delegate_task");
     expect(entry.tool.argsSummary).toBe("role: coder, task: write tests");
+  });
+
+  it("R128-W5: tool.use rows carrying callSeq sort back into CALL order within the turn (completion order is not call order)", () => {
+    // A parallel batch: the model called A first, B second — but B COMPLETED
+    // first, so the persisted rows land B-before-A (completion order). The
+    // fold must restore the call order via callSeq (seq stays the tiebreak).
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "run both" }, "agt_scribe"),
+      // Persisted rows (seq = completion order): B completed first.
+      ev(2, "tool.use", { role: "tool", toolName: "run_command", argsSummary: "command: b", ok: true, toolCallId: "call_b", callSeq: 2 }, "agt_scribe"),
+      ev(3, "tool.use", { role: "tool", toolName: "run_command", argsSummary: "command: a", ok: false, toolCallId: "call_a", callSeq: 1 }, "agt_scribe"),
+      ev(4, "message.assistant", { role: "assistant", content: "done" }, "agt_scribe"),
+    ]);
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    const tools = turn.working.filter((w) => w.type === "tool").map((w) => (w as { tool: ToolUseEntry }).tool);
+    // CALL order restored: a (callSeq 1) before b (callSeq 2) — the rows
+    // themselves persisted in the opposite (completion) order.
+    expect(tools.map((t) => t.argsSummary)).toEqual(["command: a", "command: b"]);
+    // The identity + order fields ride the folded entries (the live
+    // store's id-first matching and future consumers keep them).
+    expect(tools[0]).toMatchObject({ toolCallId: "call_a", callSeq: 1 });
+    expect(tools[1]).toMatchObject({ toolCallId: "call_b", callSeq: 2 });
+
+    // A SECOND tool run (separated by narration) sorts independently — the
+    // callSeq counter is per-TURN, runs never mix.
+    const items2 = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "go" }, "agt_scribe"),
+      ev(2, "message.assistant", { role: "assistant", content: "first batch" }, "agt_scribe"),
+      ev(3, "tool.use", { role: "tool", toolName: "read_file", argsSummary: "path: b.ts", ok: true, toolCallId: "call_b", callSeq: 2 }, "agt_scribe"),
+      ev(4, "tool.use", { role: "tool", toolName: "read_file", argsSummary: "path: a.ts", ok: true, toolCallId: "call_a", callSeq: 1 }, "agt_scribe"),
+      ev(5, "message.assistant", { role: "assistant", content: "interlude" }, "agt_scribe"),
+      // The second run's calls continue the per-turn counter (3, 4).
+      ev(6, "tool.use", { role: "tool", toolName: "read_file", argsSummary: "path: d.ts", ok: true, toolCallId: "call_d", callSeq: 4 }, "agt_scribe"),
+      ev(7, "tool.use", { role: "tool", toolName: "read_file", argsSummary: "path: c.ts", ok: true, toolCallId: "call_c", callSeq: 3 }, "agt_scribe"),
+      ev(8, "message.assistant", { role: "assistant", content: "done" }, "agt_scribe"),
+    ]);
+    const turn2 = items2[1];
+    if (turn2.kind !== "turn") throw new Error("expected turn");
+    const runs: string[][] = [];
+    let current: string[] = [];
+    for (const w of turn2.working) {
+      if (w.type === "tool") current.push((w as { tool: { argsSummary: string } }).tool.argsSummary);
+      else if (current.length > 0) {
+        runs.push(current);
+        current = [];
+      }
+    }
+    if (current.length > 0) runs.push(current);
+    expect(runs).toEqual([
+      ["path: a.ts", "path: b.ts"], // run 1 sorted by callSeq 1, 2
+      ["path: c.ts", "path: d.ts"], // run 2 sorted by callSeq 3, 4
+    ]);
+  });
+
+  it("R128-W5 back-compat: tool.use rows WITHOUT callSeq keep their seq order (pre-R128 logs fold byte-identically)", () => {
+    const items = toProjectChatItems([
+      ev(1, "message.user", { role: "user", content: "legacy" }, "agt_scribe"),
+      toolUse(2, "run_command", "command: b"),
+      toolUse(3, "run_command", "command: a"),
+      ev(4, "message.assistant", { role: "assistant", content: "done" }, "agt_scribe"),
+    ]);
+    const turn = items[1];
+    if (turn.kind !== "turn") throw new Error("expected turn");
+    const tools = turn.working.filter((w) => w.type === "tool").map((w) => (w as { tool: ToolUseEntry }).tool);
+    // No callSeq anywhere → NO reordering: the persisted (seq) order stands.
+    expect(tools.map((t) => t.argsSummary)).toEqual(["command: b", "command: a"]);
+    expect(tools.every((t) => t.callSeq === undefined && t.toolCallId === undefined)).toBe(true);
   });
 
   it("ignores unknown event types (and messages without string content)", () => {

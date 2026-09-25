@@ -250,6 +250,15 @@ export type TranscriptItem =
       argsSummary: string;
       /** null while the call runs (live only — persisted rows always know). */
       ok: boolean | null;
+      /** R128-W6 — the live overlay's INTERRUPTED settle marker: a tool
+       * card still running (ok === null) when the turn's terminal frame
+       * landed (done/stopped/error — the result frame was missed) settles
+       * to ok:false + this marker, so the row renders as a settled
+       * "interrupted" row instead of a running chip that never ends. Live
+       * overlay ONLY — the persisted fold never carries it; the rehydrate
+       * swap remains the truth cure (the log's own rows replace the
+       * overlay wholesale at turn end). */
+      interrupted?: true;
       outputSummary: string | null;
       /** Live tail of a running tool (tool-output frames). */
       outputTail: string | null;
@@ -1796,11 +1805,20 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
     case "done": {
       next.phase = "idle";
       next.terminal = "done";
+      // R128-W6 — SETTLE THE STUCK RUNNING CARDS: any tool item whose result
+      // frame was missed (ok === null — the turn ended underneath it) settles
+      // to the INTERRUPTED state instead of running forever (the "Writing
+      // src/a.ts…" chip that never ended when the result frame was lost).
+      // The rehydrate swap that follows remains the truth cure — this only
+      // keeps the live overlay honest in the gap before it lands.
+      settleInterruptedToolItems(items);
       break;
     }
     case "stopped": {
       next.phase = "idle";
       next.terminal = "stopped";
+      // R128-W6 — the same interrupted settle (a stop can land mid-call).
+      settleInterruptedToolItems(items);
       break;
     }
     case "error": {
@@ -1867,6 +1885,9 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
         providerError: next.error.providerError ?? null,
         classMessage: next.error.classMessage ?? null,
       });
+      // R128-W6 — the error terminal settles the stuck running cards too
+      // (the turn died underneath them — no result frame is coming).
+      settleInterruptedToolItems(items);
       break;
     }
     default: {
@@ -1886,6 +1907,32 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
 function mergeOldestChunks(chunks: string[]): string[] {
   if (chunks.length < 2) return chunks;
   return [chunks[0] + chunks[1], ...chunks.slice(2)];
+}
+
+/**
+ * R128-W6 — the terminal frames' honest settle: every STILL-RUNNING tool
+ * item (ok === null — its result frame never arrived) flips to the
+ * INTERRUPTED state (ok:false + the additive `interrupted` marker +
+ * live:false so the turn block settles with it). Idempotent by construction
+ * (only ok === null items are touched — a second terminal frame is a no-op);
+ * the rehydrate that follows swaps in the persisted truth wholesale.
+ */
+function settleInterruptedToolItems(items: TranscriptItem[]): void {
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    if (item !== undefined && item.kind === "tool" && item.ok === null) {
+      items[i] = {
+        ...item,
+        ok: false,
+        live: false,
+        interrupted: true,
+        // The streaming preview raw is spent — the row settles, exactly the
+        // tool-result path's own strip (the marker carries the story now).
+        toolCallId: null,
+        inputRaw: null,
+      };
+    }
+  }
 }
 
 /** The stream ended WITHOUT a terminal frame (close event, or the app

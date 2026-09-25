@@ -31,8 +31,16 @@
  * picker renders its explicit state row ("Hidden — tools never render in
  * the transcript") with a one-tap "Show tool activity" action back to
  * detailed; the rung itself can no longer be SELECTED going forward.
+ *
+ * R128-W6 — the sync's honest give-up row: a local appearance change whose
+ * PUT could not reach the desktop (offline flip, failed PUT) rides the
+ * pending-flush machinery in features/appearance-sync.ts (flushed at the
+ * next connect/hello BEFORE the server apply); after 3 failed flushes the
+ * change is honestly lost and THIS quiet danger row says so. Any fresh
+ * chip flip re-arms the sync and clears the row on its next landed PUT.
  */
 
+import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { Check } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
@@ -54,6 +62,7 @@ import {
   type ToolActivity,
 } from "@/design/theme";
 import { toolActivityIsHidden } from "@/features/chat-prefs";
+import { appearanceSyncStatus, subscribeAppearanceSyncStatus } from "@/features/appearance-sync";
 import { RADIUS_INPUT, RADIUS_PILL, spacing, THEMES, type ThemeColors } from "@/design/tokens";
 import { selectionHaptic } from "@/design/haptics";
 import { mobLog } from "@/lib/log";
@@ -112,6 +121,15 @@ export default function AppearanceSettingsScreen() {
     setToolActivity,
     tokens,
   } = useTheme();
+
+  // R128-W6 — the appearance sync's surfaced state (the give-up row's
+  // source; the subscribe seam re-renders it live — the machinery in
+  // features/appearance-sync.ts owns the story).
+  const [syncError, setSyncError] = useState<string | null>(appearanceSyncStatus().error);
+  useEffect(() => {
+    setSyncError(appearanceSyncStatus().error);
+    return subscribeAppearanceSyncStatus(() => setSyncError(appearanceSyncStatus().error));
+  }, []);
 
   return (
     <ScreenScaffold title="Appearance" back subtitle="the phone's own material">
@@ -247,6 +265,18 @@ export default function AppearanceSettingsScreen() {
           </ChatPrefRow>
         </View>
       </ClayCard>
+
+      {/* R128-W6 — the sync's honest give-up row (the whole appearance
+          domain's story, so it sits under the Chat card): a local change
+          that could not reach the desktop after 3 flush attempts. Quiet
+          danger caption — an honest state, not an alarm card. */}
+      {syncError !== null && (
+        <View style={styles.syncErrorRow} testID="appearance-sync-error">
+          <TypeCaption numberOfLines={2} style={[styles.syncErrorText, { color: tokens.danger }]}>
+            {syncError}
+          </TypeCaption>
+        </View>
+      )}
     </ScreenScaffold>
   );
 }
@@ -385,6 +415,15 @@ const styles = StyleSheet.create({
   // The color rides tokens at render (textTertiary — the quiet meta voice);
   // only the layout lives here.
   legacyHiddenText: {
+    textAlign: "center",
+  },
+  // ── R128-W6 — the sync give-up row (the legacy state row's own grammar:
+  // a centered quiet caption; the danger tint rides tokens at render) ──
+  syncErrorRow: {
+    alignItems: "center",
+    paddingHorizontal: spacing.lg,
+  },
+  syncErrorText: {
     textAlign: "center",
   },
 });

@@ -161,13 +161,17 @@ views, charts that open at the oldest end)
   `closest("[data-bar-idx]")`) is unchanged; the DEFECT it fixes is painted
   rects without the idx eating the pointer over the bar body (the owner's
   "hover only works at the top area" complaint).
-- **Chart tooltip placement — ROUND-127 (the edge law)**: a tooltip centers
-  on its bar only while it fits; near the FIRST/LAST bars it clamps inside
-  the chart card's content box (align the tooltip's near edge to the plot's
-  edge + a small inset). NEVER a `translateX(-50%)` that overflows the card
-  at the right end (the owner's "details show where there is no place to
-  view them"). The clamp math rides the shared helper in
-  `usage-helpers.ts` (`clampTooltipX`), one spelling for every chart.
+- **Chart tooltip placement — ROUND-128 (the side-placement law)**: a
+  tooltip renders to the SIDE of the hovered column — to its RIGHT when
+  the column sits in the left half of the plot, to its LEFT when it sits
+  in the right half — pinned to the plot's TOP edge. It NEVER centers
+  itself over the hovered bar (the owner's "it was showing the details
+  exactly on the top, centered on it" complaint — the R127 center-on-bar
+  law is RETIRED). Near the plot's edges the side placement still clamps
+  inside the chart card's content box (align the tooltip's near edge to
+  the plot's edge + a small inset); NEVER a `translateX(-50%)` that
+  overflows the card at the right end. The math rides the shared helper
+  in `usage-helpers.ts`, one spelling for every chart.
 - **Dense-series labeling — ROUND-127 (the sparse-tick + hour laws)**: when
   a series renders more bars than the label band fits (~14 at 20px bars),
   x-labels thin to SPARSE TICKS (the ModelStackChart 4-tick pattern —
@@ -176,12 +180,26 @@ views, charts that open at the oldest end)
   tooltip header through a DEDICATED hour-label branch — hour dates NEVER
   reach the `\`${date}T00:00:00Z\`` day-label helpers (they template-append
   and yield Invalid Date; dashboard/helpers.ts is day-only by contract).
-- **Scroll-to-latest — ROUND-127 (the newest-end law)**: any chart whose
-  natural width overflows its card (`overflow-x-auto`) MOUNTS at the
-  NEWEST end (scrollLeft = scrollWidth on mount + on every range/data
-  swap). A 90-day token-activity that opens at the oldest week with the
-  live edge off-screen is a defect (the owner's "should automatically
-  scroll to the latest one").
+- **Chart bar-fill — ROUND-128 (the fill law)**: a day-granularity bar chart
+  whose natural width FITS its card FILLS the card — the bar pitch
+  stretches to the MEASURED scroller width (a ResizeObserver/clientWidth
+  read, capped at a comfortable maximum pitch) so a 14-day view never
+  parks a 358px chart inside a ~900px card with dead margins on both
+  sides (the owner's "the bars could be made wider to fit the things in,
+  or spaced apart a little bit"). Overflowing series keep the natural
+  pitch and ride the newest-end law instead. `ModelStackChart.barGeometry`
+  is the count-based precedent; the fill law adds the width-based leg.
+- **Scroll-to-latest — ROUND-128 (the newest-end law, reinforced)**: any
+  chart whose natural width overflows its card (`overflow-x-auto`) MOUNTS
+  at the NEWEST end — landed PRE-PAINT (`useLayoutEffect`, never the
+  post-paint `useEffect` that flashes the oldest end for a frame),
+  re-asserted on every range/data/months-window swap keyed by DATA
+  IDENTITY (a same-length window swap must re-land too), and the
+  entrance stagger is CAPPED on EVERY chart (≤0.4s total sweep — an
+  uncapped old-to-new sweep reads as "starts from the oldest month").
+  A 90-day token-activity that opens at the oldest week with the live
+  edge off-screen is a defect (the owner's "should automatically scroll
+  to the latest one").
 - **Anti-jitter kit** (research §3.2): every numeric element renders
   `tabular-nums` (digits hold width while values grow); chart wrappers
   reserve their final height (`min-h` matching the fixed SVG geometry) so
@@ -228,7 +246,15 @@ compressed-vs-full directive):
   target + the one-line result summary (`exit 0`, `+N −M`, counts — only
   what the tool's own output carries, R96-H honesty) + expand chevron; the
   status word rides the row's `aria-label`. No per-tool duration — the data
-  does not exist (noted, never invented).
+  does not exist (noted, never invented). **ROUND-128 (the single-icon
+  anatomy)**: a file-family row carries exactly ONE file glyph — the
+  per-extension colored icon (TOKENS §6 exception #5) before the mono
+  target — and NEVER a second generic glyph: the `TOOL_ICONS` family
+  glyph is dropped for file rows, and the path pill renders WITHOUT its
+  internal icon inside tool rows (the owner's "first a file icon, then
+  the action, then the colored icon, then the filename, then the simple
+  white image again" — five marks is clutter; status → verb → colored
+  icon → filename → chevron is the whole row).
 - **Turn footer**: one hover row — copy (+ the debug-gated full-turn copy),
   thumbs, then the stats line right-aligned as ONE mono `tabular-nums` text
   (time · in · out · tok/s, middle-dot separated) — never per-stat chips.

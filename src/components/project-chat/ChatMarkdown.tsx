@@ -327,7 +327,20 @@ export function matchUrl(token: string): string | null {
 }
 
 /** Inline clickable pill for a file path — opens it in the right sidebar. */
-export function PathPill({ path, projectId }: { path: string; projectId: string }) {
+export function PathPill({
+  path,
+  projectId,
+  suppressIcon = false,
+}: {
+  path: string;
+  projectId: string;
+  /** ROUND-128 (R128-W5, COMPONENTS §6 — the ToolLine single-icon anatomy):
+   * tool rows render the per-extension FileTypeIcon BEFORE the pill, so the
+   * pill's own internal glyph would be a SECOND file mark on the same row —
+   * every tool-row context passes true. Default false: a prose answer's pill
+   * keeps its glyph (that pill is the sentence's ONLY file mark). */
+  suppressIcon?: boolean;
+}) {
   const isCodeLike = /\.(t|j)sx?$|\.py$|\.rs$|\.go$|\.sh$|\.json$|\.toml$|\.ya?ml$|\.xml$|\.html?$|\.css$|\.scss$|\.md$|\.txt$|\.vue$|\.svelte$/i.test(path);
   const Icon = isCodeLike ? FileCode : File;
   return (
@@ -342,7 +355,9 @@ export function PathPill({ path, projectId }: { path: string; projectId: string 
       // gone, per TOKENS §1 rule 4 + §6). 11.5→12px mono per the ladder.
       className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-accent-soft hover:bg-accent-faded text-ink font-mono text-[12px] transition-colors align-middle cursor-pointer max-w-full overflow-hidden"
     >
-      <Icon size={10} className="shrink-0 text-accent" />
+      {/* R128-W5: suppressed inside tool rows (the row's FileTypeIcon is the
+          ONE file glyph — the pill never doubles it). */}
+      {suppressIcon ? null : <Icon size={10} className="shrink-0 text-accent" />}
       {/* ROUND-43: a very long path can never widen the chat — the label
           ellipsizes inside the pill instead (the full path is on the title). */}
       <span className="min-w-0 flex-1 truncate">{path}</span>

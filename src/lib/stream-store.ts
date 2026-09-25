@@ -2276,15 +2276,22 @@ function handleStreamEvent(
   }
 
   if (event.type === "tool-call") {
-    // ROUND-58 (R58-cf): the args are COMPLETE — the frame carries no
-    // toolCallId, so the accumulated raw is matched to the LATEST unresolved
-    // streaming-input entry with the same toolName and attached to the new
-    // pending ToolUseEntry as liveInput (the live write preview renders from
-    // it while ok === null; the tool-result strips it when the diff card
-    // takes over). The streaming-input entry is consumed either way.
+    // ROUND-58 (R58-cf): the args are COMPLETE — the accumulated raw is
+    // matched to the streaming-input entry and attached to the new pending
+    // ToolUseEntry as liveInput (the live write preview renders from it
+    // while ok === null; the tool-result strips it when the diff card takes
+    // over). The streaming-input entry is consumed either way. (Pre-R128 the
+    // frame carried no toolCallId, so the matching was toolName-only.)
+    // R128-W5: when the frame carries its toolCallId (chat.ts threads the
+    // SDK part id now), the streaming-input entry matches by ID FIRST — a
+    // parallel same-tool pair must never steal each other's preview; the
+    // toolName matching stays as the legacy fallback (frames without an
+    // id — older sidecars, mock shapes).
     const streamingIdx = [...liveTurn.streamingToolInputs]
       .reverse()
-      .findIndex((s) => s.toolName === event.toolName);
+      .findIndex((s) =>
+        event.toolCallId !== undefined ? s.toolCallId === event.toolCallId : s.toolName === event.toolName,
+      );
     const matchedStreaming =
       streamingIdx === -1 ? null : liveTurn.streamingToolInputs[liveTurn.streamingToolInputs.length - 1 - streamingIdx];
     const streamingToolInputs =
@@ -2297,6 +2304,9 @@ function handleStreamEvent(
       argsSummary: event.argsSummary,
       ok: null,
       ts: new Date().toISOString(),
+      // R128-W5: the call's identity rides the live row — the tool-result
+      // attachment below matches by it FIRST.
+      ...(event.toolCallId !== undefined ? { toolCallId: event.toolCallId } : {}),
     };
     const liveEntry: LiveToolUseEntry =
       matchedStreaming !== null && matchedStreaming.raw !== ""
@@ -2331,12 +2341,25 @@ function handleStreamEvent(
   }
 
   if (event.type === "tool-result") {
-    // Attach the result to the matching in-flight row (last null-ok tool entry).
+    // Attach the result to the matching in-flight row. R128-W5: ID FIRST —
+    // when the frame carries its toolCallId, the unresolved row with THAT
+    // id resolves (parallel same-tool calls completing out of order attach
+    // to the RIGHT row); the legacy last-null-ok toolName matching stays as
+    // the fallback for frames without an id (older sidecars / sync-path
+    // children). A frame WITH an id that matches no unresolved row falls to
+    // the append path below (the call's own tool-call frame was never seen
+    // — joined mid-stream — never a wrong row).
     const flat = liveTurn.working.flatMap((e) => (e.type === "tool" ? [e.tool] : []));
-    const idx = [...flat].reverse().findIndex(
-      (x) => x.toolName === event.toolName && x.ok === null,
-    );
-    if (idx === -1) {
+    let matched: number;
+    if (event.toolCallId !== undefined) {
+      matched = flat.findIndex((x) => x.toolCallId === event.toolCallId && x.ok === null);
+    } else {
+      const idx = [...flat].reverse().findIndex(
+        (x) => x.toolName === event.toolName && x.ok === null,
+      );
+      matched = idx === -1 ? -1 : flat.length - 1 - idx;
+    }
+    if (matched === -1) {
       // No matching in-flight row — append a completed entry.
       const entry: ToolUseEntry = {
         seq: getSeq(sessionId),
@@ -2345,6 +2368,7 @@ function handleStreamEvent(
         ok: event.ok,
         ts: new Date().toISOString(),
         ...(event.outputSummary ? { outputSummary: event.outputSummary } : {}),
+        ...(event.toolCallId !== undefined ? { toolCallId: event.toolCallId } : {}),
       };
       patchSession(sessionId, {
         liveTurn: {
@@ -2354,7 +2378,6 @@ function handleStreamEvent(
       });
       return;
     }
-    const matched = flat.length - 1 - idx;
     let consumed = 0;
     const working = liveTurn.working.map((entry) => {
       if (entry.type !== "tool") return entry;
@@ -2378,10 +2401,12 @@ function handleStreamEvent(
       return entry;
     });
     // ROUND-58 (R58-cf): a tool-result also settles any still-unresolved
-    // streaming-input entry of the same tool (the final rendering owns the
-    // args now) — the preview never outlives its tool.
-    const streamingToolInputs = liveTurn.streamingToolInputs.filter(
-      (s) => s.toolName !== event.toolName,
+    // streaming-input entry of the same call (the final rendering owns the
+    // args now) — the preview never outlives its tool. R128-W5: by ID when
+    // the frame carries one (a parallel pair's result settles only ITS own
+    // preview), else the legacy toolName filter.
+    const streamingToolInputs = liveTurn.streamingToolInputs.filter((s) =>
+      event.toolCallId !== undefined ? s.toolCallId !== event.toolCallId : s.toolName !== event.toolName,
     );
     patchSession(sessionId, {
       liveTurn: {
@@ -2413,12 +2438,20 @@ function handleStreamEvent(
     // the same name); WorkingSection renders the capped tail under the
     // pill while ok === null. No matching in-flight row → ignore (the
     // backend always emits tool-call first).
+    // R128-W5: by toolCallId FIRST when the frame carries one (the exec
+    // tool's emit site does not thread it today — the branch is the
+    // forward-compatible leg), else the legacy last-null-ok toolName match.
     const flat = liveTurn.working.flatMap((e) => (e.type === "tool" ? [e.tool] : []));
-    const idx = [...flat].reverse().findIndex(
-      (x) => x.toolName === event.toolName && x.ok === null,
-    );
-    if (idx === -1) return;
-    const matched = flat.length - 1 - idx;
+    let matched: number;
+    if (event.toolCallId !== undefined) {
+      matched = flat.findIndex((x) => x.toolCallId === event.toolCallId && x.ok === null);
+    } else {
+      const idx = [...flat].reverse().findIndex(
+        (x) => x.toolName === event.toolName && x.ok === null,
+      );
+      matched = idx === -1 ? -1 : flat.length - 1 - idx;
+    }
+    if (matched === -1) return;
     let consumed = 0;
     const working = liveTurn.working.map((entry) => {
       if (entry.type !== "tool") return entry;

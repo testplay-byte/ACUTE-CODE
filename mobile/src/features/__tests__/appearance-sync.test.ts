@@ -14,13 +14,17 @@ import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
 
 import type { ApiCallInit, ApiResult } from "@/link/connection";
 import {
+  APPEARANCE_SYNC_GAVE_UP,
+  PENDING_FLUSH_MAX_ATTEMPTS,
   applyServerAppearanceValue,
+  appearanceSyncStatus,
   fetchAppearance,
   isApplyingRemoteAppearance,
   putAppearance,
   pushAppearancePatch,
   resetAppearanceSyncForTest,
   startAppearanceSync,
+  subscribeAppearanceSyncStatus,
   type AppearanceControl,
   type AppearancePushTarget,
 } from "../appearance-sync";
@@ -40,11 +44,12 @@ function makeManager(opts: {
 } = {}): AppearancePushTarget & {
   calls: RecordedCall[];
   setStatus(next: string): void;
+  setRespondOk(): void;
 } {
   const calls: RecordedCall[] = [];
   let current = opts.status ?? "connected";
   const listeners = new Set<() => void>();
-  const respond =
+  let respond =
     opts.respond ??
     (() => ({
       ok: true,
@@ -71,10 +76,20 @@ function makeManager(opts: {
       current = next;
       for (const listener of listeners) listener();
     },
+    /** Swap the responder to always-success (the recovery-leg fakes). */
+    setRespondOk(): void {
+      respond = () => ({
+        ok: true,
+        status: 200,
+        headers: {},
+        bodyText: JSON.stringify({ themeId: "bento", mode: "dark" }),
+      });
+    },
   };
   return Object.assign(manager, {
     calls,
     setStatus: manager.setStatus,
+    setRespondOk: manager.setRespondOk,
   });
 }
 
@@ -306,11 +321,13 @@ describe("pushAppearancePatch — the optimistic write-through", () => {
     expect(manager.calls[0]?.init?.bodyText).toBe('{"chatDensity":"compact","toolActivity":"hidden"}');
   });
 
-  it("offline → the PUT is skipped (the local value is the offline fallback)", async () => {
+  it("offline → the PUT is skipped and the patch is recorded PENDING (R128-W6: not lost — the next connect flushes it)", async () => {
     const manager = makeManager({ status: "offline" });
     pushAppearancePatch(manager, { mode: "dark" });
     await settle();
     expect(manager.calls).toHaveLength(0);
+    // The patch rides the next boundary instead of dying here.
+    expect(appearanceSyncStatus()).toEqual({ pending: { mode: "dark" }, flushAttempts: 0, error: null });
   });
 
   it("THE ECHO PIN: applying a server value through the theme setters NEVER PUTs it back", async () => {
@@ -348,13 +365,256 @@ describe("pushAppearancePatch — the optimistic write-through", () => {
     expect(manager.calls).toHaveLength(0); // no PUT-back — no echo loop
   });
 
-  it("a failed PUT is silent (the local value stands; no unhandled rejection)", async () => {
+  it("a failed PUT is no longer LOST — the patch is recorded pending (R128-W6), still no unhandled rejection", async () => {
     const manager = makeManager({
       respond: () => Promise.reject(new Error("transport died")),
     });
     pushAppearancePatch(manager, { themeId: "mono" });
     await expect(settle()).resolves.toBeUndefined();
     expect(manager.calls).toHaveLength(1); // it went out; the failure was swallowed
+    // ...and recorded: the next hello retries it before any server apply.
+    expect(appearanceSyncStatus().pending).toEqual({ themeId: "mono" });
+  });
+
+  it("an HTTP-level PUT failure (ok:false outcome) is pending too — not just transport throws", async () => {
+    const manager = makeManager({
+      respond: (call) =>
+        call.init?.method === "PUT"
+          ? { ok: false, status: 500, headers: {}, bodyText: "{\"error\":{\"code\":\"BOOM\",\"message\":\"no\"}}" }
+          : { ok: true, status: 200, headers: {}, bodyText: JSON.stringify({ themeId: "bento", mode: "dark" }) },
+    });
+    pushAppearancePatch(manager, { toolActivity: "detailed" });
+    await settle();
+    expect(manager.calls).toHaveLength(1);
+    expect(appearanceSyncStatus().pending).toEqual({ toolActivity: "detailed" });
+  });
+
+  it("a successful connected PUT leaves NO pending state (the normal flow is unchanged)", async () => {
+    const manager = makeManager();
+    pushAppearancePatch(manager, { themeId: "sunset" });
+    await settle();
+    expect(manager.calls).toHaveLength(1);
+    expect(appearanceSyncStatus()).toEqual({ pending: null, flushAttempts: 0, error: null });
+  });
+
+  it("a second offline flip MERGES into the pending patch; a re-flip of the same field wins", async () => {
+    const manager = makeManager({ status: "offline" });
+    pushAppearancePatch(manager, { toolActivity: "detailed", mode: "dark" });
+    pushAppearancePatch(manager, { chatTextSize: "large" });
+    await settle();
+    expect(appearanceSyncStatus().pending).toEqual({
+      toolActivity: "detailed",
+      mode: "dark",
+      chatTextSize: "large",
+    });
+    // The re-flip overwrites its own field (partial-PUT semantics).
+    pushAppearancePatch(manager, { mode: "light" });
+    expect(appearanceSyncStatus().pending).toEqual({
+      toolActivity: "detailed",
+      mode: "light",
+      chatTextSize: "large",
+    });
+  });
+
+  it("the status seam notifies its subscribers (the Appearance row's re-render source)", () => {
+    const seen: number[] = [];
+    const stop = subscribeAppearanceSyncStatus(() => seen.push(seen.length));
+    const offline = makeManager({ status: "offline" });
+    pushAppearancePatch(offline, { mode: "dark" });
+    expect(seen).toHaveLength(1); // the pending record notified
+    stop();
+    pushAppearancePatch(offline, { mode: "light" });
+    expect(seen).toHaveLength(1); // unsubscribed — no further notify
+  });
+});
+
+// ── R128-W6 — the pending-patch machinery (no silent hello-revert) ──────────
+
+describe("startAppearanceSync — the pending flush at connect/hello boundaries", () => {
+  /** A manager whose PUTs fail until the `putFailures`-th call (then land),
+   * backed by a little SERVER STATE the successful PUTs merge into and the
+   * GETs answer — the hello-revert shape honestly modeled: the server holds
+   * the stale value until our PUT lands, then it echoes our own fix. Starts
+   * offline so the sync's startup hydrate stays quiet until the test drives
+   * a boundary. */
+  function makeFlakyManager(putFailures: number): AppearancePushTarget & {
+    calls: RecordedCall[];
+    setStatus(next: string): void;
+    setRespondOk(): void;
+  } {
+    let putIndex = 0;
+    const server: Record<string, unknown> = {
+      themeId: "bento",
+      mode: "dark",
+      toolActivity: "hidden", // the stale trap value
+    };
+    return makeManager({
+      status: "offline",
+      respond: (call) => {
+        if (call.init?.method === "PUT") {
+          putIndex += 1;
+          if (putIndex <= putFailures) {
+            return Promise.reject(new Error("relay blip"));
+          }
+          try {
+            Object.assign(server, JSON.parse(String(call.init?.bodyText)));
+          } catch {
+            // the fake tolerates a malformed body — the route's own job
+          }
+        }
+        return { ok: true, status: 200, headers: {}, bodyText: JSON.stringify(server) };
+      },
+    });
+  }
+
+  it("PUT fails while connected → the next boundary (the startup hydrate) FLUSHES first, then hydrates the server's ECHO of our fix", async () => {
+    // The relay blip: the PUT for the un-hide fix dies mid-flight.
+    const manager = makeFlakyManager(1);
+    manager.setStatus("connected");
+    pushAppearancePatch(manager, { toolActivity: "detailed" });
+    await settle();
+    expect(appearanceSyncStatus().pending).toEqual({ toolActivity: "detailed" });
+
+    const applied: unknown[] = [];
+    const frames = makeFrames();
+    const stop = startAppearanceSync((value) => {
+      applied.push(value);
+      return true;
+    }, { manager, events: frames });
+    await settle();
+    // The connect boundary: the flush PUT goes out FIRST (the failed
+    // original + the flush retry)...
+    const putCalls = manager.calls.filter((call) => call.init?.method === "PUT");
+    expect(putCalls).toHaveLength(2);
+    // ...and only after it lands does the hydration GET apply the server
+    // value — which now echoes our own fix (toolActivity: detailed), never
+    // the stale "hidden" the old code silently re-applied.
+    expect(applied).toEqual([{ themeId: "bento", mode: "dark", toolActivity: "detailed" }]);
+    expect(appearanceSyncStatus()).toEqual({ pending: null, flushAttempts: 0, error: null });
+    stop();
+  });
+
+  it("an OFFLINE flip rides the reconnect: the connect transition flushes it before the hydration", async () => {
+    const manager = makeManager({ status: "offline" });
+    // The owner taps "Show tool activity" while the link is down.
+    pushAppearancePatch(manager, { toolActivity: "detailed" });
+    await settle();
+    expect(manager.calls).toHaveLength(0);
+
+    const applied: unknown[] = [];
+    const frames = makeFrames();
+    const stop = startAppearanceSync((value) => {
+      applied.push(value);
+      return true;
+    }, { manager, events: frames });
+    await settle();
+    expect(applied).toEqual([]); // offline — nothing yet
+
+    // The reconnect: flush FIRST (the PUT), hydrate SECOND (the GET).
+    manager.setStatus("connected");
+    await settle();
+    const putCalls = manager.calls.filter((call) => call.init?.method === "PUT");
+    expect(putCalls).toHaveLength(1);
+    expect(putCalls[0]?.init?.bodyText).toBe('{"toolActivity":"detailed"}');
+    // The GET applied AFTER the flush (call order: PUT before GET).
+    const methods = manager.calls.map((call) => call.init?.method ?? "GET");
+    expect(methods.indexOf("PUT")).toBeLessThan(methods.lastIndexOf("GET"));
+    expect(applied).toHaveLength(1);
+    expect(appearanceSyncStatus().pending).toBeNull();
+    stop();
+  });
+
+  it("THE WINS PIN: a failed flush (attempts left) BLOCKS the server apply — the local fix stands", async () => {
+    // Every PUT fails forever — the flush can never land.
+    const manager = makeFlakyManager(99);
+    pushAppearancePatch(manager, { toolActivity: "detailed" });
+    await settle();
+
+    const applied: unknown[] = [];
+    const frames = makeFrames();
+    const stop = startAppearanceSync((value) => {
+      applied.push(value);
+      return true;
+    }, { manager, events: frames });
+    await settle();
+    expect(applied).toEqual([]); // offline — nothing yet
+
+    // Boundary #1 (the reconnect): the flush fails (attempt 1) — the
+    // server's stale "hidden" is NOT applied over the local fix.
+    manager.setStatus("connected");
+    await settle();
+    expect(applied).toEqual([]);
+    expect(appearanceSyncStatus()).toEqual({
+      pending: { toolActivity: "detailed" },
+      flushAttempts: 1,
+      error: null,
+    });
+
+    // Boundary #2 (a hello): the flush fails again — still protected.
+    frames.emit({ type: "hello" });
+    await settle();
+    expect(applied).toEqual([]);
+    expect(appearanceSyncStatus().flushAttempts).toBe(2);
+    stop();
+  });
+
+  it("gives up after 3 failed flushes: the patch is dropped, the honest error surfaces, the hydration converges", async () => {
+    const manager = makeFlakyManager(99);
+    pushAppearancePatch(manager, { toolActivity: "detailed" });
+    await settle();
+
+    const applied: unknown[] = [];
+    const frames = makeFrames();
+    const stop = startAppearanceSync((value) => {
+      applied.push(value);
+      return true;
+    }, { manager, events: frames });
+    await settle();
+
+    manager.setStatus("connected"); // boundary 1 — attempt 1, blocked
+    await settle();
+    frames.emit({ type: "hello" }); // boundary 2 — attempt 2, blocked
+    await settle();
+    frames.emit({ type: "hello" }); // boundary 3 — attempt 3: give up + converge
+    await settle();
+    expect(PENDING_FLUSH_MAX_ATTEMPTS).toBe(3);
+    // The patch is gone, the honest error is surfaced (pinned copy)...
+    expect(appearanceSyncStatus()).toEqual({
+      pending: null,
+      flushAttempts: 0,
+      error: APPEARANCE_SYNC_GAVE_UP,
+    });
+    // ...and the hydration proceeded (converge with the story told).
+    expect(applied).toEqual([{ themeId: "bento", mode: "dark", toolActivity: "hidden" }]);
+    stop();
+  });
+
+  it("a landed PUT clears the surfaced error — the state is a story, not a scar", async () => {
+    const manager = makeFlakyManager(99);
+    pushAppearancePatch(manager, { toolActivity: "detailed" });
+    await settle();
+    const applied: unknown[] = [];
+    const frames = makeFrames();
+    const stop = startAppearanceSync((value) => {
+      applied.push(value);
+      return true;
+    }, { manager, events: frames });
+    await settle();
+    manager.setStatus("connected");
+    await settle();
+    frames.emit({ type: "hello" });
+    await settle();
+    frames.emit({ type: "hello" }); // attempt 3 — give up, error surfaces
+    await settle();
+    expect(appearanceSyncStatus().error).toBe(APPEARANCE_SYNC_GAVE_UP);
+
+    // The owner re-flips while connected — the fresh PUT lands (the manager
+    // now answers) and the error clears.
+    manager.setRespondOk();
+    pushAppearancePatch(manager, { toolActivity: "compact" });
+    await settle();
+    expect(appearanceSyncStatus()).toEqual({ pending: null, flushAttempts: 0, error: null });
+    stop();
   });
 });
 

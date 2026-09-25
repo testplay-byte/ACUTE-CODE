@@ -146,7 +146,15 @@ describe("parseEventsFrame", () => {
     expect(parseEventsFrame(JSON.stringify({ type: "session", kind: "event" }))).toBeNull(); // no sessionId
     expect(parseEventsFrame(JSON.stringify({ type: "session", sessionId: 1, kind: "event" }))).toBeNull();
     expect(parseEventsFrame(JSON.stringify({ type: "session", sessionId: "s", kind: "weird" }))).toBeNull();
-    expect(parseEventsFrame(JSON.stringify({ type: "project", projectId: "p", kind: "deleted" }))).toBeNull();
+    // R128-W3: "deleted" joined the project-frame vocabulary (the desktop
+    // announces deletions) — the honest-null pin moves to a genuinely
+    // unknown kind.
+    expect(parseEventsFrame(JSON.stringify({ type: "project", projectId: "p", kind: "purged" }))).toBeNull();
+    expect(parseEventsFrame(JSON.stringify({ type: "project", projectId: "p", kind: "deleted" }))).toEqual({
+      type: "project",
+      projectId: "p",
+      kind: "deleted",
+    });
     expect(parseEventsFrame(JSON.stringify({ type: "settings", value: 1 }))).toBeNull();
     expect(parseEventsFrame(JSON.stringify("hello"))).toBeNull();
     expect(parseEventsFrame(JSON.stringify([1, 2]))).toBeNull();

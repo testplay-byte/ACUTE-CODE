@@ -27,6 +27,8 @@
  *     meta.*, turn.started, user.queued, error, done, stopped, debug-*,
  *     subagent-status…)
  *   - routes/projects.ts POST /projects      → {type:"project"}
+ *   - routes/projects.ts DELETE /projects/:id → {type:"project", kind:"deleted"}
+ *     (R128-W3 — the delete announcement; watchers refresh their lists)
  *   - routes/settings.ts every domain PUT    → {type:"settings"}
  *
  * Differences from notification-bus (kept COMPLETELY untouched — the phone
@@ -101,9 +103,10 @@ export type EventsBusFrame =
   // This is what lets the desktop watch a turn the phone started — or the
   // phone watch one the CLI started — with the same delta stream.
   | { type: "turn"; sessionId: string; frame: unknown }
-  // A project row was created (updated reserved for future PATCH surfaces —
-  // no project-update route exists today).
-  | { type: "project"; projectId: string; kind: "created" | "updated" }
+  // A project row was created or deleted (updated reserved for future
+  // PATCH surfaces — no project-update route exists today). R128-W3 adds
+  // "deleted": DELETE /projects/:id announces it after its cascade commits.
+  | { type: "project"; projectId: string; kind: "created" | "updated" | "deleted" }
   // A settings domain was PUT (value = the persisted settings object as the
   // domain's GET serves it — secrets NEVER ride this frame; the
   // cloud-connector domain broadcasts hostKeyPresent, not the key).
@@ -188,8 +191,9 @@ class EventsBus {
     this.publish({ type: "turn", sessionId, frame });
   }
 
-  /** A project row was created (or updated, when such a route exists). */
-  publishProjectFrame(projectId: string, kind: "created" | "updated"): void {
+  /** A project row was created, updated (when such a route exists), or
+   * deleted (R128-W3 — the cascade delete's announcement). */
+  publishProjectFrame(projectId: string, kind: "created" | "updated" | "deleted"): void {
     this.publish({ type: "project", projectId, kind });
   }
 

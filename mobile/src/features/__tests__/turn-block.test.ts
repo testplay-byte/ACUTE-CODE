@@ -163,7 +163,7 @@ describe("turn-block — the tool-line word helpers", () => {
     expect(humanizeToolName("")).toBe("");
   });
 
-  it("writePath prefers the streaming raw's path arg, tolerates the file_path spelling, else the settled argsSummary's leading path segment", () => {
+  it("writePath prefers the streaming raw's path arg, tolerates the file_path spelling, else the settled argsSummary's path segment", () => {
     // live: the raw carries the path before the args complete
     expect(
       writePath(toolItem("t1", { inputRaw: '{"path":"src/a.ts","content":"const x' })),
@@ -172,19 +172,67 @@ describe("turn-block — the tool-line word helpers", () => {
     expect(
       writePath(toolItem("t2", { inputRaw: '{"file_path":"src/b.ts","content":"' })),
     ).toBe("src/b.ts");
-    // live but path-less raw → the settled summary's leading "path:" segment
+    // live but path-less raw → the settled summary's "path:" segment
     expect(
       writePath(toolItem("t3", { inputRaw: '{"content":"x"', argsSummary: "path: src/c.ts" })),
     ).toBe("src/c.ts");
-    // settled: the argsSummary alone
+    // settled: the argsSummary alone (path-first unchanged)
     expect(writePath(toolItem("t4", { argsSummary: "path: src/d.ts, mode: overwrite" }))).toBe(
       "src/d.ts",
     );
     // neither source carries a path → null (never a guess)
     expect(writePath(toolItem("t5", { argsSummary: "command: pnpm test" }))).toBeNull();
     expect(writePath(toolItem("t6", { inputRaw: '{"content":"x"' }))).toBeNull();
-    // a path segment that is NOT the summary's head never matches (the ^ law)
-    expect(writePath(toolItem("t7", { argsSummary: "command: ls, path: nope.ts" }))).toBeNull();
+    // R128-W6 — a path segment that is NOT the summary's head now MATCHES
+    // (the unanchored scan; the old ^ law is retired with the bug it hid).
+    expect(writePath(toolItem("t7", { argsSummary: "command: ls, path: nope.ts" }))).toBe(
+      "nope.ts",
+    );
+  });
+
+  // R128-W6 — the writePath robustness pin: the server's summarizeArgs
+  // orders its segments by the MODEL's JSON key order, so an edit_file
+  // emitted as {oldString, newString, path} yields the path LAST — the row
+  // used to lose its file name (the leading-`path:` requirement never fired).
+  it("R128-W6: an edit_file emitted as {oldString, newString, path} still yields the path — the scan is unanchored", () => {
+    // The exact summarizeArgs shape for that key order (values capped at 80
+    // chars, content/newString rendered as "N chars").
+    expect(
+      writePath(
+        toolItem("e1", {
+          toolName: "edit_file",
+          argsSummary: "oldString: const x = 1;, newString: 12 chars, path: src/a.ts",
+        }),
+      ),
+    ).toBe("src/a.ts");
+    // A longer, more realistic edit summary — the path still answers.
+    expect(
+      writePath(
+        toolItem("e2", {
+          toolName: "edit_file",
+          argsSummary:
+            "oldString: export function writePath(item: ToolItem): string | null {, newString: 180 chars, path: mobile/src/features/turn-block.ts",
+        }),
+      ),
+    ).toBe("mobile/src/features/turn-block.ts");
+    // First occurrence wins — a second "path:" segment never overrides it.
+    expect(
+      writePath(toolItem("e3", { argsSummary: "path: first.ts, mode: overwrite" })),
+    ).toBe("first.ts");
+    // The documented first-occurrence tolerance: "path:" embedded in a
+    // LONGER lowercase key (filepath) still answers — and its value is the
+    // path anyway (camelCase keys like newPath carry a capital P and never
+    // match — the scan is case-sensitive like every segment helper here).
+    expect(
+      writePath(toolItem("e3b", { argsSummary: "filepath: src/renamed.ts, content: 12 chars" })),
+    ).toBe("src/renamed.ts");
+    expect(
+      writePath(toolItem("e3c", { argsSummary: "newPath: src/renamed.ts, content: 12 chars" })),
+    ).toBeNull();
+    // No "path:" anywhere → null as today.
+    expect(
+      writePath(toolItem("e4", { argsSummary: "command: pnpm test, action: run" })),
+    ).toBeNull();
   });
 
   it("writeLineDiff parses the server's own edit confirmation — the ASCII plus, the U+2212 minus, the pinned shape", () => {

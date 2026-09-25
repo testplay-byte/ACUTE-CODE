@@ -54,6 +54,7 @@ import {
   mountToolsHiddenHintBlock,
   releaseToolsHiddenHintBlock,
   resetToolsHiddenHintForTest,
+  toolStatusWord,
   userBubbleBodyPlan,
   wellDefaultOpen,
 } from "@/components/transcript";
@@ -193,5 +194,24 @@ describe("R127-W8 — the tools-hidden hint's once-per-mount law", () => {
     expect(acquireToolsHiddenHint(ownerA, true, 2)).toBe(false);
     releaseToolsHiddenHintBlock(); // the screen unmounts
     expect(acquireToolsHiddenHint(ownerB, true, 2)).toBe(true); // fresh generation
+  });
+});
+
+// ── R128-W6 — the settled tool row's status word (the chip + a11y vocabulary) ──
+
+describe("R128-W6 — toolStatusWord (the quiet chip's one vocabulary)", () => {
+  it("running while the call runs, null on success, failed on a plain failure", () => {
+    expect(toolStatusWord({ ok: null })).toBe("running");
+    expect(toolStatusWord({ ok: true })).toBeNull(); // the result rides the head line
+    expect(toolStatusWord({ ok: false })).toBe("failed");
+  });
+
+  it("INTERRUPTED: a settled call carrying the marker reads as interrupted — the turn ended underneath it", () => {
+    // The live overlay's honest settle (sessions.ts's R128-W6 terminal-frame
+    // settle): ok:false + the additive marker renders NEUTRAL, not failed.
+    expect(toolStatusWord({ ok: false, interrupted: true })).toBe("interrupted");
+    // The marker never masquerades as running or success.
+    expect(toolStatusWord({ ok: null, interrupted: true })).toBe("running"); // not a state we emit
+    expect(toolStatusWord({ ok: true, interrupted: true })).toBeNull();
   });
 });

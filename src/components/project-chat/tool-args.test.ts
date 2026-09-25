@@ -4,9 +4,78 @@
  * the pure formatters that clean a collapsed tool row's glance (path pill
  * target / command headline / delegate role·task_id) plus the failed row's
  * one-line error excerpt. The RAW argsSummary always stays the fallback.
+ *
+ * ROUND-128 (R128-W5) additions: splitShellCommands (the quote-aware
+ * top-level splitter — && / ; / newlines, quotes protect) and
+ * formatToolTarget's batch-command glance ("first · N commands").
  */
 import { describe, expect, it } from "vitest";
-import { formatToolTarget, toolErrorExcerpt } from "./tool-args";
+import {
+  formatToolTarget,
+  splitShellCommands,
+  toolCommandList,
+  toolErrorExcerpt,
+} from "./tool-args";
+
+describe("splitShellCommands (R128-W5 — the quote-aware top-level splitter)", () => {
+  it("splits on && / ; / newlines outside quotes, dropping blank segments", () => {
+    expect(splitShellCommands("pnpm install && pnpm build")).toEqual(["pnpm install", "pnpm build"]);
+    expect(splitShellCommands("cd src; pnpm test")).toEqual(["cd src", "pnpm test"]);
+    expect(splitShellCommands("git add .\ngit commit -m 'x'\ngit push")).toEqual([
+      "git add .",
+      "git commit -m 'x'",
+      "git push",
+    ]);
+    // Mixed chaining, in order.
+    expect(splitShellCommands("a && b; c\nd")).toEqual(["a", "b", "c", "d"]);
+    // Blank segments never become commands.
+    expect(splitShellCommands("a &&  ; \n\n  b")).toEqual(["a", "b"]);
+  });
+
+  it("quoted separators are ARGUMENTS, never chains", () => {
+    // Double-quoted && and ; stay inside the one command.
+    expect(splitShellCommands('echo "a && b; c"')).toEqual(['echo "a && b; c"']);
+    // Single-quoted ; likewise.
+    expect(splitShellCommands("echo 'x;y' && echo done")).toEqual(["echo 'x;y'", "echo done"]);
+    // A quote opened in one segment closes in the next (no cross-segment
+    // splitting while inside) — the honest lenient reading.
+    expect(splitShellCommands('echo "unclosed && still one"')).toEqual(['echo "unclosed && still one"']);
+  });
+
+  it("escapes and single-quote literals survive verbatim", () => {
+    // Backslash-escaped separator: not a split point (the shell sees \;).
+    expect(splitShellCommands("echo a\\;b")).toEqual(["echo a\\;b"]);
+    // Backslash inside single quotes is LITERAL (bash rule) — the pair
+    // stays whole and the quote still protects.
+    expect(splitShellCommands("grep 'a\\;b' file ; echo done")).toEqual(["grep 'a\\;b' file", "echo done"]);
+  });
+
+  it("degenerate inputs: empty, whitespace, single command", () => {
+    expect(splitShellCommands("")).toEqual([]);
+    expect(splitShellCommands("   \n\t ; && ")).toEqual([]);
+    expect(splitShellCommands("pnpm exec vitest run")).toEqual(["pnpm exec vitest run"]);
+    // Windows CRLF: the \r trims away with the whitespace.
+    expect(splitShellCommands("a\r\nb")).toEqual(["a", "b"]);
+  });
+
+  it("a single & (background) is NOT a chain point — only && splits", () => {
+    expect(splitShellCommands("node server.js & echo started")).toEqual([
+      "node server.js & echo started",
+    ]);
+  });
+});
+
+describe("toolCommandList (R128-W5 — the terminal card's command source)", () => {
+  it("reads the command: segment and splits it; falls back to the bare summary", () => {
+    expect(toolCommandList("command: pnpm install && pnpm build")).toEqual([
+      "pnpm install",
+      "pnpm build",
+    ]);
+    // Legacy/fixture shape: no "command:" key → the whole summary splits.
+    expect(toolCommandList("pnpm test")).toEqual(["pnpm test"]);
+    expect(toolCommandList("")).toEqual([]);
+  });
+});
 
 describe("formatToolTarget (the collapsed-row glance, per-tool)", () => {
   it("file tools → the path segment (summarizeArgs's 'path:' key)", () => {
@@ -42,14 +111,30 @@ describe("formatToolTarget (the collapsed-row glance, per-tool)", () => {
     });
   });
 
-  it("run_command → the command's first line (multi-line scripts keep the headline only)", () => {
+  it("run_command → the command's first line; a CHAINED batch adds '· N commands' (R128-W5)", () => {
     expect(formatToolTarget("run_command", "command: pnpm exec vitest run")).toEqual({
       kind: "text",
       value: "pnpm exec vitest run",
     });
+    // R128-W5: newline-chained scripts show the FIRST command + the honest
+    // count (the whole string runs as ONE shell invocation).
     expect(formatToolTarget("run_command", "command: git add .\ngit commit -m 'x'\ngit push")).toEqual({
       kind: "text",
-      value: "git add .",
+      value: "git add . · 3 commands",
+    });
+    // && / ; chains count the same way.
+    expect(formatToolTarget("run_command", "command: pnpm install && pnpm build")).toEqual({
+      kind: "text",
+      value: "pnpm install · 2 commands",
+    });
+    expect(formatToolTarget("run_command", "command: cd src; pnpm test")).toEqual({
+      kind: "text",
+      value: "cd src · 2 commands",
+    });
+    // Quoted separators are NOT chains — one command, no suffix.
+    expect(formatToolTarget("run_command", 'command: echo "a && b"')).toEqual({
+      kind: "text",
+      value: 'echo "a && b"',
     });
     // Legacy/fixture shape: the bare command with no "command:" key.
     expect(formatToolTarget("run_command", "pnpm test")).toEqual({

@@ -1913,6 +1913,162 @@ describe("AgentChatPanel R120-C-PC center redo (items 35 + 36)", () => {
     );
   });
 
+  it("R128-W5: the TURN-END LEDGER PROCESSING ROW renders at the transcript's bottom edge AFTER teardown (liveTurn null), resolves on written, then unmounts (MOTION §4)", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r128_ledger",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "R128 ledger row probe",
+          createdAt: "2026-09-23T10:00:00Z",
+          updatedAt: "2026-09-23T10:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy(), SLOW);
+
+    // THE TEARDOWN SHAPE: the turn-end frames ride the events bus AFTER the
+    // own SSE closed — liveTurn is NULL and streamBusy false when they land.
+    // The row must render from the SLICE-level feedbackEvent alone.
+    useStreamStore.setState({
+      bySession: {
+        sess_r128_ledger: {
+          liveTurn: null,
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: false,
+          // The turn-end "writing…" stage (R128-W5 / MOTION.md §4).
+          feedbackEvent: {
+            stage: "writing",
+            phase: "turn-end",
+            entries: null,
+            detail: null,
+            ts: Date.now(),
+          },
+        },
+      },
+    });
+    await waitFor(
+      () => expect(document.querySelector('[data-testid="feedback-ledger-live-row"]')).toBeTruthy(),
+      SLOW,
+    );
+    const writingRow = document.querySelector('[data-testid="feedback-ledger-live-row"]');
+    // The same quiet copy voice as the mid-turn line (house lowercase mono).
+    expect(writingRow?.textContent).toContain("writing the self-feedback ledger");
+    // The pulsing live dot rides while writing (the mid-turn line's grammar).
+    expect(writingRow?.querySelector(".ac-pulse")).not.toBeNull();
+    // The mid-turn line does NOT render (phase-scoped slots).
+    expect(document.querySelector('[data-testid="live-feedback-line"]')).toBeNull();
+
+    // "written" → the row RESOLVES in place (brief success state)…
+    useStreamStore.setState({
+      bySession: {
+        sess_r128_ledger: {
+          ...useStreamStore.getState().bySession.sess_r128_ledger,
+          feedbackEvent: {
+            stage: "written",
+            phase: "turn-end",
+            entries: 14,
+            detail: null,
+            ts: Date.now(),
+          },
+        },
+      },
+    });
+    await waitFor(
+      () =>
+        expect(document.querySelector('[data-testid="feedback-ledger-live-row"]')?.textContent).toContain(
+          "self-feedback ledger written · 14 entries",
+        ),
+      SLOW,
+    );
+    // …and the EXISTING toast still fires (R125-B keeps its durable ping).
+    expect(useNotificationStreamStore.getState().lastNotification?.title).toBe(
+      "Self-feedback ledger updated",
+    );
+    // …then the row UNMOUNTS after the brief hold (~2.5s — the
+    // TOOL_COLLAPSE_HOLD_MS contract; long enough to read, never a squat).
+    await waitFor(
+      () => expect(document.querySelector('[data-testid="feedback-ledger-live-row"]')).toBeNull(),
+      { timeout: 5000 },
+    );
+  });
+
+  it("R128-W5: a FAILED turn-end ledger write renders the quiet honest line (never a throw, no silent death)", async () => {
+    const projects = await getFixtureProjects().list();
+    customBackend.backend = createFixtureSessions([
+      {
+        session: {
+          id: "sess_r128_ledger_fail",
+          projectId: projects[0].id,
+          agentId: "agt_scribe",
+          mode: "single",
+          status: "completed",
+          title: "R128 ledger fail probe",
+          createdAt: "2026-09-23T10:00:00Z",
+          updatedAt: "2026-09-23T10:05:00Z",
+        },
+        events: [],
+      },
+    ]);
+    renderWithProviders(<AgentChatPanel projectId={projects[0].id} project={projects[0]} />);
+    await waitFor(() => expect(document.querySelector("[data-empty-state]")).toBeTruthy(), SLOW);
+
+    useStreamStore.setState({
+      bySession: {
+        sess_r128_ledger_fail: {
+          liveTurn: null,
+          streamBusy: false,
+          sendError: null,
+          liveError: null,
+          pendingEcho: null,
+          lastLiveEndMs: Date.now(),
+          lastTurnStoppedByUser: false,
+          lastTurnStoppedTs: null,
+          queued: [],
+          deliveredQueued: [],
+          queueKeptNotice: null,
+          remote: false,
+          feedbackEvent: {
+            stage: "failed",
+            phase: "turn-end",
+            entries: null,
+            detail: "sqlite: disk I/O error",
+            ts: Date.now(),
+          },
+        },
+      },
+    });
+    await waitFor(
+      () => expect(document.querySelector('[data-testid="feedback-ledger-live-row"]')).toBeTruthy(),
+      SLOW,
+    );
+    const row = document.querySelector('[data-testid="feedback-ledger-live-row"]');
+    // The honest quiet line — no pulsing dot on a terminal state.
+    expect(row?.textContent).toContain("the self-feedback ledger could not be written");
+    expect(row?.querySelector(".ac-pulse")).toBeNull();
+    // The failure excerpt rides the title (the quiet hover truth).
+    expect(row?.getAttribute("title")).toBe("sqlite: disk I/O error");
+    // The failed row STAYS (honest persistence until the next turn's reset)
+    // — it does not auto-dismiss like the written state.
+    await new Promise((r) => setTimeout(r, 60));
+    expect(document.querySelector('[data-testid="feedback-ledger-live-row"]')).not.toBeNull();
+  });
+
   it("a FOLDED turn's write renders in the CENTER without expanding anything (item 35 end-to-end: the write row + the answer, no phantom reads)", async () => {
     const projects = await getFixtureProjects().list();
     customBackend.backend = createFixtureSessions([

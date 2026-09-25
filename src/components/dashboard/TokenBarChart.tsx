@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Zap } from "lucide-react";
 import type { ThemeStyles } from "../../lib/themes";
 import { ease } from "../../lib/motion";
 import type { UsageDayBucket } from "../../lib/api";
-import { clampTooltipX } from "../usage/usage-helpers";
+import { placeTooltipBeside, stretchDayBarGeometry } from "../usage/usage-helpers";
 import { shortUtcDay, utcDateLabel, withAlpha } from "./helpers";
 
 /**
@@ -28,18 +28,26 @@ import { shortUtcDay, utcDateLabel, withAlpha } from "./helpers";
  *   defect) — they render `pointer-events: none` (display-only) so the
  *   pointer resolves through the column underneath. The painted rects
  *   carry NO `data-bar-idx` of their own.
- * · R127 — THE TOOLTIP EDGE LAW: the tooltip centers on its bar only while
- *   it fits; near the first/last bars `clampTooltipX` (the shared helper,
- *   usage-helpers.ts — ONE spelling) clamps it inside the chart's content
- *   box. `left` positions the tooltip in an svg-sized relative wrapper (the
- *   tooltip's coordinate space IS the chart's — the flex-centering margin
- *   can no longer offset it off its bar).
+ * · R127 — THE TOOLTIP EDGE LAW (superseded R128 by the side-placement
+ *   law: the tooltip now renders BESIDE the hovered column via the shared
+ *   placeTooltipBeside — right of a left-half column, left of a right-half
+ *   one — with the edge INSET surviving inside the helper; the R127
+ *   center-on-bar behavior and its x:"-50%" slot are RETIRED, the owner's
+ *   "it was showing the details exactly on the top, centered on it"
+ *   complaint).
+ * · R128 — THE FILL LAW: the dashboard card is wide and the fixed 14-day
+ *   window is narrow (a 358px natural chart); the measured container width
+ *   (ResizeObserver on the chart wrapper) stretches the pitch to fill the
+ *   card — capped at 42px bars / 16px gaps (stretchDayBarGeometry, the
+ *   shared ONE spelling with the usage activity chart). Overflow keeps the
+ *   natural pitch; the chart keeps its fixed height.
  * · The hover tooltip card gets the clay surface: `bg-card` + rim +
  *   `.ac-clay-sm` (the small-surface shadow step) — no hand-rolled shadow.
  * · Axis labels: mono 10px tertiary (the meta-mono tier), the hovered/last
- *   tick emphasized in accentDeep + 600. Fourteen 20px bars at a 26px pitch
- *   (≈358px) fit an every-bar 3-char label band — the sparse-tick law
- *   (COMPONENTS §6) does NOT engage at this density.
+ *   tick emphasized in accentDeep + 600. Fourteen natural-20px bars at a
+ *   26px pitch (≈358px unstretched) fit an every-bar 3-char label band —
+ *   the sparse-tick law (COMPONENTS §6) does NOT engage at this density
+ *   (and the R128 fill law only WIDENS the pitch, never thins the band).
  * · Anti-jitter kit (COMPONENTS §6 — binding): the loading/empty states
  *   reserve the chart's final height (`h-[168px]`), values render
  *   `tabular-nums`, and the ONE pointer read (R121-d) resolves the hovered
@@ -51,8 +59,8 @@ const BAR_GAP = 6;
 const CHART_HEIGHT = 140;
 const LABEL_AREA = 28;
 const BAR_RADIUS = 6;
-/** R127 (the edge law): the tooltip's rendered width — the `w-44` class
- *  (176px) on the tooltip card below. */
+/** The tooltip's rendered width — the `w-44` class (176px) on the tooltip
+ *  card below. */
 const TOOLTIP_W = 176;
 
 function fmtCost(usd: number): string {
@@ -120,16 +128,54 @@ export function TokenBarChart({
   const maxTokens = useMemo(() => Math.max(0, ...days.map(dayTotal)), [days]);
   const totalTokens = useMemo(() => days.reduce((s, d) => s + dayTotal(d), 0), [days]);
 
-  const chartWidth = days.length * (BAR_WIDTH + BAR_GAP) - BAR_GAP;
+  // R128-W2 (the fill law): the chart wrapper's MEASURED width — 0 until the
+  // useLayoutEffect below reads it (happy-dom reports 0/0 geometry, so the
+  // unmeasured frame keeps the natural pitch; the ResizeObserver keeps it
+  // fresh on real cards). The wrapper fills the card's content box (the
+  // card's p-4/md:p-5 padding is outside it), so its clientWidth IS the
+  // fill law's available width.
+  const [containerWidth, setContainerWidth] = useState(0);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  // The wrapper mounts only in the ready branch — the observer effect is
+  // keyed on the ready flag so the pending/error→ready swap attaches it.
+  const chartMounted = !isPending && !isError && days.length > 0;
+  useLayoutEffect(() => {
+    if (!chartMounted) return;
+    const el = containerRef.current;
+    if (el === null) return;
+    setContainerWidth(el.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) setContainerWidth(entry.contentRect.width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [chartMounted]);
 
-  // R127 (the edge law): the hovered bar's tooltip position — center on the
-  // bar only while the tooltip fits inside the chart's content box; near the
-  // first/last bars the shared clampTooltipX (usage-helpers.ts — ONE
-  // spelling) clamps it. Null while no bar is hovered.
+  // R128-W2 (the fill law): a fitting 14-day series stretches its pitch to
+  // fill the measured container (capped 42px bars / 16px gaps — the shared
+  // stretchDayBarGeometry, ONE spelling with the usage activity chart's day
+  // view); an unmeasured (0) or overflowing container keeps the natural pitch.
+  const { barWidth, barGap } = stretchDayBarGeometry(
+    days.length,
+    BAR_WIDTH,
+    BAR_GAP,
+    containerWidth,
+  );
+
+  const chartWidth = days.length * (barWidth + barGap) - barGap;
+
+  // R128-W2 (the side-placement law): the hovered bar's tooltip position —
+  // BESIDE the hovered column (right of a left-half column, left of a
+  // right-half one), clamped inside the chart's content box by the shared
+  // placeTooltipBeside. Null while no bar is hovered. `left` IS the
+  // tooltip's own left edge — the retired R127 center-on-bar spelling (the
+  // x:"-50%" slot) is GONE.
   const tooltipX =
     hoveredIdx !== null && days[hoveredIdx] !== undefined
-      ? clampTooltipX(
-          hoveredIdx * (BAR_WIDTH + BAR_GAP) + BAR_WIDTH / 2,
+      ? placeTooltipBeside(
+          hoveredIdx * (barWidth + barGap),
+          barWidth,
           chartWidth,
           TOOLTIP_W,
         )
@@ -178,6 +224,7 @@ export function TokenBarChart({
         </div>
       ) : (
         <div
+          ref={containerRef}
           className="relative flex justify-center"
           onPointerMove={(e) => {
             // R121-d: the ONE pointer read (the R5 law — hover is a pointer
@@ -188,11 +235,11 @@ export function TokenBarChart({
           }}
           onPointerLeave={() => setHoveredIdx(null)}
         >
-          {/* R127 (the edge law): the tooltip's coordinate space — a relative
-              wrapper EXACTLY the svg's size, so the clamped `left` values
-              (computed against chartWidth) position the tooltip against the
-              bars themselves; the flex-centering margin of the outer
-              container can no longer offset it. */}
+          {/* The tooltip's coordinate space — a relative wrapper EXACTLY the
+              svg's size, so the placed `left` values (computed against
+              chartWidth) position the tooltip against the bars themselves;
+              the centering of the outer container can never offset it off
+              its column. */}
           <div className="relative flex">
             <svg
               width={chartWidth}
@@ -235,7 +282,7 @@ export function TokenBarChart({
                 {days.map((day, i) => {
                   const barH =
                     maxTokens > 0 ? Math.max((dayTotal(day) / maxTokens) * CHART_HEIGHT, 4) : 4;
-                  const x = i * (BAR_WIDTH + BAR_GAP);
+                  const x = i * (barWidth + barGap);
                   const y = CHART_HEIGHT - barH;
                   const isLast = i === days.length - 1;
                   const isHovered = hoveredIdx === i;
@@ -253,7 +300,7 @@ export function TokenBarChart({
                       <rect
                         x={x}
                         y={0}
-                        width={BAR_WIDTH}
+                        width={barWidth}
                         height={CHART_HEIGHT}
                         fill="transparent"
                         style={{ cursor: "pointer" }}
@@ -261,7 +308,7 @@ export function TokenBarChart({
                       />
                       <motion.rect
                         x={x}
-                        width={BAR_WIDTH}
+                        width={barWidth}
                         rx={BAR_RADIUS}
                         ry={BAR_RADIUS}
                         // R127 (the full-column law): the painted bar is
@@ -287,7 +334,7 @@ export function TokenBarChart({
               </g>
 
               {days.map((day, i) => {
-                const cx = i * (BAR_WIDTH + BAR_GAP) + BAR_WIDTH / 2;
+                const cx = i * (barWidth + barGap) + barWidth / 2;
                 const isLast = i === days.length - 1;
                 const isHovered = hoveredIdx === i;
                 return (
@@ -316,16 +363,13 @@ export function TokenBarChart({
                   exit={{ opacity: 0, y: 4, scale: 0.96 }}
                   transition={{ duration: 0.15 }}
                   className="pointer-events-none absolute top-0 z-50"
-                  // R127 (the edge law): when the clamp engages, `left` IS the
-                  // tooltip's left edge (no shift). When it doesn't, `left` is
-                  // the bar's center — x:-50% is framer's own transform slot,
-                  // so the centering composes WITH the animated y/scale (a raw
-                  // style transform would be clobbered by framer's transform
-                  // writes — the pre-R126 lesson, kept).
-                  style={{
-                    left: tooltipX.left,
-                    ...(tooltipX.clamped ? {} : { x: "-50%" }),
-                  }}
+                  // R128-W2 (the side-placement law): `left` IS the tooltip's
+                  // left edge, BESIDE the hovered column (placeTooltipBeside —
+                  // right of a left-half column, left of a right-half one).
+                  // NO x:"-50%" slot, ever — the retired R127 center-on-bar
+                  // transform is gone; the animated y/scale are the only
+                  // transform writes (framer owns those slots).
+                  style={{ left: tooltipX.left }}
                 >
                   {/* The hover card gets the clay surface: card + rim + the
                       small-surface shadow step (TOKENS §9/§10). */}

@@ -5,6 +5,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import {
   FOLDER_TYPE_META,
   FILE_TYPE_FALLBACK,
+  FILE_TOOL_NAMES,
   FileTypeChip,
   FileTypeIcon,
   fileExtension,
@@ -166,5 +167,32 @@ describe("R127-W5 FileTypeIcon / FileTypeChip (the tinted stroke)", () => {
     const { container } = render(createElement(FileTypeIcon, { filename: "notes.txt" }));
     const svg = container.querySelector("svg") as SVGElement;
     expect((svg as unknown as HTMLElement).style.color).toBe("#94a3b8"); // slate dark leg
+  });
+});
+
+describe("R128-W5 FILE_TOOL_NAMES (the single-icon anatomy's file-family set)", () => {
+  it("the six PATH-TARGETED fs tools are members — their rows drop the generic family glyph for the one FileTypeIcon", () => {
+    // The tools whose argsSummary carries the target as a `path:` segment
+    // (formatToolTarget's default branch → the FileTypeIcon + PathPill row):
+    // the row's ONE file mark is the extension glyph.
+    expect(FILE_TOOL_NAMES.has("write_file")).toBe(true);
+    expect(FILE_TOOL_NAMES.has("edit_file")).toBe(true);
+    expect(FILE_TOOL_NAMES.has("read_file")).toBe(true);
+    expect(FILE_TOOL_NAMES.has("delete_file")).toBe(true);
+    expect(FILE_TOOL_NAMES.has("create_dir")).toBe(true);
+    expect(FILE_TOOL_NAMES.has("list_dir")).toBe(true);
+    expect(FILE_TOOL_NAMES.size).toBe(6); // the set is exactly the family — no strays
+  });
+
+  it("the search pair is NOT file-family (no path arg — the family glyph stays), nor are the command/delegate/skills rows", () => {
+    // search_files/search_code search the WHOLE project tree (query/glob
+    // args, never a path): their collapsed target is plain text, so the
+    // generic family glyph remains the row's only mark — the letter's
+    // "check the actual FILE-family set" resolved to the six above.
+    expect(FILE_TOOL_NAMES.has("search_files")).toBe(false);
+    expect(FILE_TOOL_NAMES.has("search_code")).toBe(false);
+    expect(FILE_TOOL_NAMES.has("run_command")).toBe(false);
+    expect(FILE_TOOL_NAMES.has("delegate_task")).toBe(false);
+    expect(FILE_TOOL_NAMES.has("read_skill")).toBe(false);
   });
 });

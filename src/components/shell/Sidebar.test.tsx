@@ -10,6 +10,10 @@ import { useActiveStreams } from "../../lib/active-streams";
 import { useProjectChatStore } from "../../lib/project-chat-store";
 // R99-C: the update-pending signal — the Settings dot's store.
 import { useUpdateCheckerStore } from "../../lib/update-checker";
+// R128-W3: the honest-degradation toast leg's assertion surface (the
+// General-workspace-unavailable local toast lands in this store).
+import { useNotificationStreamStore } from "../../hooks/use-notifications";
+import { ApiError } from "../../lib/api";
 import type { Project, ProjectsBackend, Session, SessionsBackend } from "../../lib/api";
 import { renderWithProviders, resetTestState } from "../../test-utils";
 
@@ -78,7 +82,47 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     expect(created?.color).toMatch(/^#/);
   });
 
-  it("deletes a project from the sidebar list", async () => {
+  it("R128-W3 (SCREENS §2 law #8): deleting a project rides the danger confirm — cancel keeps it, confirm removes it", async () => {
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+        </Routes>
+      </>,
+    );
+    // Fixture seeds include marketing-site (plus the General entry — which
+    // never gets a delete affordance); deleting it now ASKS first.
+    expect(await screen.findByText("marketing-site")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete marketing-site", hidden: true }),
+    );
+
+    // The shared danger dialog appears (cancel takes focus — the R95-A
+    // contract); CANCEL keeps the project exactly where it was.
+    expect(await screen.findByTestId("confirm-dialog")).toBeTruthy();
+    expect(screen.getByText("Delete project?")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("confirm-dialog-cancel"));
+    await waitFor(() => expect(screen.queryByTestId("confirm-dialog")).toBeNull());
+    expect(screen.getByText("marketing-site")).toBeTruthy();
+    expect((await getFixtureProjects().list()).some((p) => p.name === "marketing-site")).toBe(true);
+
+    // CONFIRM deletes — the row and the backend entry are gone.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete marketing-site", hidden: true }),
+    );
+    fireEvent.click(await screen.findByTestId("confirm-dialog-confirm"));
+    await waitFor(() => expect(screen.queryByText("marketing-site")).toBeNull());
+    const remaining = await getFixtureProjects().list();
+    expect(remaining.some((p) => p.name === "marketing-site")).toBe(false);
+    // No dialog lingers after the confirm.
+    await waitFor(() => expect(container.querySelector("[data-testid='confirm-dialog']")).toBeNull());
+  });
+
+  it("R128-W3 (law #8): the project dialog enumerates the project name + its live session count", async () => {
+    const backend = getFixtureSessions();
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: "prj_seed_site", title: "Site audit" });
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: "prj_seed_site", title: "Copy pass" });
     renderWithProviders(
       <>
         <Sidebar />
@@ -87,14 +131,20 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
         </Routes>
       </>,
     );
-    // Fixture seeds include marketing-site; deleting it clears list + backend.
     expect(await screen.findByText("marketing-site")).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", { name: "Delete marketing-site", hidden: true }),
     );
-    await waitFor(() => expect(screen.queryByText("marketing-site")).toBeNull());
-    const remaining = await getFixtureProjects().list();
-    expect(remaining.some((p) => p.name === "marketing-site")).toBe(false);
+    // The blast radius is enumerated: the project's name + its session
+    // count (from the sessions query data) + what dies with them.
+    expect(await screen.findByTestId("confirm-dialog")).toBeTruthy();
+    expect(
+      screen.getByText(/Delete "marketing-site" and its 2 sessions\? Their messages and tool history will be permanently removed\./),
+    ).toBeTruthy();
+    // Cancel — the enumeration is an ask, never a side effect.
+    fireEvent.click(screen.getByTestId("confirm-dialog-cancel"));
+    await waitFor(() => expect(screen.queryByTestId("confirm-dialog")).toBeNull());
+    expect((await getFixtureSessions().list()).filter((s) => s.projectId === "prj_seed_site")).toHaveLength(2);
   });
 
   it("shows the ApiError message inline when the backend rejects a duplicate root path", async () => {
@@ -221,10 +271,10 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     expect(useProjectChatStore.getState().appSidebarMinimized).toBe(false);
   });
 
-  it("R62 + R87-A1: the minimized rail navigates — a project tile EXPANDS the sidebar first, then opens its chat; gear opens settings", async () => {
+  it("R62 + R128-W3 (SCREENS §2 law #2): the minimized rail's project tile EXPANDS the sidebar + toggles its session tree — WITHOUT navigating; gear opens settings", async () => {
     // Seed a minimized store BEFORE mount (the persisted-restart path).
     useProjectChatStore.setState({ appSidebarMinimized: true });
-    renderWithProviders(
+    const { container } = renderWithProviders(
       <>
         <Sidebar />
         <Routes>
@@ -236,16 +286,25 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     );
     const rail = await screen.findByTestId("sidebar-rail");
     expect(rail).toBeTruthy();
-    // Fixture projects render as tiles with their names as tooltips/labels.
-    const tile = await screen.findByRole("button", { name: /^open marketing-site$/i, hidden: true });
+    // Fixture projects render as tiles (General pinned first, then the
+    // seeds); the tile's click now EXPANDS + TOGGLES instead of navigating.
+    const tile = await screen.findByRole("button", { name: /^show marketing-site sessions$/i, hidden: true });
     fireEvent.click(tile);
-    expect(await screen.findByText("chat stub")).toBeTruthy();
-    // R87-A1 (owner: "if I click on any one of the projects, then the left
-    // sidebar should apparently expand fully"): the tile click flipped the
-    // persisted minimize flag — the rail is gone, the full panel is back.
-    expect(useProjectChatStore.getState().appSidebarMinimized).toBe(false);
+    // The sidebar expanded (the rail is gone, the full panel is back)...
+    expect(await screen.findByText("Navigation")).toBeTruthy();
     expect(screen.queryByTestId("sidebar-rail")).toBeNull();
-    // Reset for the next assertion path: re-minimize, then gear → settings.
+    expect(useProjectChatStore.getState().appSidebarMinimized).toBe(false);
+    // ...the URL did NOT move (the dashboard stub is still the rendered
+    // route — a rail tile no longer teleports into a chat)...
+    expect(screen.getByText("dashboard stub")).toBeTruthy();
+    expect(screen.queryByText("chat stub")).toBeNull();
+    // ...and the project's session well OPENED (the tree toggled with the
+    // expand — the same expanded-projects state the full panel renders).
+    await waitFor(() => {
+      expect(container.querySelector("[data-session-well]")).toBeTruthy();
+    });
+    // Reset for the next assertion path: re-minimize, then gear → settings
+    // (the rail's own navigation entries keep navigating).
     act(() => useProjectChatStore.setState({ appSidebarMinimized: true }));
     expect(await screen.findByTestId("sidebar-rail")).toBeTruthy();
     fireEvent.click(screen.getByTestId("rail-settings"));
@@ -518,8 +577,12 @@ describe("Sidebar minimized rail polish (R101-C)", () => {
     expect(chipIn("Settings").closest("button")?.getAttribute("data-testid")).toBe("rail-settings");
     // The project tile's chip carries the FULL untruncated project name —
     // the whole point of the chip (color identity alone was not enough).
+    // R128-W3: the tile's aria-label is the new toggle contract ("Show <name>
+    // sessions" — expand + toggle, never navigate).
     const projectChip = await screen.findByText("marketing-site");
-    expect(projectChip.closest("button")?.getAttribute("aria-label")).toBe("Open marketing-site");
+    expect(projectChip.closest("button")?.getAttribute("aria-label")).toBe(
+      "Show marketing-site sessions",
+    );
     // The bell keeps its own button; its chip rides the group WRAPPER
     // (group-focus-within covers the bell's keyboard focus through it).
     const bellChip = chipIn("Notifications");
@@ -547,7 +610,8 @@ describe("Sidebar minimized rail polish (R101-C)", () => {
   });
 
   it("R101-C: >10 projects renders the +N overflow tile; clicking it EXPANDS the sidebar without navigating", async () => {
-    // 2 seeds + 10 created = 12 projects → 10 rail tiles + a "+2" tile.
+    // 3 seeds (incl. the R128-W3 General entry) + 10 created = 13 projects
+    // → 10 rail tiles + a "+3" tile.
     const backend = getFixtureProjects();
     for (let i = 0; i < 10; i += 1) {
       await backend.create(`extra-${i}`, `/tmp/extra-${i}`);
@@ -557,14 +621,14 @@ describe("Sidebar minimized rail polish (R101-C)", () => {
 
     // The cap stays 10 tiles — never a silent cut.
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: /^open /i, hidden: true })).toHaveLength(10);
+      expect(screen.getAllByRole("button", { name: /^show /i, hidden: true })).toHaveLength(10);
     });
     const overflow = await screen.findByTestId("rail-projects-overflow");
-    expect(overflow.textContent).toContain("+2");
-    expect(overflow.getAttribute("aria-label")).toBe("2 more projects — expand to see all");
+    expect(overflow.textContent).toContain("+3");
+    expect(overflow.getAttribute("aria-label")).toBe("3 more projects — expand to see all");
     // The chip carries the same honest copy.
     expect(overflow.querySelector('[data-testid="rail-label"]')?.textContent).toBe(
-      "2 more projects — expand to see all",
+      "3 more projects — expand to see all",
     );
 
     // Click → the sidebar EXPANDS (the R87-A1 expand-first pattern) and the
@@ -579,9 +643,10 @@ describe("Sidebar minimized rail polish (R101-C)", () => {
   it("R101-C: ≤10 projects renders NO overflow tile (the affordance appears only when the cap bites)", async () => {
     renderMinimizedRail();
     await screen.findByTestId("sidebar-rail");
-    // 2 fixture projects → 2 tiles, no overflow tile.
+    // 3 fixture projects (the two seeds + the General entry) → 3 tiles, no
+    // overflow tile.
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: /^open /i, hidden: true })).toHaveLength(2);
+      expect(screen.getAllByRole("button", { name: /^show /i, hidden: true })).toHaveLength(3);
     });
     expect(screen.queryByTestId("rail-projects-overflow")).toBeNull();
   });
@@ -980,13 +1045,17 @@ describe("ProjectView compact header + per-session rows (R113-d)", () => {
   });
 });
 
-// ── ROUND-126 (the Clay Companion redesign): the NAVIGATION decision ─────────
-// SCREENS.md §2 law #2 — the project row body NAVIGATES into the project's
-// chat (the pre-R126 body only toggled expansion); the dedicated chevron
-// hit area owns the session-tree toggle; the sessions render in ONE recessed
-// well with hairline dividers (the mobile session-list law, adapted).
-describe("R126: the project-row navigation split (row navigates · chevron expands)", () => {
-  it("clicking the project row body OPENS the project's chat (not the tree toggle)", async () => {
+// ── ROUND-128 (R128-W3): THE PROJECT ROW TOGGLES ONLY ─────────────────────────
+// SCREENS.md §2 law #2, REWRITTEN (the R128 owner directive, reversing the
+// R126 split): "clicking on any of the projects should not automatically
+// switch the view to that specific project — it should only expand or
+// collapse the sessions of it." The WHOLE row is the tree toggle (the
+// dedicated chevron button is RETIRED — no project-toggle testid exists
+// anymore); NO navigation fires from the row; entering a conversation is a
+// session row's job. The sessions still render in ONE recessed well with
+// hairline dividers (the R126 law that survives).
+describe("R128-W3: the project row toggles its sessions — nothing else (SCREENS §2 law #2)", () => {
+  it("clicking the project row toggles the session well WITHOUT navigating", async () => {
     const [project] = await getFixtureProjects().list();
     const { container } = renderWithProviders(
       <>
@@ -999,49 +1068,75 @@ describe("R126: the project-row navigation split (row navigates · chevron expan
       { route: "/" },
     );
 
-    // The row carries the navigation aria-label; the chevron carries the
-    // tree's aria-expanded (two affordances, two contracts). Navigation is
-    // asserted the way every test here asserts it — the route stub renders.
+    // The ROW carries the tree's contract now: the Expand/Collapse
+    // aria-label + aria-expanded live on the row itself (the chevron button
+    // is retired — no project-toggle testid anywhere in the tree).
     const row = await waitFor(() => {
-      const el = container.querySelector<HTMLElement>(`[aria-label="Open ${project.name}"]`);
+      const el = container.querySelector<HTMLElement>(
+        `[aria-label="Expand ${project.name} sessions"]`,
+      );
       expect(el).toBeTruthy();
       return el as HTMLElement;
     });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('[data-testid^="project-toggle-"]')).toBeNull();
+
+    // Click → the session well OPENS...
     fireEvent.click(row);
-    expect(await screen.findByText("chat stub")).toBeTruthy();
-  });
-
-  it("the chevron button toggles the session tree WITHOUT navigating", async () => {
-    const [project] = await getFixtureProjects().list();
-    const { container } = renderWithProviders(
-      <>
-        <Sidebar />
-        <Routes>
-          <Route path="/" element={<div>dashboard stub</div>} />
-          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
-        </Routes>
-      </>,
-      { route: "/" },
-    );
-
-    const chevron = await waitFor(() => {
-      const el = container.querySelector<HTMLElement>(`[data-testid="project-toggle-${project.id}"]`);
-      expect(el).toBeTruthy();
-      return el as HTMLElement;
-    });
-    // Collapsed at rest (the persisted expanded list starts empty on "/").
-    expect(chevron.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(chevron);
     await waitFor(() => {
-      expect(chevron.getAttribute("aria-expanded")).toBe("true");
+      expect(row.getAttribute("aria-expanded")).toBe("true");
     });
-    // The tree opened WITHOUT leaving the dashboard route (the dashboard
-    // stub is still the rendered route).
-    expect(screen.getByText("dashboard stub")).toBeTruthy();
-    // The session well rendered (the recess that owns the rows).
     await waitFor(() => {
       expect(container.querySelector("[data-session-well]")).toBeTruthy();
     });
+    // ...WITHOUT leaving the dashboard route (the owner's exact directive:
+    // the row never switches the view — the chat stub never renders).
+    expect(screen.getByText("dashboard stub")).toBeTruthy();
+    expect(screen.queryByText("chat stub")).toBeNull();
+
+    // Click again → the well COLLAPSES (a true toggle, still no navigation).
+    fireEvent.click(row);
+    await waitFor(() => {
+      expect(row.getAttribute("aria-expanded")).toBe("false");
+    });
+    await waitFor(() => {
+      expect(container.querySelector("[data-session-well]")).toBeNull();
+    });
+    expect(screen.getByText("dashboard stub")).toBeTruthy();
+  });
+
+  it("keyboard parity: Enter and Space toggle the tree from the row", async () => {
+    const [project] = await getFixtureProjects().list();
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
+        </Routes>
+      </>,
+      { route: "/" },
+    );
+
+    const row = await waitFor(() => {
+      const el = container.querySelector<HTMLElement>(
+        `[aria-label="Expand ${project.name} sessions"]`,
+      );
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    // Enter opens...
+    fireEvent.keyDown(row, { key: "Enter" });
+    await waitFor(() => {
+      expect(container.querySelector("[data-session-well]")).toBeTruthy();
+    });
+    // ...Space closes (both keys are first-class toggles — no navigation
+    // either way).
+    fireEvent.keyDown(row, { key: " " });
+    await waitFor(() => {
+      expect(container.querySelector("[data-session-well]")).toBeNull();
+    });
+    expect(screen.getByText("dashboard stub")).toBeTruthy();
   });
 
   it("the session tree renders ONE recessed well with hairline dividers between rows", async () => {
@@ -1263,5 +1358,213 @@ describe("R126: ProjectView clay landing (the well grammar)", () => {
     // The live-streams store is transient but shared with every other
     // describe in this file — never leak a running-state set across tests.
     useActiveStreams.setState({ active: new Set() });
+  });
+});
+
+/* ── ROUND-128 (R128-W3, SCREENS.md §2 law #9): THE GENERAL CONVERSATION ──────
+ * The projects section carries a persistent General entry — conversations
+ * that need no folder, living in the app's internal workspace (backend-boot
+ * seeded, delete-protected). The sidebar pins it FIRST, hides its delete
+ * affordance, and the section header offers the start-a-general-conversation
+ * button (the wave's ONE navigation trigger). */
+describe("R128-W3: the General conversation (SCREENS §2 law #9)", () => {
+  it("General is pinned FIRST in the projects list and carries NO delete affordance", async () => {
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+        </Routes>
+      </>,
+    );
+    // The fixture seeds General (id "general") LAST; the SIDEBAR pins it
+    // first — the row order is [General, ACUTE-CODE, marketing-site].
+    const rows = await waitFor(() => {
+      const found = container.querySelectorAll<HTMLElement>('[role="button"][aria-expanded]');
+      expect(found.length).toBe(3);
+      return found;
+    });
+    expect(rows[0].getAttribute("aria-label")).toBe("Expand General sessions");
+    expect(rows[1].getAttribute("aria-label")).toBe("Expand ACUTE-CODE sessions");
+    // Every OTHER project row keeps its delete affordance (hover-revealed
+    // in the overlay cluster); General NEVER offers one — the backend
+    // refuses its deletion (409 general_protected) and the UI agrees.
+    expect(screen.queryByRole("button", { name: "Delete General", hidden: true })).toBeNull();
+    expect(screen.getByRole("button", { name: "Delete ACUTE-CODE", hidden: true })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete marketing-site", hidden: true })).toBeTruthy();
+  });
+
+  it("the header's start-general button creates a General session and navigates to its chat", async () => {
+    const backend = getFixtureSessions();
+    const before = (await backend.list()).filter((s) => s.projectId === "general").length;
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
+        </Routes>
+      </>,
+    );
+    // Flush the agents query (the fixture backend resolves on the microtask
+    // queue — the affordance reads its data on click).
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    fireEvent.click(await screen.findByTestId("start-general-conversation"));
+
+    // The session landed in the backend, bound to the General project, and
+    // the app navigated to its chat — the ONE navigation this wave adds.
+    expect(await screen.findByText("chat stub")).toBeTruthy();
+    const created = (await backend.list()).find(
+      (s) => s.projectId === "general" && s.title === "New chat · General",
+    ) as Session | undefined;
+    expect(created).toBeTruthy();
+    expect((await backend.list()).filter((s) => s.projectId === "general").length).toBe(
+      before + 1,
+    );
+  });
+
+  it("honest degradation: with no General project and a refusing backend, the button toasts instead of navigating", async () => {
+    // An OLDER sidecar shape: the projects list has no "general" row, and
+    // the sessions backend refuses the create (the live POST /sessions
+    // 404s on an unknown projectId — mirrored here).
+    projectsOverride.backend = createFixtureProjects([
+      {
+        id: "prj_seed_acute",
+        name: "ACUTE-CODE",
+        rootPath: "/home/dev/ACUTE-CODE",
+        color: "#FF6B2C",
+        createdAt: "2026-08-20T08:00:00Z",
+      },
+    ]);
+    sessionsOverride.backend = {
+      ...getFixtureSessions(),
+      create: () =>
+        Promise.reject(new ApiError(404, "NOT_FOUND", "no project with id general")),
+    };
+    useNotificationStreamStore.setState({ lastNotification: null });
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
+        </Routes>
+      </>,
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    fireEvent.click(await screen.findByTestId("start-general-conversation"));
+
+    // The quiet toast (the app's local-toast channel) — never a dead silent
+    // button, never an auto-create from the frontend.
+    await waitFor(() => {
+      expect(useNotificationStreamStore.getState().lastNotification?.title).toBe(
+        "General workspace unavailable",
+      );
+    });
+    expect(screen.getByText("dashboard stub")).toBeTruthy();
+    expect(screen.queryByText("chat stub")).toBeNull();
+  });
+});
+
+/* ── ROUND-128 (R128-W3, SCREENS.md §2 law #8): the SESSION delete confirm ────
+ * Deleting a session ALWAYS asks first (the shared danger ConfirmDialog);
+ * only the confirm reaches deleteSession.mutate; deleting the ACTIVE
+ * session navigates the chat pane away from the dead conversation. */
+describe("R128-W3: the session delete confirm (SCREENS §2 law #8)", () => {
+  /** Mirrors the route's URL (pathname + search) into the DOM. */
+  function ChatProbe() {
+    const { pathname, search } = useLocation();
+    return <div data-testid="chat-probe">{`${pathname}${search}`}</div>;
+  }
+
+  it("cancel keeps the session; confirm deletes it — and navigates away ONLY when it was the active session", async () => {
+    const [project] = await getFixtureProjects().list();
+    const backend = getFixtureSessions();
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: project.id, title: "Active chat" });
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: project.id, title: "Idle chat" });
+    const sessions = (await backend.list()).filter((s) => s.projectId === project.id);
+    const active = sessions.find((s) => s.title === "Active chat") as Session;
+    const idle = sessions.find((s) => s.title === "Idle chat") as Session;
+
+    // LEG 1 — the ACTIVE session: the ?session= route auto-expands the
+    // project; deleting the active session must navigate the chat pane to
+    // the project's chat root (replace) so it never points at a dead
+    // conversation.
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<ChatProbe />} />
+        </Routes>
+      </>,
+      { route: `/project/${project.id}/chat?session=${active.id}` },
+    );
+    await waitFor(() => {
+      expect(container.querySelectorAll("[data-session-row]").length).toBe(2);
+    });
+
+    // The delete button ARMS the dialog; CANCEL keeps the session.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete session Active chat", hidden: true }),
+    );
+    expect(await screen.findByTestId("confirm-dialog")).toBeTruthy();
+    expect(screen.getByText("Delete session?")).toBeTruthy();
+    expect(
+      screen.getByText(/Delete "Active chat"\? This permanently removes the session's messages, tool history, and usage rows\./),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByTestId("confirm-dialog-cancel"));
+    await waitFor(() => expect(screen.queryByTestId("confirm-dialog")).toBeNull());
+    expect((await backend.list()).some((s) => s.id === active.id)).toBe(true);
+
+    // CONFIRM deletes — and because it was the ACTIVE session, the URL
+    // moved off the dead ?session= param.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete session Active chat", hidden: true }),
+    );
+    fireEvent.click(await screen.findByTestId("confirm-dialog-confirm"));
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-probe").textContent).toBe(`/project/${project.id}/chat`);
+    });
+    expect((await backend.list()).some((s) => s.id === active.id)).toBe(false);
+    cleanup();
+
+    // LEG 2 — an IDLE session: the ?session= param points at a DIFFERENT
+    // (surviving) session, so deleting the idle one must NOT navigate.
+    // Seed one more idle session on the surviving fixture backend BEFORE
+    // the second render (the deleted active session stays deleted; the
+    // fresh query reads the post-delete, post-create list).
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: project.id, title: "Idle chat 2" });
+    const idle2 = (await backend.list()).find((s) => s.title === "Idle chat 2") as Session;
+    renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<ChatProbe />} />
+        </Routes>
+      </>,
+      { route: `/project/${project.id}/chat?session=${idle.id}` },
+    );
+    await waitFor(() => {
+      expect(document.querySelectorAll("[data-session-row]").length).toBe(2);
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete session Idle chat 2", hidden: true }),
+    );
+    fireEvent.click(await screen.findByTestId("confirm-dialog-confirm"));
+    await waitFor(async () => {
+      expect((await backend.list()).some((s) => s.id === idle2.id)).toBe(false);
+    });
+    // The active session's URL param is UNTOUCHED — no navigation away.
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-probe").textContent).toBe(
+        `/project/${project.id}/chat?session=${idle.id}`,
+      );
+    });
   });
 });

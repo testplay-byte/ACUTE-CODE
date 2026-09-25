@@ -205,9 +205,15 @@ describe("Appearance tab simplification (R62-2a)", () => {
     // (fake bars + the "— none —" block) are GONE.
     expect(screen.getByText("Full timeline with diffs and command output")).toBeTruthy();
     expect(screen.getByText("One-line summary per turn")).toBeTruthy();
-    expect(screen.getByText("Never show tool activity")).toBeTruthy();
     expect(screen.queryByText("— none —")).toBeNull();
     expect(document.querySelectorAll('[class*="h-[5px]"]').length).toBe(0);
+
+    // R128-W6 — the "Hidden" rung is RETIRED from the picker: the chip and
+    // its "Never show tool activity" description are GONE, and with the
+    // store at its detailed default the legacy row renders NOTHING.
+    expect(screen.queryByRole("button", { name: /^Hidden Never show/ })).toBeNull();
+    expect(screen.queryByText("Never show tool activity")).toBeNull();
+    expect(screen.queryByTestId("tool-activity-legacy-hidden")).toBeNull();
 
     const detailed = screen.getByRole("button", { name: /Detailed/ });
     expect(detailed.getAttribute("aria-pressed")).toBe("true"); // store default
@@ -215,8 +221,35 @@ describe("Appearance tab simplification (R62-2a)", () => {
     expect(useThemeStore.getState().activityMode).toBe("compact");
     expect(screen.getByRole("button", { name: /Compact/ }).getAttribute("aria-pressed")).toBe("true");
     expect(detailed.getAttribute("aria-pressed")).toBe("false");
-    fireEvent.click(screen.getByRole("button", { name: /^Hidden Never show/ }));
-    expect(useThemeStore.getState().activityMode).toBe("hidden");
+  });
+
+  // R128-W6 — the desktop half of the toolActivity "hidden" trap's retirement
+  // (the phone's own picker carried this since R127-W8): the rung can no
+  // longer be SELECTED, but a persisted/server-synced "hidden" is never
+  // silently overridden — it renders the explicit legacy state row with a
+  // one-tap recovery that rides the SAME write-through (setActivityMode →
+  // store flip + the server PUT), so the fix lands on the phone too.
+  it("R128-W6: a persisted 'hidden' renders the legacy row — neither chip selected, one tap returns to detailed", () => {
+    useThemeStore.setState({ activityMode: "hidden" });
+    renderWithProviders(<SettingsPage />);
+
+    // The legacy state row names the state honestly (the phone is the
+    // surface that actually hides the tool cards).
+    expect(screen.getByTestId("tool-activity-legacy-hidden")).toBeTruthy();
+    expect(screen.getByText("Hidden — tool cards never render on the phone")).toBeTruthy();
+
+    // Neither selectable chip is active while the stored value is the
+    // retired rung (the state row owns the truth).
+    expect(screen.getByRole("button", { name: /Detailed/ }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: /Compact/ }).getAttribute("aria-pressed")).toBe("false");
+
+    // The one-tap recovery: the SAME write path a chip click always rides.
+    fireEvent.click(screen.getByRole("button", { name: "Show tool activity" }));
+    expect(useThemeStore.getState().activityMode).toBe("detailed");
+    // The row is gone the moment the rung is left; Detailed is selected.
+    expect(screen.queryByTestId("tool-activity-legacy-hidden")).toBeNull();
+    expect(screen.queryByText("Hidden — tool cards never render on the phone")).toBeNull();
+    expect(screen.getByRole("button", { name: /Detailed/ }).getAttribute("aria-pressed")).toBe("true");
   });
 
   // R97-H: the chat customizability sections.

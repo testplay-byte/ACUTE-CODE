@@ -93,7 +93,7 @@ export type EventsFrame =
       selectedModel?: { providerId: string; model: string } | null;
     }
   | { type: "turn"; sessionId: string; frame: unknown }
-  | { type: "project"; projectId: string; kind: "created" | "updated" }
+  | { type: "project"; projectId: string; kind: "created" | "updated" | "deleted" }
   | { type: "settings"; domain: string; value: unknown };
 
 /** Parse one `data:` frame — null when it is neither known shape (the same
@@ -166,7 +166,10 @@ export function parseEventsFrame(raw: string): EventsFrame | null {
     }
     case "project": {
       if (typeof obj.projectId !== "string") return null;
-      if (obj.kind !== "created" && obj.kind !== "updated") return null;
+      // R128-W3: "deleted" joined the vocabulary (the desktop announces
+      // project deletions so watchers refresh instead of waiting for the
+      // next poll/hello).
+      if (obj.kind !== "created" && obj.kind !== "updated" && obj.kind !== "deleted") return null;
       return { type: "project", projectId: obj.projectId, kind: obj.kind };
     }
     case "settings": {

@@ -171,6 +171,115 @@ export function clampTooltipX(
   return { left: barCenterX, clamped: false };
 }
 
+/* ── ROUND-128 (COMPONENTS §6 — the side-placement law, the fill law, the
+ * stagger cap): the R128 amendments' shared math. The R127 center-on-bar
+ * law is RETIRED (the owner's "it was showing the details exactly on the
+ * top, centered on it" complaint); clampTooltipX stays above for
+ * back-compat/pure-law pinning, but every chart tooltip now positions
+ * through placeTooltipBeside. Pure math — pinnable without a DOM. */
+
+/** R128 (the newest-end law): the LAST bar's entrance delay ceiling — every
+ * chart's grow stagger is capped so a 365-bar window never sweeps 4.4s
+ * old→new (an uncapped sweep reads as "starts from the oldest month").
+ * ONE spelling for every chart (UsageActivityChart's local R127 constant
+ * moved here when ModelStackChart needed it too). */
+export const STAGGER_CAP_S = 0.4;
+
+/**
+ * R128 (the side-placement law): place the hover tooltip BESIDE the hovered
+ * column — to its RIGHT when the column sits in the plot's left half, to
+ * its LEFT when it sits in the right half — pinned to the plot's top edge
+ * by the caller. `columnLeft`/`columnWidth` are the hovered column's
+ * rectangle in the same coordinate space as `plotWidth` (the chart's
+ * content box; ModelStackChart adds its Y_AXIS offset to both). The return
+ * `left` is the tooltip's LEFT edge — the caller renders NO translateX
+ * (never `x: "-50%"`), the retired R127 centering.
+ *
+ * Edge clamping keeps the tooltip inside the content box's inset
+ * (TOOLTIP_EDGE_INSET_PX). When the clamped placement would still overlap
+ * the hovered column horizontally, the side with more room wins and clamps
+ * to its edge — a near-degenerate net for plots too narrow to host the
+ * tooltip beside the column at all (e.g. a 176px tooltip inside a 254px
+ * day chart): there the overlap is unavoidable and this picks the
+ * least-bad side, exactly per the letter.
+ *
+ *   const { left, side } = placeTooltipBeside(colLeft, colW, plotW, tipW);
+ *   style = { left }   // no x slot, no transform
+ */
+export function placeTooltipBeside(
+  columnLeft: number,
+  columnWidth: number,
+  plotWidth: number,
+  tooltipWidth: number,
+  gap = 8,
+): { left: number; side: "left" | "right" } {
+  const columnCenter = columnLeft + columnWidth / 2;
+  // The side law: right of a left-half column, left of a right-half column.
+  let side: "left" | "right" = columnCenter < plotWidth / 2 ? "right" : "left";
+  // Degenerate guard: the tooltip cannot fit the usable plot at all — park
+  // at the inset and keep the computed side (the caller still renders it).
+  if (tooltipWidth >= plotWidth - 2 * TOOLTIP_EDGE_INSET_PX) {
+    return { left: TOOLTIP_EDGE_INSET_PX, side };
+  }
+  const columnRight = columnLeft + columnWidth;
+  const minLeft = TOOLTIP_EDGE_INSET_PX;
+  const maxLeft = plotWidth - tooltipWidth - TOOLTIP_EDGE_INSET_PX;
+  const ideal = side === "right" ? columnRight + gap : columnLeft - tooltipWidth - gap;
+  let left = Math.max(minLeft, Math.min(ideal, maxLeft));
+  // Overlap net: the clamped placement would cover the hovered column —
+  // pick the side with more room and clamp to its edge.
+  if (left < columnRight && left + tooltipWidth > columnLeft) {
+    const roomRight = plotWidth - TOOLTIP_EDGE_INSET_PX - columnRight;
+    const roomLeft = columnLeft - TOOLTIP_EDGE_INSET_PX;
+    side = roomRight >= roomLeft ? "right" : "left";
+    left =
+      side === "right"
+        ? Math.min(columnRight + gap, maxLeft)
+        : Math.max(columnLeft - tooltipWidth - gap, minLeft);
+  }
+  return { left, side };
+}
+
+/** R128 (the fill law): the stretched DAY bar's comfortable maximum width
+ * (px) — the stretch never inflates a bar past this. */
+export const DAY_FILL_MAX_BAR_PX = 42;
+
+/** R128 (the fill law): the stretched DAY gap's comfortable maximum (px). */
+export const DAY_FILL_MAX_GAP_PX = 16;
+
+/**
+ * R128 (the fill law): a day-granularity series whose natural width FITS
+ * the measured container stretches its pitch to FILL it — a 14-day view
+ * never parks a 358px chart inside a ~900px card with dead margins on both
+ * sides. `availableWidth` is the measured scroller/container content width
+ * (0 = unmeasured — happy-dom and the pre-observer frame — keeps the
+ * natural geometry). Overflowing series keep the natural pitch and ride the
+ * newest-end law instead. Both the bar width and the gap scale by the SAME
+ * factor, capped so width ≤ DAY_FILL_MAX_BAR_PX and gap ≤ DAY_FILL_MAX_GAP_PX.
+ * HOUR geometry never stretches (the hour views always scroll) — the caller
+ * gates on granularity. Pure; deterministic.
+ */
+export function stretchDayBarGeometry(
+  count: number,
+  naturalBarWidth: number,
+  naturalBarGap: number,
+  availableWidth: number,
+): { barWidth: number; barGap: number } {
+  if (count <= 0 || availableWidth <= 0) {
+    return { barWidth: naturalBarWidth, barGap: naturalBarGap };
+  }
+  const naturalWidth = count * (naturalBarWidth + naturalBarGap) - naturalBarGap;
+  if (naturalWidth >= availableWidth) {
+    return { barWidth: naturalBarWidth, barGap: naturalBarGap };
+  }
+  const factorMax = Math.min(
+    DAY_FILL_MAX_BAR_PX / naturalBarWidth,
+    DAY_FILL_MAX_GAP_PX / naturalBarGap,
+  );
+  const factor = Math.min(availableWidth / naturalWidth, factorMax);
+  return { barWidth: naturalBarWidth * factor, barGap: naturalBarGap * factor };
+}
+
 /* ── ROUND-127 (the hour laws — COMPONENTS §6's dense-series rule): the
  * 7-day HOURLY view's label helpers. Hour bucket dates arrive as
  * "YYYY-MM-DDThh" (the granularity=hour series from /usage/detailed) and

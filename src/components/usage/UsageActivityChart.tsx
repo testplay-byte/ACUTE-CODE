@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Zap } from "lucide-react";
 import type { ThemeStyles } from "../../lib/themes";
@@ -11,11 +11,13 @@ import {
   CHART_BAR_STAGGER_MS,
   CLAY_CARD,
   CLAY_TOOLTIP,
-  clampTooltipX,
   hourBucketDay,
   hourBucketLabel,
   hourTickLabel,
+  placeTooltipBeside,
   sparseTickIndices,
+  STAGGER_CAP_S,
+  stretchDayBarGeometry,
 } from "./usage-helpers";
 import { cn } from "../../lib/utils";
 
@@ -40,12 +42,9 @@ import { cn } from "../../lib/utils";
  *   motion.rect bars render `pointer-events: none` (display-only) so the
  *   pointer over a bar's BODY resolves through the column underneath (the
  *   owner's "hover only works at the top area of the bar" complaint).
- * · THE TOOLTIP EDGE LAW: the tooltip centers on its bar only while it fits;
- *   near the first/last bars `clampTooltipX` (the shared helper — ONE
- *   spelling) clamps it inside the chart's content box (the owner's
- *   "details show where there is no place to view them" complaint). The
- *   -50% centering rides framer's own `x` slot (a raw style.transform would
- *   be clobbered by the animated y/scale — the pre-R126 lesson, kept).
+ * · THE TOOLTIP EDGE LAW (superseded R128 by the side-placement law below —
+ *   the edge INSET survives inside placeTooltipBeside; the center-on-bar
+ *   behavior and the x:"-50%" slot are retired).
  * · THE HOURLY VIEW (`granularity="hour"`, the 7-day window): hour buckets
  *   ("YYYY-MM-DDThh" from GET /usage/detailed?granularity=hour) step the bar
  *   geometry down (6px bars / 2px gaps — 168 buckets ≈ 1.34Kpx of natural
@@ -56,10 +55,26 @@ import { cn } from "../../lib/utils";
  *   `hourBucketLabel`. Hour keys NEVER reach shortUtcDay/utcDateLabel (they
  *   template-append `T00:00:00Z` and yield Invalid Date — the R127-Rb
  *   research's trap list).
- * · THE NEWEST-END LAW: the overflow-x scroller MOUNTS at the newest end
- *   (`scrollLeft = scrollWidth` on mount + on every window/granularity
- *   swap) — a 90-day view that opens at the oldest week with the live edge
- *   off-screen is the defect the owner reported.
+ *
+ * ROUND-128 (R128-W2 — COMPONENTS §6's amended laws, binding):
+ * · THE SIDE-PLACEMENT LAW (the R127 center-on-bar law is RETIRED — the
+ *   owner's "it was showing the details exactly on the top, centered on
+ *   it" complaint): the tooltip renders BESIDE the hovered column — right
+ *   of a left-half column, left of a right-half column — via the shared
+ *   `placeTooltipBeside` (ONE spelling for every chart). `left` IS the
+ *   tooltip's left edge; the x:"-50%" centering slot is GONE (no transform
+ *   translation on these tooltips anywhere).
+ * · THE FILL LAW: a day view whose natural width (20px bars) fits the
+ *   MEASURED scroller stretches its pitch to fill the card (the shared
+ *   `stretchDayBarGeometry`, capped at 42px bars / 16px gaps) — a 7-day
+ *   view never parks a 176px chart in a ~900px card. HOUR geometry stays
+ *   FIXED (hour views always scroll); overflowing day windows keep the
+ *   natural pitch + the newest-end law.
+ * · THE NEWEST-END LAW, REINFORCED: the scroller lands at the newest end
+ *   PRE-PAINT (`useLayoutEffect`, never the post-paint useEffect that
+ *   flashes the oldest end for a frame), re-keyed by DATA IDENTITY — a
+ *   same-length window swap (keepPreviousData refetch, the day rolling
+ *   over) re-lands too — and re-asserted on resize.
  */
 
 const DAY_BAR_WIDTH = 20;
@@ -77,15 +92,11 @@ const DAY_LABEL_AREA = 28;
 const HOUR_LABEL_AREA = 22;
 const DAY_BAR_RADIUS = 6;
 const HOUR_BAR_RADIUS = 2;
-/** R127-W2 (the edge law): the tooltip's rendered width — the `w-44` class
- * (176px) on the tooltip card below. */
+/** The tooltip's rendered width — the `w-44` class (176px) on the tooltip
+ * card below. */
 const TOOLTIP_W = 176;
-/** R127-W2 (the stagger cap): the LAST bar's entrance delay ceiling — 168
- * hour buckets × 12ms would stack ~2s of stagger onto the tail; the last
- * bars wait at most 0.4s and the grow reads as one sweep. */
-const STAGGER_CAP_S = 0.4;
-/** R127-W2 (the sparse-tick law): the hour view's "HH:00" tick budget —
- * ≤7 hour ticks beside the day-boundary labels that ride their own indices. */
+/** The sparse-tick law: the hour view's "HH:00" tick budget — ≤7 hour ticks
+ * beside the day-boundary labels that ride their own indices. */
 const HOUR_TICK_MAX = 7;
 
 function dayTotal(d: UsageDayBucket): number {
@@ -165,6 +176,33 @@ export function UsageActivityChart({
   const maxTokens = useMemo(() => Math.max(0, ...days.map(dayTotal)), [days]);
   const totalTokens = useMemo(() => days.reduce((s, d) => s + dayTotal(d), 0), [days]);
 
+  // R128-W2 (the fill law): the scroller's MEASURED content width — 0 until
+  // the useLayoutEffect below reads it (happy-dom reports 0/0 geometry, so
+  // the unmeasured frame keeps the natural pitch; the ResizeObserver keeps
+  // it fresh on real cards). The scroller sits inside the card's p-4/md:p-5
+  // padding, so its own clientWidth IS the fill law's available width — no
+  // extra padding math.
+  const [scrollerWidth, setScrollerWidth] = useState(0);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // The scroller mounts only in the ready branch — the observer effect is
+  // keyed on the ready flag so the pending→ready swap attaches it.
+  const chartMounted = !isPending && !isError && days.length > 0;
+  useLayoutEffect(() => {
+    if (!chartMounted) return;
+    const el = scrollRef.current;
+    if (el === null) return;
+    setScrollerWidth(el.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) setScrollerWidth(entry.contentRect.width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [chartMounted]);
+
+  // R128-W2 (the fill law): a fitting DAY view stretches its pitch to fill
+  // the measured scroller (capped 42px bars / 16px gaps); HOUR geometry
+  // stays FIXED — 168 buckets always overflow and ride the newest-end law.
   const { barWidth, barGap, barRadius, labelArea } =
     granularity === "hour"
       ? {
@@ -174,8 +212,7 @@ export function UsageActivityChart({
           labelArea: HOUR_LABEL_AREA,
         }
       : {
-          barWidth: DAY_BAR_WIDTH,
-          barGap: DAY_BAR_GAP,
+          ...stretchDayBarGeometry(days.length, DAY_BAR_WIDTH, DAY_BAR_GAP, scrollerWidth),
           barRadius: DAY_BAR_RADIUS,
           labelArea: DAY_LABEL_AREA,
         };
@@ -213,32 +250,41 @@ export function UsageActivityChart({
     return [...out.values()].sort((a, b) => a.index - b.index);
   }, [days, granularity]);
 
-  // R127-W2 (the edge law): the hovered bar's tooltip position — center on
-  // the bar only while the tooltip fits inside the chart's content box; near
-  // the first/last bars the shared clampTooltipX clamps it. Null while no
-  // bar is hovered.
+  // R128-W2 (the side-placement law): the hovered bar's tooltip position —
+  // BESIDE the hovered column (right of a left-half column, left of a
+  // right-half one), clamped inside the chart's content box by the shared
+  // placeTooltipBeside (ONE spelling for every chart). Null while no bar is
+  // hovered. The retired R127 center-on-bar spelling (the x:"-50%" slot) is
+  // GONE — `left` is always the tooltip's own left edge.
   const tooltipX =
     hoveredIdx !== null && days[hoveredIdx] !== undefined
-      ? clampTooltipX(
-          hoveredIdx * (barWidth + barGap) + barWidth / 2,
+      ? placeTooltipBeside(
+          hoveredIdx * (barWidth + barGap),
+          barWidth,
           chartWidth,
           TOOLTIP_W,
         )
       : null;
 
-  // R127-W2 (the newest-end law): the overflow-x scroller MOUNTS at the
-  // newest end and re-lands there on every window/granularity swap
-  // (`scrollLeft = scrollWidth` clamps to 0 when the content fits — the
-  // day view's centered fit is untouched). data-scrolled-to-latest is the
-  // effect's observable contract (happy-dom's scroll geometry is 0/0, so
-  // the pin reads the hook).
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
+  // R128-W2 (the newest-end law, REINFORCED): the overflow-x scroller lands
+  // at the newest end PRE-PAINT (useLayoutEffect — never the post-paint
+  // useEffect that flashes the oldest end for a frame), re-keyed by DATA
+  // IDENTITY: a same-length window swap (the keepPreviousData refetch when
+  // the day rolls over) changes the first/last bucket keys and re-lands too.
+  // The measured scrollerWidth is a dep so a resize re-asserts the newest
+  // end while the chart overflows (`scrollLeft = scrollWidth` clamps to 0
+  // when the content fits — the day view's centered/stretched fit is
+  // untouched). data-scrolled-to-latest is the effect's observable contract
+  // (happy-dom's scroll geometry is 0/0, so the pin reads the hook).
+  const firstKey = days[0]?.date ?? "";
+  const lastKey = days[days.length - 1]?.date ?? "";
+  const dataKey = `${granularity}:${days.length}:${firstKey}:${lastKey}`;
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el === null) return;
     el.scrollLeft = el.scrollWidth;
     el.dataset.scrolledToLatest = "true";
-  }, [days.length, granularity]);
+  }, [dataKey, scrollerWidth]);
 
   return (
     <div className={cn(CLAY_CARD, "p-4 md:p-5")}>
@@ -273,10 +319,11 @@ export function UsageActivityChart({
           </p>
         </div>
       ) : (
-        // The bar grid keeps its natural width (20px day bars / 6px hour
-        // bars) — wider windows (30/90 days, the hourly series, narrow
-        // phones) scroll INSIDE the card instead of breaking the page
-        // layout. w-fit + mx-auto centers when it fits.
+        // The bar grid keeps its natural pitch when it overflows (hour views,
+        // 30/90-day windows, narrow phones — they scroll INSIDE the card and
+        // mount at the newest end); a FITTING day view stretches to the
+        // measured scroller width (the R128 fill law above). w-fit + mx-auto
+        // centers whatever still doesn't fill.
         <div ref={scrollRef} className="custom-scrollbar overflow-x-auto">
           <div
             className="relative mx-auto w-fit"
@@ -369,9 +416,10 @@ export function UsageActivityChart({
                         transition={{
                           duration: CHART_BAR_GROW_MS,
                           ease,
-                          // R127-W2: the stagger is CAPPED — 168 hour buckets
-                          // × 12ms would stack ~2s onto the tail; the last
-                          // bars wait at most STAGGER_CAP_S.
+                          // R127-W2/R128-W2: the stagger is CAPPED — 168 hour
+                          // buckets × 12ms would stack ~2s onto the tail; the
+                          // last bars wait at most STAGGER_CAP_S (the shared
+                          // R128 constant — every chart caps, not just this one).
                           delay: delay + Math.min(i * CHART_BAR_STAGGER_MS, STAGGER_CAP_S),
                         }}
                       />
@@ -434,17 +482,13 @@ export function UsageActivityChart({
                   exit={{ opacity: 0, y: 4, scale: 0.96 }}
                   transition={{ duration: 0.15 }}
                   className="pointer-events-none absolute top-0 z-50"
-                  // R127-W2 (the edge law): when the clamp engages, `left` IS
-                  // the tooltip's left edge (no shift). When it doesn't,
-                  // `left` is the bar's center — x:"-50%" is framer's own
-                  // transform slot, so the centering composes WITH the
-                  // animated y/scale (a raw style.transform would be
-                  // clobbered by framer's transform writes — the pre-R126
-                  // lesson, kept).
-                  style={{
-                    left: tooltipX.left,
-                    ...(tooltipX.clamped ? {} : { x: "-50%" }),
-                  }}
+                  // R128-W2 (the side-placement law): `left` IS the tooltip's
+                  // left edge, BESIDE the hovered column (placeTooltipBeside —
+                  // right of a left-half column, left of a right-half one).
+                  // NO x:"-50%" slot, ever — the retired R127 center-on-bar
+                  // transform is gone; the animated y/scale are the only
+                  // transform writes (framer owns those slots).
+                  style={{ left: tooltipX.left }}
                 >
                   {/* R126-3b: the tooltip surface is the clay popover —
                       card fill + rim + the small-surface clay shadow. */}

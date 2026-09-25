@@ -1,29 +1,37 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { UsageActivityChart } from "./UsageActivityChart";
 import { deriveThemeStyles } from "../../lib/themes";
 import { utcDateLabel } from "../dashboard/helpers";
 import type { UsageDayBucket } from "../../lib/api";
 
-/** R127-W2 — the ROUND-127 chart-interaction laws (COMPONENTS §6) pinned at
+/** R127-W2 → R128-W2 — the chart-interaction laws (COMPONENTS §6) pinned at
  *  the usage screen's own activity chart, plus the HOURLY VIEW contract
  *  (the owner's "seven days… a much better kind of view, like hourly based"
  *  ask):
- *   · the full-column hit-testing law (painted bars display-only);
- *   · the tooltip edge law (clampTooltipX at the first/last bars);
+ *   · the full-column hit-testing law (painted bars display-only — R127, kept);
+ *   · the side-placement tooltip law (R128 — the R127 center-on-bar pins are
+ *     RE-PINNED to the beside values);
  *   · the hour mode (6px geometry, sparse "HH:00" ticks + day-boundary
  *     labels, hour tooltip headers, the aria/kicker copy);
- *   · the newest-end law (the overflow scroller mounts/lands at the newest
- *     end — pinned via the effect's data hook + a stubbed scroll geometry,
- *     since happy-dom reports 0/0).
+ *   · the newest-end law (R128: useLayoutEffect + the DATA-IDENTITY key — a
+ *     same-length window swap re-lands too);
+ *   · the fill law (R128: a fitting day view stretches to the measured
+ *     scroller; hour geometry stays fixed).
  *
- *  Geometry facts the pins ride on: DAY mode = 20px bars + 6px gaps (26px
- *  pitch); 10 buckets → a 254px chart, centers at i×26+10, the w-44 tooltip
- *  is 176px, the clamp inset is 8px (mid i=4 centers at 114; last clamps to
- *  70; first clamps to 8). HOUR mode = 6px bars + 2px gaps (8px pitch);
- *  168 buckets (7×24) → a 1342px chart, centers at i×8+3 (last i=167 →
- *  1339; clamps to 1158; first clamps to 8; i=84 centers at 675).
+ *  Geometry facts the pins ride on (the UNSTRETCHED natural pitch — happy-dom
+ *  reports clientWidth 0, so the un-measured frame keeps the natural
+ *  geometry; the fill-law tests stub the ResizeObserver): DAY mode = 20px
+ *  bars + 6px gaps (26px pitch); 10 buckets → a 254px chart, columns at
+ *  [i×26, i×26+20], the w-44 tooltip is 176px, the inset is 8px, the
+ *  beside-gap is 8px → i=0 → side right at 28px; i=4 (center 114 < 127 →
+ *  right, ideal 132 clamps to maxLeft 70 — a 254px plot cannot host 176px
+ *  beside a column at 104, the near-degenerate case) = 70px; i=9 (right
+ *  half) → side left at 234−184 = 50px. HOUR mode = 6px bars + 2px gaps
+ *  (8px pitch); 168 buckets (7×24) → a 1342px chart, columns at [i×8, i×8+6]
+ *  → i=84 (right half) → side left at 672−184 = 488px; i=167 → side left at
+ *  1336−184 = 1152px; i=0 → side right at 6+8 = 14px.
  *
  *  The real-browser half of the hit-testing law (the pointer falling through
  *  a pointer-events:none painted bar onto the column UNDERNEATH) is DOM
@@ -33,12 +41,13 @@ import type { UsageDayBucket } from "../../lib/api";
  *  behavioral reads through the column rects. The live pointer pass is the
  *  orchestrator's consolidated post-wave browser sweep. */
 
-const DAY_PITCH = 26; // DAY_BAR_WIDTH 20 + DAY_BAR_GAP 6
-const DAY_CHART_WIDTH = 10 * DAY_PITCH - 6; // 254
+const DAY_PITCH = 26; // DAY_BAR_WIDTH 20 + DAY_BAR_GAP 6 (the natural pitch)
+const DAY_CHART_WIDTH = 10 * DAY_PITCH - 6; // 254 (natural)
 const HOUR_PITCH = 8; // HOUR_BAR_WIDTH 6 + HOUR_BAR_GAP 2
 const HOUR_CHART_WIDTH = 168 * HOUR_PITCH - 2; // 1342
 const TOOLTIP_W = 176; // the tooltip card's w-44 class
-const TOOLTIP_INSET = 8; // clampTooltipX's TOOLTIP_EDGE_INSET_PX
+const TOOLTIP_INSET = 8; // placeTooltipBeside's TOOLTIP_EDGE_INSET_PX
+const BESIDE_GAP = 8; // placeTooltipBeside's default gap
 
 // The dashboard's default theme pair (resetTestState's nova/dark).
 const styles = deriveThemeStyles("nova", true);
@@ -112,39 +121,49 @@ describe("UsageActivityChart (R127-W2 chart-interaction laws — day mode)", () 
     }
   });
 
-  it("tooltip edge law: centers mid-series, clamps inside the chart at the first/last bars", () => {
+  it("R128 side-placement law: the tooltip renders BESIDE the hovered column — no -50% centering, no overlap at the ends", () => {
     render(
       <UsageActivityChart days={makeDays()} dayCount={10} isPending={false} isError={false} styles={styles} />,
     );
     const columns = document.querySelectorAll<SVGElement>("svg rect[data-bar-idx]");
 
-    // Middle bar (i=4, center x=114): the tooltip CENTERS on its bar —
-    // left is the bar's center, the -50% shift does the centering.
-    fireEvent.pointerMove(columns[4]);
+    // FIRST bar (i=0, column [0, 20], left half): the tooltip sits to the
+    // column's RIGHT — left = 20 + 8 = 28px. The transform carries NO -50%
+    // translation (the retired R127 center-on-bar spelling is gone).
+    fireEvent.pointerMove(columns[0]);
     let tip = tooltipEl();
     expect(tip).not.toBeNull();
-    expect(tip!.style.left).toBe("114px");
-    expect(screen.getByText("5,500")).toBeTruthy(); // 5k in + 0.5k out
+    expect(tip!.style.left).toBe("28px");
+    expect(tip!.style.transform).not.toContain("-50%");
+    expect(screen.getByText("1,500")).toBeTruthy();
 
-    // LAST bar (i=9, center x=244): a centered 176px tooltip would overflow
-    // the 254px chart's right edge — the clamp aligns its near edge inside
-    // (254 − 176 − 8 = 70px; 70 + 176 = 246 = the content box's edge).
+    // LAST bar (i=9, column [234, 254], right half): the tooltip sits to
+    // the column's LEFT — left = 234 − 176 − 8 = 50px; its right edge (226)
+    // stops a full gap short of the column's left edge (234) — BESIDE the
+    // bar, never covering it.
     fireEvent.pointerMove(columns[9]);
+    tip = tooltipEl();
+    expect(tip).not.toBeNull();
+    expect(tip!.style.left).toBe("50px");
+    expect(tip!.style.transform).not.toContain("-50%");
+    expect(Number.parseFloat(tip!.style.left) + TOOLTIP_W).toBeLessThanOrEqual(
+      9 * DAY_PITCH - BESIDE_GAP,
+    );
+    expect(screen.getByText("10,500")).toBeTruthy();
+
+    // MIDDLE bar (i=4, column [104, 124], center 114 in the left half): side
+    // right, ideal 132 clamps to maxLeft 70 (254 − 176 − 8). A 254px plot
+    // cannot host the 176px tooltip beside a column at 104 on either side —
+    // the near-degenerate case; placeTooltipBeside's overlap net keeps the
+    // roomier right side and clamps to its edge (70). Inside the inset.
+    fireEvent.pointerMove(columns[4]);
     tip = tooltipEl();
     expect(tip).not.toBeNull();
     expect(tip!.style.left).toBe("70px");
     expect(Number.parseFloat(tip!.style.left) + TOOLTIP_W).toBeLessThanOrEqual(
       DAY_CHART_WIDTH - TOOLTIP_INSET,
     );
-    expect(screen.getByText("10,500")).toBeTruthy();
-
-    // FIRST bar (i=0, center x=10): the mirror clamp at the left end — the
-    // 8px inset, never a translateX(-50%) that pushes the card off-chart.
-    fireEvent.pointerMove(columns[0]);
-    tip = tooltipEl();
-    expect(tip).not.toBeNull();
-    expect(tip!.style.left).toBe("8px");
-    expect(screen.getByText("1,500")).toBeTruthy();
+    expect(screen.getByText("5,500")).toBeTruthy(); // 5k in + 0.5k out
   });
 
   it("the R121-d single pointer read: one onPointerMove resolves the bar; leaving the bars clears the tooltip", async () => {
@@ -243,34 +262,43 @@ describe("UsageActivityChart (R127-W2 — the HOURLY view)", () => {
     expect(svg.getAttribute("aria-label")).toBe("Token usage per hour, 25,200 tokens over 168 hours");
   });
 
-  it("the hour tooltip: header reads hourBucketLabel ('Mon DD · HH:00') + the same edge clamp", () => {
+  it("the hour tooltip: header reads hourBucketLabel ('Mon DD · HH:00') + the side placement", () => {
     renderHourChart();
     const columns = document.querySelectorAll<SVGElement>("svg rect[data-bar-idx]");
 
-    // Middle bucket (i=84, center x=675): centers on its bar.
+    // Middle bucket (i=84, column [672, 678], center 675 in the right half):
+    // the tooltip sits to the bucket's LEFT — left = 672 − 176 − 8 = 488px,
+    // no -50% centering.
     fireEvent.pointerMove(columns[84]);
     let tip = tooltipEl();
     expect(tip).not.toBeNull();
-    expect(tip!.style.left).toBe("675px");
+    expect(tip!.style.left).toBe("488px");
+    expect(tip!.style.transform).not.toContain("-50%");
     expect(screen.getByText("Aug 19 · 12:00")).toBeTruthy(); // hourBucketLabel
     expect(screen.getByText("150")).toBeTruthy(); // 100 in + 50 out
 
-    // LAST bucket (i=167, center x=1339): clamps inside the 1342px chart
-    // (1342 − 176 − 8 = 1158; 1158 + 176 = 1334 = the content box's edge).
+    // LAST bucket (i=167, column [1336, 1342], right half): side left —
+    // left = 1336 − 184 = 1152px; its right edge (1328) stops a full gap
+    // short of the bucket's left edge (1336).
     fireEvent.pointerMove(columns[167]);
     tip = tooltipEl();
     expect(tip).not.toBeNull();
-    expect(tip!.style.left).toBe("1158px");
+    expect(tip!.style.left).toBe("1152px");
+    expect(tip!.style.transform).not.toContain("-50%");
     expect(Number.parseFloat(tip!.style.left) + TOOLTIP_W).toBeLessThanOrEqual(
       HOUR_CHART_WIDTH - TOOLTIP_INSET,
     );
+    expect(Number.parseFloat(tip!.style.left) + TOOLTIP_W).toBeLessThanOrEqual(
+      167 * HOUR_PITCH - BESIDE_GAP,
+    );
     expect(screen.getByText("Aug 22 · 23:00")).toBeTruthy();
 
-    // FIRST bucket (i=0, center x=3): the mirror clamp at the 8px inset.
+    // FIRST bucket (i=0, column [0, 6], left half): side right — left =
+    // 6 + 8 = 14px, one beside-gap past the bucket's right edge.
     fireEvent.pointerMove(columns[0]);
     tip = tooltipEl();
     expect(tip).not.toBeNull();
-    expect(tip!.style.left).toBe("8px");
+    expect(tip!.style.left).toBe("14px");
     expect(screen.getByText("Aug 16 · 00:00")).toBeTruthy();
   });
 
@@ -308,5 +336,154 @@ describe("UsageActivityChart (R127-W2 — the HOURLY view)", () => {
       />,
     );
     expect(assigned).toBe(HOUR_CHART_WIDTH);
+  });
+
+  it("R128 data-identity re-land: a SAME-LENGTH day-window swap re-lands at the newest end (the rolled-over window)", () => {
+    // R128: the R127 effect keyed on days.length — a 10-bucket window whose
+    // first/last dates changed (the day rolled over, or keepPreviousData
+    // served the refetched window) did NOT re-run. The data-identity key
+    // (granularity:length:first:last) must re-land it.
+    const { rerender } = render(
+      <UsageActivityChart days={makeDays()} dayCount={10} isPending={false} isError={false} styles={styles} />,
+    );
+    const scroller = document.querySelector<HTMLElement>("[data-scrolled-to-latest]");
+    expect(scroller).not.toBeNull();
+
+    let assigned = -1;
+    Object.defineProperty(scroller, "scrollWidth", { configurable: true, get: () => DAY_CHART_WIDTH });
+    Object.defineProperty(scroller, "scrollLeft", {
+      configurable: true,
+      get: () => 0,
+      set: (v: number) => {
+        assigned = v;
+      },
+    });
+    // The same 10-bucket length, every date shifted one day forward —
+    // identical geometry, DIFFERENT data identity.
+    rerender(
+      <UsageActivityChart
+        days={makeDays().map((d) => ({ ...d, date: `2026-08-${String(10 + Number(d.date.slice(-2))).padStart(2, "0")}` }))}
+        dayCount={10}
+        isPending={false}
+        isError={false}
+        styles={styles}
+      />,
+    );
+    expect(assigned).toBe(DAY_CHART_WIDTH);
+  });
+});
+
+/** ResizeObserver stub whose callbacks the test fires with synthetic widths
+ *  (the ChatFocusLayout.test.tsx pattern — happy-dom reports clientWidth 0
+ *  and its own ResizeObserver never fires, so the fill law's measured-width
+ *  leg is driven through this stub exactly like the established seam). */
+class MockResizeObserver {
+  static instances: MockResizeObserver[] = [];
+  cb: ResizeObserverCallback;
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb;
+    MockResizeObserver.instances.push(this);
+  }
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  static fire(width: number): void {
+    for (const inst of MockResizeObserver.instances) {
+      inst.cb(
+        [{ contentRect: { width } } as unknown as ResizeObserverEntry],
+        inst as unknown as ResizeObserver,
+      );
+    }
+  }
+}
+
+describe("UsageActivityChart (R128-W2 — the fill law)", () => {
+  beforeEach(() => {
+    MockResizeObserver.instances = [];
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanup();
+  });
+
+  it("a fitting DAY view stretches its pitch to FILL the measured scroller (no dead margins)", () => {
+    render(
+      <UsageActivityChart days={makeDays()} dayCount={10} isPending={false} isError={false} styles={styles} />,
+    );
+    // A 508px scroller: the natural 254px day chart doubles exactly — 40px
+    // bars + 12px gaps (508 = 10 × 52 − 12).
+    act(() => MockResizeObserver.fire(508));
+    const svg = document.querySelector('svg[role="img"]');
+    expect(svg!.getAttribute("width")).toBe("508");
+    for (const column of Array.from(svg!.querySelectorAll("rect[data-bar-idx]"))) {
+      expect(column.getAttribute("width")).toBe("40");
+    }
+  });
+
+  it("the DAY stretch is CAPPED at 42px bars however wide the scroller", () => {
+    render(
+      <UsageActivityChart days={makeDays()} dayCount={10} isPending={false} isError={false} styles={styles} />,
+    );
+    // A 1000px scroller wants factor 3.94; the cap is min(42/20, 16/6) = 2.1
+    // → 42px bars / 12.6px gaps → 10 × 54.6 − 12.6 = 533.4px of chart.
+    act(() => MockResizeObserver.fire(1000));
+    const svg = document.querySelector('svg[role="img"]');
+    expect(svg!.getAttribute("width")).toBe("533.4");
+    for (const column of Array.from(svg!.querySelectorAll("rect[data-bar-idx]"))) {
+      expect(column.getAttribute("width")).toBe("42");
+    }
+  });
+
+  it("an OVERFLOWING day window keeps the natural pitch (the fill law never shrinks)", () => {
+    render(
+      <UsageActivityChart days={makeDays()} dayCount={10} isPending={false} isError={false} styles={styles} />,
+    );
+    // A 200px scroller: the natural 254px chart overflows → natural geometry.
+    act(() => MockResizeObserver.fire(200));
+    const svg = document.querySelector('svg[role="img"]');
+    expect(svg!.getAttribute("width")).toBe(String(DAY_CHART_WIDTH));
+    for (const column of Array.from(svg!.querySelectorAll("rect[data-bar-idx]"))) {
+      expect(column.getAttribute("width")).toBe("20");
+    }
+  });
+
+  it("the HOUR geometry stays FIXED however wide the scroller (hour views always scroll)", () => {
+    render(
+      <UsageActivityChart
+        days={makeHourDays()}
+        dayCount={7}
+        granularity="hour"
+        isPending={false}
+        isError={false}
+        styles={styles}
+      />,
+    );
+    act(() => MockResizeObserver.fire(1000));
+    const svg = document.querySelector('svg[role="img"]');
+    expect(svg!.getAttribute("width")).toBe(String(HOUR_CHART_WIDTH));
+    for (const column of Array.from(svg!.querySelectorAll("rect[data-bar-idx]"))) {
+      expect(column.getAttribute("width")).toBe("6");
+    }
+  });
+
+  it("the stretched day view's tooltip still places BESIDE the (wider) hovered column", () => {
+    render(
+      <UsageActivityChart days={makeDays()} dayCount={10} isPending={false} isError={false} styles={styles} />,
+    );
+    act(() => MockResizeObserver.fire(508)); // 40px bars / 12px gaps
+    const columns = document.querySelectorAll<SVGElement>("svg rect[data-bar-idx]");
+
+    // LAST bar (i=9, column [468, 508], right half): side left — left =
+    // 468 − 176 − 8 = 284px; its right edge (460) stops a full gap short of
+    // the column's left edge (468).
+    fireEvent.pointerMove(columns[9]);
+    const tip = tooltipEl();
+    expect(tip).not.toBeNull();
+    expect(tip!.style.left).toBe("284px");
+    expect(Number.parseFloat(tip!.style.left) + TOOLTIP_W).toBeLessThanOrEqual(
+      9 * 52 - BESIDE_GAP,
+    );
+    expect(tip!.style.transform).not.toContain("-50%");
   });
 });
