@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Cpu, Settings } from "lucide-react";
+import { Check, ChevronRight, Cpu, Settings } from "lucide-react";
 import {
   fetchProviderModelConfig,
   fetchProviders,
@@ -569,8 +569,17 @@ export function ModelSelector({
     </div>
   );
 
+  // R130 (the owner's smooth-shrink verdict — "after a point, instead of
+  //   doing anything, the whole section moves up… which is not what should
+  //   happen"): the wrapper DROPS shrink-0 and takes min-w-0 — the pill
+  //   becomes the right cluster's FLEX SPONGE. Past the tier ladder the
+  //   button follows the wrapper's shrinking box (the button fills the
+  //   wrapper; the label's truncate ellipsizes CONTINUOUSLY) instead of
+  //   handing the whole cluster to the wrap line. The popover's
+  //   viewport-clamped fixed positioning (popGeo) measures the BUTTON, so
+  //   the flyout still lands under whatever width the pill has.
   return (
-    <div className="relative shrink-0" ref={popoverRef}>
+    <div className="relative min-w-0" ref={popoverRef}>
       {/* R87-A1 (owner: "When the option is opened up, the background will be
           slightly darkened and a slight frosted glass effect will be applied
           to it"): a fixed scrim BEHIND the popover (z-40 vs the popover's
@@ -631,8 +640,11 @@ export function ModelSelector({
             R89-D2 (owner: "the full model name was not showing, the half
             model name was showing instead of being shrunk down to the only
             logo"): below 350px the label collapses to NOTHING — the pill
-            becomes LOGO-ONLY (icon + chevron), never a half-cut name; the
-            title tooltip still carries the full label. */}
+            becomes LOGO-ONLY, never a half-cut name; the title tooltip
+            still carries the full label.
+            R130: the trailing ChevronDown glyph is RETIRED (the owner's
+            arrows directive), and past the tiers the label now ellipsizes
+            CONTINUOUSLY with the wrapper's flex shrink — the sponge. */}
         <Cpu
           size={12}
           className="shrink-0 text-accent"
@@ -640,12 +652,11 @@ export function ModelSelector({
           data-model-icon
         />
         <span
-          className="max-w-[240px] @max-[520px]:max-w-[170px] @max-[420px]:max-w-[90px] @max-[350px]:max-w-0 @max-[350px]:opacity-0 @max-[350px]:-ml-1 truncate transition-all duration-200"
+          className="min-w-0 max-w-[240px] @max-[520px]:max-w-[170px] @max-[420px]:max-w-[90px] @max-[350px]:max-w-0 @max-[350px]:opacity-0 @max-[350px]:-ml-1 truncate transition-all duration-200"
           data-model-label
         >
           {buttonLabel}
         </span>
-        <ChevronDown size={10} className="shrink-0" />
       </button>
       {open ? (
         <div

@@ -211,6 +211,24 @@ const CONTENT_H_PAD_CLASS =
  * above) so nested slots compose against the column's inset exactly once. */
 const CONTENT_COL_CLASS = `mx-auto w-full max-w-[1080px] ${CONTENT_H_PAD_CLASS}`;
 
+/** R130 (the owner's left-gap verdict — "the whole message input area was
+ * not expanding to the left side… it was leaving quite a lot of empty area
+ * on the left side"): the DOCKED composer's own column — the SAME cap +
+ * centering as the reading column, but a deliberately WIDER left inset
+ * (pl-5/md:pl-6/xl:pl-7 vs the messages' pl-12/14/16). The MessageTimeline
+ * never reaches the dock (it is absolutely clamped to the transcript
+ * wrapper's box, bottom-3 of THAT wrapper — the dock starts below it), so
+ * the reading column's left floor was dead air at the composer, and the
+ * R124 "composer aligns EXACTLY with the reading column" law is retired by
+ * the owner's own ask. The RIGHT leg keeps the messages' graduated tiers so
+ * the input's right edge stays column-aligned. The empty-state composer
+ * keeps the reading-column alignment (the centered hero moment — greeting
+ * above, composer below, aligned). */
+const COMPOSER_DOCK_H_PAD_CLASS =
+  "pl-5 pr-6 md:pl-6 md:pr-12 xl:pl-7 xl:pr-16 @max-[560px]:pl-4 @max-[560px]:pr-4 @max-[420px]:pl-3.5 @max-[420px]:pr-2.5";
+
+const COMPOSER_DOCK_COL_CLASS = `mx-auto w-full max-w-[1080px] ${COMPOSER_DOCK_H_PAD_CLASS}`;
+
 /** R87-A1: the column WITHOUT the graduated horizontal padding — for NESTED
  * slots that already sit inside the padded column (the empty-state
  * composer), so the inset is applied exactly once while the cap/centering
@@ -4804,7 +4822,13 @@ export function AgentChatPanel({
           R87-A1: the dock keeps only VERTICAL padding — the column class on
           the inner wrapper carries the same graduated horizontal padding as
           the messages, so the docked composer aligns EXACTLY with the
-          reading column (the old p-2/p-2.5 also offset it 10px inward). */}
+          reading column (the old p-2/p-2.5 also offset it 10px inward).
+          R130: that "aligns EXACTLY" law is RETIRED by the owner's own
+          verdict (the input must EXPAND LEFT — the quick-nav's left floor
+          was dead air at the composer): the dock now carries
+          COMPOSER_DOCK_COL_CLASS, the deliberately wider left inset (the
+          right edge stays column-aligned; the timeline never reaches the
+          dock — see the constant's note). */}
       {composerDocked ? (
         <div
           // R126-3d-2: the dock's top hairline rides the clay RIM tier
@@ -4812,7 +4836,7 @@ export function AgentChatPanel({
           // leg retired).
           className={`shrink-0 border-t border-clay-rim ${compact ? "py-2" : "py-2.5"}`}
         >
-          <div className={CONTENT_COL_CLASS} data-composer-dock>
+          <div className={COMPOSER_DOCK_COL_CLASS} data-composer-dock>
             {renderComposer(false)}
           </div>
         </div>

@@ -90,17 +90,22 @@ export interface TimelineExchange {
 const REST_HEIGHT = 6;
 /** The ACTIVE exchange's resting height — a touch taller at rest too. */
 const ACTIVE_REST_HEIGHT = 8;
-/** Resting row width (px) — a short horizontal chip, never a tall bar. */
-const REST_WIDTH = 10;
+/** Resting row width (px) — a short horizontal chip, never a tall bar.
+ * R130 (the owner: the quick nav "should utilize a bit less space"): the
+ * rail slims from 10→8px at rest. */
+const REST_WIDTH = 8;
 /** The ACTIVE exchange's resting width — a touch wider at rest too. */
-const ACTIVE_REST_WIDTH = 14;
+const ACTIVE_REST_WIDTH = 11;
 /** The nearest-row magnified height (px) — modest: the pill gains 3px of
  * thickness, nothing that could ever read as a circle. */
 const MAX_HEIGHT = 9;
 /** The nearest-row magnified width (px) — THE dominant leg (R124 verdict
- * 1): 10→28 nearly triples the pill's width, so the grown row reads as a
- * clearly WIDER pill (R123's 22×24 near-square read as a circle). */
-const MAX_WIDTH = 28;
+ * 1): 8→20 more than doubles the pill's width, so the grown row reads as a
+ * clearly WIDER pill (R123's 22×24 near-square read as a circle). R130:
+ * slimmed 28→20 with the corridor (the whole rail "utilizes a bit less
+ * space" — the magnified chip + its 8px left anchor now exactly fills the
+ * 28px corridor). */
+const MAX_WIDTH = 20;
 /** The falloff radius (px): at this distance from a row's center the growth
  * has decayed to zero — the owner's "there should be a limit" holds in Y
  * exactly as it did in R120. */
@@ -389,18 +394,19 @@ export function MessageTimeline({
       data-testid="message-timeline"
       role="navigation"
       aria-label="Message timeline"
-      // R124 verdict 4: left-1 (4px — "just leaving a small padding") is the
-      // rail's whole left inset from the transcript viewport's border, and
-      // w-9 bounds the corridor (36px: the widest thing the rail may paint
-      // or track; the magnified 28px chip + its left-anchor slack never
-      // cross it). The reading column's own pl floor clears the corridor's
-      // right edge at EVERY window size — the pills never ride the text.
-      // The root itself never takes pointer events; the corridor below is
-      // the one interactive surface.
-      className="absolute bottom-3 top-3 left-1 z-10 w-9 pointer-events-none"
+      // R124 verdict 4 + R130: left-1 (4px — "just leaving a small padding")
+      // is the rail's whole left inset from the transcript viewport's
+      // border, and w-7 bounds the corridor (28px: the widest thing the
+      // rail may paint or track — the magnified 20px chip + its 8px
+      // left-anchor slack exactly fills it; the corridor SLIMMED from w-9
+      // per the owner's "utilizes a bit less space" directive, and the
+      // reading column's own pl floor clears it at EVERY window size —
+      // the pills never ride the text). The root itself never takes
+      // pointer events; the corridor below is the one interactive surface.
+      className="absolute bottom-3 top-3 left-1 z-10 w-7 pointer-events-none"
     >
-      {/* THE CORRIDOR — the interactive column: a 36px-wide (w-9) pointer
-          band WIDER than the visual rows (10px at rest, 28px magnified).
+      {/* THE CORRIDOR — the interactive column: a 28px-wide (w-7) pointer
+          band WIDER than the visual rows (8px at rest, 20px magnified).
           Hovering NEAR a row — in the gutter slack to its left or the tail
           to its right — registers through this one pointermove (the
           owner's "I can hover near it on the right side or left side"),
@@ -429,14 +435,14 @@ export function MessageTimeline({
               aria-current={isActive ? "true" : undefined}
               title={`Message ${i + 1} of ${exchanges.length}`}
               // The row BUTTON spans the corridor's full width at its Y
-              // (the honest hit target — the 10px chip is the visual, this
+              // (the honest hit target — the 8px chip is the visual, this
               // band is the control), and LEFT-ANCHORS its chip (R124
-              // verdict 4): justify-start + the fixed pl-1.5 slack pin the
-              // chip's LEFT edge 10px from the viewport's border — the
-              // pills hug the very left side — so the width growth extends
-              // RIGHTWARD, into the corridor's tail, never leftward past
-              // the border.
-              className="flex w-full items-center justify-start rounded-full pl-1.5 outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-card"
+              // verdict 4 + R130's slimmer rail): justify-start + the
+              // fixed pl-1 slack pin the chip's LEFT edge 8px from the
+              // viewport's border — the pills hug the very left side —
+              // so the width growth extends RIGHTWARD, into the
+              // corridor's tail, never leftward past the border.
+              className="flex w-full items-center justify-start rounded-full pl-1 outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-card"
               style={{
                 height: targets[i].height,
                 transitionProperty: reduceMotion ? "none" : "height",
@@ -450,7 +456,7 @@ export function MessageTimeline({
               {/* THE ROW CHIP — the horizontal pill itself (R124: a WIDER
                   pill on hover, never a circle): height follows the
                   button's animated box (6→9), width animates on the same
-                  quick-tier tween (10→28, the dominant leg), kind-colored
+                  quick-tier tween (8→20, the dominant leg), kind-colored
                   on the CSS-var leg — the DEEP accent tier for the ACTIVE
                   exchange (R126-3d-2: bg-accent-deep, TOKENS §1d's marker
                   fill — the scroll-owned highlight), ink while previewed,

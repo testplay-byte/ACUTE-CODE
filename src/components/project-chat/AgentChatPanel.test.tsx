@@ -2448,6 +2448,40 @@ describe("AgentChatPanel message timeline (ROUND-120 R120-C-PC)", () => {
     expect(railGrids).toHaveLength(0);
   });
 
+  it("ROUND-130 (owner: the input \"was not expanding to the left side… leaving quite a lot of empty area\"): the DOCKED composer carries its own WIDER left inset — decoupled from the reading column the timeline never reaches", async () => {
+    await renderTimelineConversation();
+
+    // The dock exists (a folded transcript → the composer is docked).
+    const dock = document.querySelector("[data-composer-dock]") as HTMLElement;
+    expect(dock).toBeTruthy();
+    // THE R130 LAW: the dock's left inset is the deliberately small
+    // pl-5/md:pl-6/xl:pl-7 (20/24/28px) — NOT the reading column's
+    // pl-12/pl-14/px-16 (48/56/64px) the composer used to inherit. The
+    // input EXPANDS LEFT over the quick-nav's dead air; the RIGHT leg
+    // keeps the column's graduated tiers (pr-6/md:pr-12/xl:pr-16) so the
+    // input's right edge stays aligned with the messages.
+    expect(dock.className).toContain("pl-5");
+    expect(dock.className).toContain("md:pl-6");
+    expect(dock.className).toContain("xl:pl-7");
+    expect(dock.className).toContain("pr-6");
+    expect(dock.className).toContain("md:pr-12");
+    expect(dock.className).toContain("xl:pr-16");
+    expect(dock.className).not.toContain("pl-12");
+    expect(dock.className).not.toContain("md:pl-14");
+    expect(dock.className).not.toContain("xl:px-16");
+    // The dock keeps the reading column's cap + centering (the same
+    // max-w-[1080px] mx-auto law — wide windows never stretch the input).
+    expect(dock.className).toContain("max-w-[1080px]");
+    expect(dock.className).toContain("mx-auto");
+    // And the slim quick-nav: the corridor is w-7 (28px — R130's
+    // "utilizes a bit less space"), clamped INSIDE the transcript wrapper
+    // so it can never reach the dock below it.
+    const strip = document.querySelector('[data-testid="message-timeline"]') as HTMLElement;
+    expect(strip).toBeTruthy();
+    expect(strip.className).toContain("w-7");
+    expect(strip.className).not.toContain("w-9");
+  });
+
   it("ONE BAR PER USER EXCHANGE — and the CURRENT exchange's bar is highlighted", async () => {
     await renderTimelineConversation();
 

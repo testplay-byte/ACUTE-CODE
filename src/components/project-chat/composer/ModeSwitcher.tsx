@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ClipboardList, ShieldCheck, Zap } from "lucide-react";
+import { Check, ClipboardList, ShieldCheck, Zap } from "lucide-react";
 import type { PermissionMode } from "shared";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import { MODE_OPTIONS, modeOption, useDismiss } from "./composer-utils";
@@ -89,14 +89,17 @@ export function ModeSwitcher({
             it just narrows (240 → 170 → 90px). The collapsed tier also
             pulls the span's own gap-1.5 slot shut (-mr-1.5) so the
             icon-only pill doesn't keep a dead 12px gap where the label
-            used to sit. */}
+            used to sit.
+            R130 (owner: "it shows arrows on the right side of the operation
+            mode selection… which is not a good thing to have. I don't want
+            you to show those"): the trailing ChevronDown glyph is RETIRED —
+            the leading family icon + the label are the affordance now. */}
         <span
           data-mode-label
           className="max-w-[240px] overflow-hidden whitespace-nowrap transition-all duration-200 @max-[560px]:max-w-0 @max-[560px]:opacity-0 @max-[560px]:-mr-1.5"
         >
           {current.label}
         </span>
-        <ChevronDown size={10} className="shrink-0" />
       </button>
       {/* R92-A: the DOM dropdown renders ONLY on the web/fallback leg —
           while the overlay window is the menu a hidden duplicate here would

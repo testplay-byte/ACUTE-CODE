@@ -644,7 +644,12 @@ export function Composer({
           THINKING label at 500px (both animate max-width + opacity rather
           than hard-hiding). The pills' title tooltips carry the full labels.
           flex-wrap on the wrapping area stays as the R51-c never-overlap
-          emergency fallback (absurd widths — the freeform mini windows). */}
+          emergency fallback (absurd widths — the freeform mini windows).
+          R130 (owner: the shrink must stay SMOOTH — "the whole section
+          moves up… which is not what should happen"): past the tiers the
+          right cluster now SHRINKS (the model pill is the flex sponge —
+          its label ellipsizes continuously) instead of wrapping; see the
+          data-composer-right comment below. */}
       <div
         role="toolbar"
         aria-label="Composer tools"
@@ -665,11 +670,21 @@ export function Composer({
           <ModeSwitcher mode={permissionMode} disabled={!liveMode} onChange={onModeChange} />
         </div>
         {/* R77: the right-side SELECTORS — context donut, model, reasoning
-            (ml-auto pins them right on their line; shrink-0 keeps the pills
-            from being squeezed). R78: the ACTION button NO LONGER lives
-            here — it moved to the anchor sibling (data-composer-actions)
-            so its position never moves (the owner's R78 ask). */}
-        <div className="ml-auto flex items-center gap-1 shrink-0" data-composer-right>
+            (ml-auto pins them right on their line). R78: the ACTION button NO
+            LONGER lives here — it moved to the anchor sibling
+            (data-composer-actions) so its position never moves (the owner's
+            R78 ask).
+            R130 (owner: "after a point, instead of doing anything, the whole
+            section moves up… which is not what should happen. So handle it
+            properly and manage it better"): the cluster DROPS shrink-0 and
+            takes min-w-0 — it is now SHRINKABLE, with the model pill as the
+            flex sponge (its wrapper's min-w-0 + the label's truncate make
+            the name ellipsize CONTINUOUSLY past the tier ladder, so the row
+            keeps shrinking smoothly instead of wrapping the whole cluster
+            onto a second line). The donut + thinking pills keep their own
+            shrink-0 (fixed small pills); the R51-c flex-wrap on the wrapping
+            area stays as the absurd-width emergency fallback only. */}
+        <div className="ml-auto flex min-w-0 items-center gap-1" data-composer-right>
           <ContextDonut
             sessionId={sessionId}
             model={effectiveModel}

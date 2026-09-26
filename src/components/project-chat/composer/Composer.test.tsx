@@ -40,7 +40,8 @@
  *    → dangerDeep — R126-3d-4);
  *  - the Session section splits Main agent / Sub-agents / Combined (with a
  *    pre-R51 no-`usage` report falling back to zeros);
- *  - the toolbar never overlaps: shrink-0 clusters + flex spacer + wrap.
+ *  - the toolbar never overlaps: the shrinkable right cluster (R130 — the
+ *    model pill is the flex sponge) + the flex spacer + the emergency wrap.
  *
  * ROUND-52 (R52-a) additions, per the owner's flyout complaint:
  *  - the provider→models flyout has a HOVER BRIDGE (grace-period close,
@@ -585,6 +586,21 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     expect(wrapArea.className).toContain("flex-wrap");
     expect(wrapArea.className).toContain("flex-1");
     expect(wrapArea.className).toContain("min-w-0");
+    // R130 (the owner's smooth-shrink verdict): the RIGHT cluster is now
+    // SHRINKABLE — it drops shrink-0 and takes min-w-0, with the model
+    // pill as the flex sponge (the label ellipsizes continuously past the
+    // tier ladder) so the row keeps shrinking smoothly instead of wrapping
+    // the whole cluster onto a second line. The flex-wrap on the wrapping
+    // area stays as the R51-c absurd-width emergency fallback ONLY.
+    expect(right.className).toContain("min-w-0");
+    expect(right.className).not.toContain("shrink-0");
+    // The model selector's wrapper is THE sponge (the donut + thinking
+    // pills keep their fixed shrink-0 wrappers — all squeeze lands on the
+    // model pill).
+    const modelBtn = screen.getByRole("button", { name: "Choose model" }) as HTMLElement;
+    const modelWrap = modelBtn.parentElement as HTMLElement;
+    expect(modelWrap.className).toContain("min-w-0");
+    expect(modelWrap.className).not.toContain("shrink-0");
     // THE ANCHOR: the action group is a SIBLING of the wrapping area (a
     // DIRECT toolbar child, OUTSIDE the wrapping area — it can never wrap)
     // and the LAST toolbar child (justify-between pins it right).
@@ -655,12 +671,18 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     expect(label.className).toContain("@max-[420px]:max-w-[90px]");
     expect(label.className).toContain("transition-all");
     // R89-D2: the LOGO-ONLY tier — below 350px the label collapses fully
-    // (icon + chevron only), never a half-cut name.
+    // (icon only — R130 retired the trailing chevron), never a half-cut
+    // name.
     expect(label.className).toContain("@max-[350px]:max-w-0");
     expect(label.className).toContain("@max-[350px]:opacity-0");
     expect(label.className).toContain("truncate");
     expect(label.className).not.toContain(":hidden");
     expect(icon.getAttribute("class") ?? "").not.toContain("@max-");
+    // R130: the sponge leg — the label also takes min-w-0 so it can
+    // ellipsize CONTINUOUSLY under the wrapper's flex shrink (the smooth
+    // shrink past the tiers; the tier ladder above still stages the
+    // graceful collapse).
+    expect(label.className).toContain("min-w-0");
     // The OTHER pills fold in staggered tiers around it: the MODE label
     // (widest text) first at 560px, THINKING one step later at 500px — both
     // COLLAPSE (animated max-width + fade), never hard-hide.
@@ -668,7 +690,7 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     expect(modeLabel.className).toContain("@max-[560px]:max-w-0");
     expect(modeLabel.className).toContain("@max-[560px]:opacity-0");
     // The collapsed tier shuts the span's gap slot too — the icon-only
-    // pill keeps its normal icon↔chevron spacing, no dead 12px hole.
+    // pill stays tight (no dead 12px hole where the label sat).
     expect(modeLabel.className).toContain("@max-[560px]:-mr-1.5");
     expect(modeLabel.className).not.toContain(":hidden");
     const thinkingLabel = document.querySelector("[data-thinking-label]") as HTMLElement;
@@ -676,6 +698,45 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     expect(thinkingLabel.className).toContain("@max-[500px]:opacity-0");
     expect(thinkingLabel.className).toContain("@max-[500px]:-mr-1.5");
     expect(thinkingLabel.className).not.toContain(":hidden");
+  });
+
+  it("ROUND-130 (owner: \"it shows arrows on the right side of the operation mode selection… I don't want you to show those\"): the three picker pills carry NO trailing chevron glyph — the leading family icon + the label are the affordance", async () => {
+    await renderEmptyPanel();
+    // THE PILL SET: the mode picker, the model picker, the thinking picker.
+    // Each trigger is a <button> whose LAST visible child must be the label
+    // span (data-*-label) — the ChevronDown glyph is retired outright, so
+    // no <svg> may trail the label inside any of the three triggers.
+    const pills: Array<{ name: string; labelSel: string }> = [
+      { name: "Operating mode: Ask", labelSel: "[data-mode-label]" },
+      { name: "Choose model", labelSel: "[data-model-label]" },
+      { name: "Thinking level: Default", labelSel: "[data-thinking-label]" },
+    ];
+    for (const { name, labelSel } of pills) {
+      const btn = screen.getByRole("button", { name }) as HTMLElement;
+      const label = btn.querySelector(labelSel) as HTMLElement;
+      expect(label).toBeTruthy();
+      // Nothing renders AFTER the label span inside the trigger (the
+      // chevron used to sit exactly there).
+      const kids = Array.from(btn.children) as HTMLElement[];
+      const labelIndex = kids.indexOf(label);
+      expect(labelIndex).toBe(kids.length - 1);
+      // And no stray chevron svg anywhere in the trigger at all.
+      const svgs = btn.querySelectorAll("svg");
+      const chevronLike = Array.from(svgs).filter((s) => {
+        const cls = s.getAttribute("class") ?? "";
+        return cls.includes("shrink-0") && !cls.includes("text-accent") && s.parentElement === btn;
+      });
+      expect(chevronLike).toHaveLength(0);
+    }
+    // The LEADING family icons survive (Zap/Shield/Clipboard for mode, Cpu
+    // for model, Brain for thinking) — exactly one leading svg per trigger.
+    for (const { name } of pills) {
+      const btn = screen.getByRole("button", { name }) as HTMLElement;
+      const directSvgs = Array.from(btn.querySelectorAll("svg")).filter(
+        (s) => s.parentElement === btn,
+      );
+      expect(directSvgs.length).toBe(1);
+    }
   });
 });
 

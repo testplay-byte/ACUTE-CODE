@@ -1,4 +1,4 @@
-import { Brain, Check, ChevronDown } from "lucide-react";
+import { Brain, Check } from "lucide-react";
 import type { ModelReasoningSupport, ThinkingLevel } from "shared";
 import { useThemeStyles } from "../../../lib/use-theme-styles";
 import {
@@ -145,14 +145,15 @@ export function ThinkingLevelButton({
             collapses (animated max-width + fade) one step AFTER the mode
             label (560px) at the 500px @container floor, so the pills fold in
             stages instead of all at once. -mr-1.5 on the collapsed tier
-            shuts the span's gap slot so the icon-only pill stays tight. */}
+            shuts the span's gap slot so the icon-only pill stays tight.
+            R130: the trailing ChevronDown glyph is RETIRED (the owner's
+            arrows directive — the leading Brain icon is the affordance). */}
         <span
           data-thinking-label
           className="max-w-[240px] overflow-hidden whitespace-nowrap transition-all duration-200 @max-[500px]:max-w-0 @max-[500px]:opacity-0 @max-[500px]:-mr-1.5"
         >
           {current.label}
         </span>
-        <ChevronDown size={10} className="shrink-0" />
       </button>
       {/* R92-A: the DOM dropdown renders ONLY on the web/fallback leg (see
           ModeSwitcher's comment). R95-E: the rows come from the support-aware
