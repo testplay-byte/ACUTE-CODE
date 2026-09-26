@@ -419,8 +419,12 @@ describe("planCompaction", () => {
     expect(skip.reason).toBe("below_threshold");
     // The decision's numbers: the local estimate (no anchor passed), the
     // derived threshold, and the dual-number pair agreeing with itself.
+    // R129-CTX2 (re-pinned — the 90% law): the gate's line is
+    // AUTO_COMPACT_RATIO × available (floor), not available itself.
     expect(skip.tokenSource).toBe("estimated");
-    expect(skip.threshold).toBe(ROOMY_BUDGET.contextWindow - ROOMY_BUDGET.maxOutputTokens - ROOMY_BUDGET.margin);
+    expect(skip.threshold).toBe(
+      Math.floor((ROOMY_BUDGET.contextWindow - ROOMY_BUDGET.maxOutputTokens - ROOMY_BUDGET.margin) * 0.9),
+    );
     expect(skip.tokenCount).toBe(skip.estimatedTokens);
   });
 
@@ -432,7 +436,10 @@ describe("planCompaction", () => {
     // R125-C (D2): the compact side carries the typed decision too.
     expect(plan.reason).toBe("above_threshold");
     expect(plan.tokenSource).toBe("estimated");
-    expect(plan.threshold).toBe(400);
+    // R129-CTX2 (re-pinned — the 90% law): the compact decision's threshold
+    // is the AUTO line (0.9 × available = 360 for this budget), the number
+    // the count actually reached.
+    expect(plan.threshold).toBe(360);
     expect(plan.estimatedTokens).toBeGreaterThan(400);
     expect(plan.toSummarize.length).toBeGreaterThan(0);
     expect(plan.keep.length).toBeGreaterThan(0);
@@ -502,7 +509,9 @@ describe("planCompaction", () => {
     expect(skip.tokenSource).toBe("provider-anchored");
     expect(skip.tokenCount).toBe(100);
     expect(skip.estimatedTokens).toBeGreaterThan(400); // the over-counted estimate, still reported
-    expect(skip.threshold).toBe(400);
+    // R129-CTX2 (re-pinned — the 90% law): the veto compares against the
+    // AUTO line (0.9 × available = 360), still far above the anchored 100.
+    expect(skip.threshold).toBe(360);
   });
 
   it("R125-C D1: garbage overrides (0 / NaN / negative / Infinity) fall back to the estimate", () => {
@@ -612,7 +621,8 @@ describe("assembleWithCompaction", () => {
     // threshold, reason "above_threshold".
     expect(payload.tokenSource).toBe("estimated");
     expect(payload.reason).toBe("above_threshold");
-    expect(payload.threshold).toBe(400);
+    // R129-CTX2 (re-pinned — the 90% law): the AUTO line (0.9 × available).
+    expect(payload.threshold).toBe(360);
     expect(payload.tokenCount).toBe(payload.estimatedTokens);
     expect(typeof payload.tokenCount).toBe("number");
   });
@@ -638,7 +648,11 @@ describe("assembleWithCompaction", () => {
     expect(payload.tokenSource).toBe("provider-anchored");
     expect(payload.tokenCount).toBe(1_000_000);
     expect(payload.reason).toBe("above_threshold");
-    expect(payload.threshold).toBe(ROOMY_BUDGET.contextWindow - ROOMY_BUDGET.maxOutputTokens - ROOMY_BUDGET.margin);
+    // R129-CTX2 (re-pinned — the 90% law): the AUTO line (0.9 × available,
+    // floored) — the number the anchored count reached.
+    expect(payload.threshold).toBe(
+      Math.floor((ROOMY_BUDGET.contextWindow - ROOMY_BUDGET.maxOutputTokens - ROOMY_BUDGET.margin) * 0.9),
+    );
     // The dual-number pair: the local estimate is reported ALONGSIDE the
     // winning provider number (the disagreement is visible).
     expect(typeof payload.estimatedTokens).toBe("number");
@@ -907,7 +921,8 @@ describe("ROUND-125 (R125-C): runStreamedAgentTurn builds + threads the provider
     expect(payload).toBeDefined();
     expect(payload.tokenSource).toBe("provider-anchored");
     expect(payload.reason).toBe("above_threshold");
-    expect(payload.threshold).toBe(1_900);
+    // R129-CTX2 (re-pinned — the 90% law): the AUTO line (0.9 × available).
+    expect(payload.threshold).toBe(1_710);
     expect(payload.tokenCount).toBe(5_000 + expectedTail);
     expect(payload.estimatedTokens).toBe(expectedEstimate);
 
@@ -917,7 +932,8 @@ describe("ROUND-125 (R125-C): runStreamedAgentTurn builds + threads the provider
     expect(frame?.tokenSource).toBe("provider-anchored");
     expect(frame?.reason).toBe("above_threshold");
     expect(frame?.tokenCount).toBe(5_000 + expectedTail);
-    expect(frame?.threshold).toBe(1_900);
+    // R129-CTX2 (re-pinned — the 90% law): the AUTO line (0.9 × available).
+    expect(frame?.threshold).toBe(1_710);
     expect(frame?.estimatedTokens).toBe(expectedEstimate);
     // The turn itself completed on the compacted list (the real reply landed).
     const reply = listSessionEvents(db, sid).find((e) => e.type === "message.assistant" && e.seq > 4);

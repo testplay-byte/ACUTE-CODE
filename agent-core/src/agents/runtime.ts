@@ -70,7 +70,7 @@ import type {
 // queued-message injection builds its model-facing user message there);
 // this module — assembleHistory — imports it back (see chat.ts's section
 // header for the move's rationale).
-import { isStickyResultTool, renderAttachments, readStreamPartialUsage } from "./chat.js";
+import { isStickyResultTool, renderAttachments, renderOldAttachmentStubs, readStreamPartialUsage } from "./chat.js";
 import { buildProjectSystemPrompt, readCustomRules, type PromptEnvironment } from "./prompts.js";
 // ROUND-94 (R94-G wiring): the vision-capability gate for the prompt's
 // CAPABILITIES section — the SAME sessionHasVisionPath the screenshot tools
@@ -1038,6 +1038,31 @@ const OLD_TOOL_STUB_CHARS = 200;
 const MAX_TOOL_BLOCK_CHARS = 48_000;
 const STICKY_STUB_CHARS = 8_000;
 
+/* ── ROUND-129 (R129-CTX1 — the replay-hygiene passes; the five-reference
+ * research synthesis: oh-my-pi pruning.ts's readToolSupersedeKey + cline's
+ * "[outdated - see the latest file content]" rewrite, the two projects'
+ * top adoption verdict) ──────────────────────────────────────────────── */
+
+/** R129-CTX1: the deterministic read families whose results go STALE when
+ * the same path is read again later — an older read of a path the log has
+ * since re-read (or written) is dead weight the model was re-reading every
+ * iteration (the owner's "it takes in quite a lot of useless, unneeded
+ * data"). Keyed by the single path arg these tools carry. */
+const SUPERSEDE_READ_TOOLS = new Set(["read_file", "list_dir"]);
+
+/** R129-CTX1: the write families that make every EARLIER read of the same
+ * path stale (cline's law: a superseded read renders "[outdated — see the
+ * latest file content]"). Writes themselves are NEVER stubbed — they are
+ * the ground truth of what happened. create_dir is deliberately absent:
+ * its path is the NEW thing, not a path whose older reads exist. */
+const SUPERSEDE_WRITE_TOOLS = new Set(["write_file", "edit_file", "delete_file"]);
+
+/** R129-CTX1: the honest stub a superseded read carries — the tool name and
+ * args stay (traceability), the output is replaced by the actionable
+ * pointer. One pinned string. */
+const SUPERSEDED_READ_MARKER =
+  "[superseded — a newer read or write of this path appears below; re-read it if you need the contents]";
+
 interface PendingToolLine {
   text: string;
   sticky: boolean;
@@ -1067,6 +1092,37 @@ export function assembleHistory(
     if (ev.type === "tool.use") toolUseSeqs.push(ev.seq);
   }
   const recentToolSeqs = new Set(toolUseSeqs.slice(-recentWindow));
+
+  // R129-CTX1 (supersede pre-pass — needs FUTURE knowledge, hence the
+  // second walk): for every path the log touched, the seq of the NEWEST
+  // read-or-write of it. An older READ of a path whose latest-touch seq is
+  // greater than its own is superseded — its output stubs to the honest
+  // marker at render time below (the call line itself stays). Writes never
+  // stub: the newest write of a path is its ground truth, and an older
+  // write's output already tells the model what it did then.
+  const latestTouchSeqByPath = new Map<string, number>();
+  // R129-CTX1 (attachment pre-pass): the seq of the LAST user message event
+  // carrying attachments — the one whose bodies ride in full.
+  let lastAttachmentUserSeq = -1;
+  for (const ev of events) {
+    if (ev.type === "tool.use") {
+      const payload =
+        ev.payload && typeof ev.payload === "object"
+          ? (ev.payload as Record<string, unknown>)
+          : {};
+      const toolName = typeof payload.toolName === "string" ? payload.toolName : "tool";
+      const argsSummary = typeof payload.argsSummary === "string" ? payload.argsSummary : "";
+      if (SUPERSEDE_READ_TOOLS.has(toolName) || SUPERSEDE_WRITE_TOOLS.has(toolName)) {
+        const path = pathFromArgsSummary(argsSummary);
+        if (path !== null) latestTouchSeqByPath.set(path, ev.seq);
+      }
+    } else if (ev.type === "message.user") {
+      const msg = asChatMessage(ev);
+      if (msg?.attachments !== undefined && msg.attachments.length > 0) {
+        lastAttachmentUserSeq = ev.seq;
+      }
+    }
+  }
 
   const flushTools = () => {
     if (pendingToolLines.length === 0) return;
@@ -1111,9 +1167,17 @@ export function assembleHistory(
           role: msg.role,
           // ROUND-50 (R50-c1): user attachments render into the model-facing
           // content here (assistant events never carry them).
+          // R129-CTX1 (cline's old-attachment stripping): only the NEWEST
+          // attachment-bearing user message rides the bodies in full — every
+          // older one renders the one-line stubs (the file lives in the
+          // project; the model re-reads on demand). Before this, attachment
+          // text rode EVERY replay of EVERY turn forever — pure re-sent
+          // weight the owner's "100 million context" complaint named.
           content:
             msg.role === "user" && msg.attachments !== undefined
-              ? renderAttachments(msg.content, msg.attachments)
+              ? event.seq === lastAttachmentUserSeq
+                ? renderAttachments(msg.content, msg.attachments)
+                : renderOldAttachmentStubs(msg.content, msg.attachments)
               : msg.content,
           throughSeq: event.seq,
         });
@@ -1140,6 +1204,22 @@ export function assembleHistory(
       );
       let line =
         `${toolName}(${argsSummary}) → ${ok ? "ok" : "FAILED"}${safeOutput ? `: ${safeOutput}` : ""}`;
+      // R129-CTX1 (the supersede law): an older READ of a path the log has
+      // since re-read or written is STALE — its output stubs to the honest
+      // marker (the call line itself stays for traceability). The newest
+      // read/write of every path always renders full; a FAILED read never
+      // stubs (its error is already short + it never carried content);
+      // sticky tools are not read-family and never reach this branch.
+      // This composes with the R58-c recent window BELOW it: a superseded
+      // read stubs even INSIDE the window (the newer read is the truth the
+      // model should read, not the older one), and an un-superseded read
+      // keeps the R58-c fidelity rules verbatim.
+      if (ok && SUPERSEDE_READ_TOOLS.has(toolName)) {
+        const path = pathFromArgsSummary(argsSummary);
+        if (path !== null && (latestTouchSeqByPath.get(path) ?? event.seq) > event.seq) {
+          line = `${toolName}(${argsSummary}) → ok: ${SUPERSEDED_READ_MARKER}`;
+        }
+      }
       // ROUND-70 (R70-b, D3): sticky tools (read_skill / memory_recall)
       // never hit the per-line 200-char stub — instructions and durable
       // facts must survive the whole task. See the header comment.
@@ -2488,6 +2568,15 @@ export async function runSingleAgentTurn(
     // serves EVERY sub-agent child and the sync HTTP route; pre-R107 a sync
     // sub-agent could burn unbounded calls with no request stop at all. ──
     const usedTokens = estimateMessageTokens(messages);
+    // R129-CTX2 (the preflight output cap): the request must never RESERVE
+    // more output than the window has left after this assembled prompt
+    // (free chat-completions models hard-400 when prompt + max_tokens
+    // exceeds the window — long before any compaction threshold fires;
+    // zcode's maxOutputTokens = min(modelMax, window − usage − 1000) + omp's
+    // fitOutputTokensToContextWindow, the research's C7). When the window
+    // has more room than the model's own cap, the model cap stands
+    // verbatim — the byte-identical pre-R129 value.
+    const outputCap = clampOutputTokens(budget.maxOutputTokens, budget.contextWindow, usedTokens);
     // Context guard (6-f R-F5 → ROUND-83 → R107-b sync parity): abort if the
     // assembled context exceeds the model's OWN budget line (window − output
     // reserve − margin — the same `available` the compaction trigger and the
@@ -2550,7 +2639,9 @@ export async function runSingleAgentTurn(
         // ROUND-96 (R96-J): the resolved output cap rides the wire as
         // max_tokens when the SDK sends none (the paid-model credits catch
         // — OpenRouter prices an unspecified cap at the model's FULL default).
-        maxOutputTokens: budget.maxOutputTokens,
+        // R129-CTX2: the PREFLIGHT CLAMP — the reserve can never exceed the
+        // window the assembled prompt leaves (see clampOutputTokens).
+        maxOutputTokens: outputCap,
         // ROUND-48 (R48-e1, stretch): LIVE per-step events. A single chat()
         // call can run maxTurns tool round-trips internally; without this
         // hook the parent UI sees nothing until the WHOLE call completes.
@@ -3952,6 +4043,10 @@ export async function runStreamedAgentTurn(
       messages.push({ role: "user", content: ASSISTANT_LAST_SHAPE_NUDGE });
     }
     const usedTokens = estimateMessageTokens(messages);
+    // R129-CTX2 (the preflight output cap — the streamed twin): identical
+    // law to the sync runner's (clampOutputTokens) — the reserve can never
+    // exceed the window the assembled prompt leaves.
+    const outputCap = clampOutputTokens(budget.maxOutputTokens, budget.contextWindow, usedTokens);
     if (compaction.compacted && compaction.detail !== undefined) {
       // ROUND-125 (R125-C, D2): the live frame carries the typed decision's
       // dual numbers + reason (additive — old frontends ignore the new
@@ -4235,7 +4330,9 @@ export async function runStreamedAgentTurn(
         // ROUND-96 (R96-J): the resolved output cap rides the wire as
         // max_tokens when the SDK sends none (the paid-model credits catch
         // — OpenRouter prices an unspecified cap at the model's FULL default).
-        maxOutputTokens: budget.maxOutputTokens,
+        // R129-CTX2: the PREFLIGHT CLAMP — the reserve can never exceed the
+        // window the assembled prompt leaves (see clampOutputTokens).
+        maxOutputTokens: outputCap,
         ...(signal !== undefined ? { signal } : {}),
         // ROUND-94 (R94-D1): the STEP-BOUNDARY claim the adapter's prepareStep
         // calls at every completed-tool-call boundary — the mid-turn
@@ -5501,6 +5598,28 @@ export interface TurnBudget extends ContextBudget {
  *   · available = contextWindow − maxOutputTokens − margin — the same line
  *     compaction triggers on and (R83) the context guard stops at.
  */
+
+/**
+ * R129-CTX2 (the preflight output cap — round-129.md §4 stage 6; the
+ * research synthesis's C7): the request must never RESERVE more output
+ * than the window has left after the assembled prompt. Free
+ * chat-completions models (the owner's OpenRouter pool) hard-400 when
+ * prompt + max_tokens exceeds the window — an error that fires LONG
+ * BEFORE any compaction threshold, on a "small task" (the owner's exact
+ * complaint class). ZCode's per-model-step law
+ * (`maxOutputTokens = min(modelMax, window − currentUsage − 1000)`) and
+ * oh-my-pi's fitOutputTokensToContextWindow, adopted verbatim in shape:
+ * min(modelMax, window − used − 1000), floored at 1024 (a degenerate
+ * near-zero cap helps nobody — the context guard upstream already stops
+ * the truly-over-budget request). When the window has more room than the
+ * model's own cap, the model cap stands VERBATIM — byte-identical to the
+ * pre-R129 value for every healthy request. PURE — pinnable without a DB.
+ */
+export function clampOutputTokens(modelMax: number, contextWindow: number, usedTokens: number): number {
+  const byWindow = contextWindow - usedTokens - 1000;
+  return Math.max(1024, Math.min(modelMax, byWindow));
+}
+
 export function resolveTurnBudget(db: SqliteDatabase, providerId: string, modelId: string): TurnBudget {
   const row = db
     .prepare("SELECT context_window, max_output_tokens FROM models WHERE provider_id = ? AND model_id = ?")

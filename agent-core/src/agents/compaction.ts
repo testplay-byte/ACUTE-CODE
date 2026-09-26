@@ -109,6 +109,21 @@ export interface SeqMessage {
   throughSeq: number;
 }
 
+/** R129-CTX2 (round-129.md §4 stage 3 — the 90% law, the owner's exact
+ * words: "if… the context window has been utilized about 90%… then it will
+ * auto-start the compression without performing any of the next tasks").
+ * The AUTO-compaction gate fires when the anchored/estimated count reaches
+ * this fraction of `available` — BEFORE the provider call the turn loop is
+ * about to make (assembleWithCompaction is awaited inside the loop, so the
+ * compression literally happens instead of the next task, not after it).
+ * ZCode compact/policy.ts lands at 83% (window − min(reserve,21K) − 13K);
+ * cline's current main triggers at 90% of usable; kilocode preflights at
+ * ~80% configurable. 0.9 rides the owner's own number. The overflow FORCE
+ * path (the provider itself rejecting the request) and the rapid-refill
+ * breaker are untouched — this only moves the AUTO line earlier (it was
+ * 100% of `available`, an overflow-shaped gate that left no headroom). */
+export const AUTO_COMPACT_RATIO = 0.9;
+
 /** Payload of a `context.compact` event (also the wire shape for the
  * meta.compaction SSE event's details). */
 export interface CompactionPayload {
@@ -145,6 +160,14 @@ export interface CompactionPayload {
   /** How many whole assistant-started rounds the keep set preserves
    * verbatim. */
   preservedRounds?: number;
+  /* ROUND-129 (R129-CTX2, ZCode D4 — the post-compact re-injection): the
+   * ≤5 file paths the model most recently READ in the now-summarized
+   * region — "what was in the model's hands when the cut happened". On
+   * every applyCompaction these ride a pointer-line reminder note right
+   * after the summary, so the agent can re-open its working files without
+   * guessing names. Additive: old events lack the field and render exactly
+   * as before. */
+  reinjectedPaths?: string[];
 }
 
 /** ROUND-125 (R125-C, D2): why planCompaction decided what it decided —
@@ -451,6 +474,14 @@ export function findLatestCompaction(events: readonly SessionEvent[]): Compactio
         payload.preservedRounds >= 0
           ? payload.preservedRounds
           : undefined,
+      // R129-CTX2 (ZCode D4): the re-injection paths fold verbatim when
+      // present — the same typed-guard discipline; a pre-R129 event yields
+      // undefined (the additive contract: old events simply lack them).
+      reinjectedPaths:
+        Array.isArray(payload.reinjectedPaths) &&
+        payload.reinjectedPaths.every((p) => typeof p === "string")
+          ? (payload.reinjectedPaths as string[])
+          : undefined,
     };
   }
   return null;
@@ -468,10 +499,18 @@ export function summaryMessage(compact: Pick<CompactionPayload, "summary" | "dro
 }
 
 /** Apply a compaction to seq-annotated messages: drop everything covered by
- * throughSeq, prepend the summary message. Pure — no DB access. */
+ * throughSeq, prepend the summary message. Pure — no DB access.
+ * R129-CTX2 (ZCode D4): when the payload carries reinjectedPaths, the
+ * reminder note rides right after the summary — the model-facing list is
+ * [summary, reminder, …kept]. Old events without the field render exactly
+ * as before (the additive contract). */
 export function applyCompaction(messages: readonly SeqMessage[], compact: CompactionPayload): SeqMessage[] {
   const kept = messages.filter((m) => m.throughSeq > compact.throughSeq);
-  return [summaryMessage(compact), ...kept];
+  const reminder =
+    compact.reinjectedPaths !== undefined && compact.reinjectedPaths.length > 0
+      ? [reinjectionNoteMessage(compact.reinjectedPaths)]
+      : [];
+  return [summaryMessage(compact), ...reminder, ...kept];
 }
 
 /**
@@ -674,6 +713,16 @@ export function planCompaction(
   opts?: { tokenOverride?: number },
 ): CompactionPlan {
   const available = budget.contextWindow - budget.maxOutputTokens - budget.margin;
+  // R129-CTX2 (the 90% law — see AUTO_COMPACT_RATIO's header): the AUTO
+  // gate line the count is compared against. Pre-R129 this was `available`
+  // itself (fire only at overflow); now the auto-compaction starts with
+  // headroom — BEFORE the request that would have overflowed, awaited in
+  // the turn loop, exactly the owner's "auto-start the compression without
+  // performing any of the next tasks". The keep-target below stays 60% of
+  // `available`, so a fresh compaction lands at ~60% — a 30-point refill
+  // runway before the next auto fire (the R128-W8 rapid-refill breaker
+  // still guards the pathological refill case).
+  const autoCompactAt = Math.max(1, Math.floor(available * AUTO_COMPACT_RATIO));
   const total = estimateMessageTokens(messages.map(({ role, content }) => ({ role, content })));
   // R125-C (D1): a non-finite / non-positive override is garbage, not an
   // anchor — the estimate wins (the helper's own guard, re-checked here so
@@ -682,13 +731,16 @@ export function planCompaction(
   const anchored = typeof override === "number" && Number.isFinite(override) && override > 0;
   const tokenCount = anchored ? (override as number) : total;
   const tokenSource: CompactionTokenSource = anchored ? "provider-anchored" : "estimated";
-  if (!force && tokenCount <= available) {
+  if (!force && tokenCount <= autoCompactAt) {
     return {
       decision: "skip",
       tokenCount,
       tokenSource,
       estimatedTokens: total,
-      threshold: available,
+      // R129-CTX2: the threshold field reports the number the gate ACTUALLY
+      // compared against — the 90% auto line (the semantic is unchanged:
+      // "the budget the gate compared against"; only its value moved).
+      threshold: autoCompactAt,
       reason: "below_threshold",
     };
   }
@@ -762,7 +814,8 @@ export function planCompaction(
       tokenCount,
       tokenSource,
       estimatedTokens: total,
-      threshold: available,
+      // R129-CTX2: the 90% auto line (the gate's own number).
+      threshold: autoCompactAt,
       reason: "empty_to_summarize",
     };
   }
@@ -771,7 +824,9 @@ export function planCompaction(
     tokenCount,
     tokenSource,
     estimatedTokens: total,
-    threshold: available,
+    // R129-CTX2: the 90% auto line (the gate's own number — the count that
+    // reached it is the compaction's cause, forced or auto alike).
+    threshold: autoCompactAt,
     // R125-C (D2): "forced" wins the vocabulary whenever force carried the
     // decision past the gate — the numbers are on the decision either way.
     reason: force ? "forced" : "above_threshold",
@@ -787,17 +842,171 @@ export function planCompaction(
   };
 }
 
-/** The summarizer's system prompt: dense, factual, third-person, no fluff. */
+/** The summarizer's system prompt — R129-CTX2 (round-129.md §4 stage 4):
+ * THE ANCHORED TEMPLATE (the convergent finding of all five reference
+ * studies — opencode/kilocode/zcode's fixed-section summary, cline's
+ * Goal/State/Highlights/Next/Files structure, omp's UPDATE-prompt merge
+ * rules — replacing the pre-R129 free-form ~600-word ask). The fixed
+ * sections make the summary STATE, not prose: a long-horizon task's
+ * "where was I" reads from headers, not from narrative recall (the
+ * owner's "cannot handle long horizon tasks… keeps hallucinating").
+ * Section laws: exact strings survive verbatim (paths, commands, error
+ * messages — the hallucination vector); the Work State split is
+ * exhaustive; ## Files is deterministically APPENDED by
+ * buildFilesAppendix below if the model omits it (cline's guaranteed
+ * Files section); the merge rules make chained compactions
+ * summary-of-summaries honest ("anything not carried forward is lost"). */
 export const SUMMARIZER_SYSTEM_PROMPT = [
-  "You are a context-compaction engine for a coding agent. The transcript below is the EARLY part of an ongoing session that no longer fits the model's context window.",
-  "Summarize it into a dense factual briefing that preserves EVERYTHING the agent still needs to continue:",
-  "- the user's original task and any requirement changes",
-  "- key decisions made and why",
-  "- files created/edited/deleted (exact paths) and tools run with their outcomes",
-  "- errors encountered and how they were resolved",
-  "- explicit follow-up steps, open questions, and the todo state",
-  "Write in third person about 'the user' and 'the agent'. Tight bullet points. No preamble, no closing remarks. Maximum ~600 words.",
+  "You are a context-compaction engine for a coding agent. The transcript below is the EARLY part of an ongoing session; your summary replaces it, so the agent continues from YOUR WORDS alone.",
+  "Produce EXACTLY these sections, in this order, as markdown headers:",
+  "",
+  "## Objective",
+  "The user's original task and every requirement change since (one tight paragraph; quote requirements verbatim when they were exact).",
+  "",
+  "## Key decisions",
+  "Each decision made and why (one bullet each; include rejected alternatives only when they were explicitly discussed).",
+  "",
+  "## Work state",
+  "Three subsections: **Completed** (done + verified), **Active** (in flight when the transcript ends — the exact file/step mid-work), **Blocked** (unresolved errors/open questions, each with the exact error string).",
+  "",
+  "## Relevant files",
+  "The files/tools that mattered, one bullet each: exact path + what happened to it.",
+  "",
+  "## Next move",
+  "The single next action the agent should take, per the transcript's own trajectory (never invent one).",
+  "",
+  "Laws: preserve exact file paths, commands, identifiers, and error strings VERBATIM (never paraphrase them); write in third person about 'the user' and 'the agent'; no preamble, no closing remarks; if a prior summary appears in the transcript, fold it in — anything you drop from it is lost forever; when the transcript contradicts a prior summary, THE TRANSCRIPT WINS. Maximum ~600 words.",
 ].join("\n");
+
+/* ── R129-CTX2: the deterministic Files appendix + the re-injection paths ── */
+
+/** The tool families whose args carry the PATH the call touched — the
+ * appendix + re-injection parse these from the rendered tool lines (the
+ * same `toolName(argsSummary) → …` lines assembleHistory renders). */
+const FILES_APPENDIX_TOOLS = new Set([
+  "read_file",
+  "list_dir",
+  "write_file",
+  "edit_file",
+  "create_file",
+  "delete_file",
+  "create_dir",
+]);
+
+/** The appendix's cap — the deterministic list stays glanceable (the
+ * model can re-read anything; the summary's own prose carries the rest). */
+const FILES_APPENDIX_MAX = 30;
+
+/** R129-CTX2: parse ONE `path: …` segment out of a tool line's args
+ * (pathFromArgsSummary's compaction-local twin — runtime.ts cannot be
+ * imported from here (cycle), and the regex is one line). */
+function pathSegmentOf(toolLine: string): string | null {
+  const match = /(?:^|,\s*)path:\s*([^,)]+)/.exec(toolLine);
+  const path = match?.[1]?.trim();
+  return path !== undefined && path !== "" ? path : null;
+}
+
+/** R129-CTX2: parse ONE `cmd: …` segment out of a run_command line's args
+ * (the terminal family's key — the appendix's Commands run section). */
+function cmdSegmentOf(toolLine: string): string | null {
+  const match = /(?:^|,\s*)cmd:\s*([^,)]+)/.exec(toolLine);
+  const cmd = match?.[1]?.trim();
+  return cmd !== undefined && cmd !== "" ? cmd : null;
+}
+
+interface ParsedToolTouch {
+  toolName: string;
+  path: string | null;
+  command: string | null;
+}
+
+/** R129-CTX2: parse the `toolName(argsSummary) → …` lines out of the
+ * messages-to-summarize (they live inside <tool_results> blocks the same
+ * way assembleHistory renders them). Pure. */
+function parseToolTouches(messages: readonly SeqMessage[]): ParsedToolTouch[] {
+  const touches: ParsedToolTouch[] = [];
+  for (const message of messages) {
+    if (!message.content.includes("<tool_results>")) continue;
+    for (const line of message.content.split("\n")) {
+      const match = /^([a-z_]+)\((.*)\) → /.exec(line);
+      if (match === null) continue;
+      const toolName = match[1];
+      const argsSummary = match[2];
+      const path = FILES_APPENDIX_TOOLS.has(toolName) ? pathSegmentOf(argsSummary) : null;
+      const command = toolName === "run_command" ? cmdSegmentOf(argsSummary) : null;
+      touches.push({ toolName, path, command: command !== null ? command : null });
+    }
+  }
+  return touches;
+}
+
+/** R129-CTX2 (cline's guaranteed ## Files section — the deterministic half):
+ * the file paths + commands the summarized region touched, in first-touch
+ * order, deduped, capped. When the model's own summary omits (or thins)
+ * ## Relevant files / ## Files, runCompaction APPENDS this verbatim — a
+ * hallucinated path can never displace the log's own record. */
+export function buildFilesAppendix(messages: readonly SeqMessage[]): string {
+  const seen = new Set<string>();
+  const files: string[] = [];
+  const commands: string[] = [];
+  for (const touch of parseToolTouches(messages)) {
+    if (touch.path !== null && !seen.has(touch.path)) {
+      seen.add(touch.path);
+      files.push(touch.path);
+    } else if (touch.command !== null && !seen.has(`cmd:${touch.command}`)) {
+      seen.add(`cmd:${touch.command}`);
+      commands.push(touch.command);
+    }
+  }
+  const cappedFiles = files.slice(0, FILES_APPENDIX_MAX);
+  const cappedCommands = commands.slice(0, 10);
+  if (cappedFiles.length === 0 && cappedCommands.length === 0) return "";
+  const parts: string[] = [];
+  if (cappedFiles.length > 0) {
+    parts.push("## Files (complete, from the event log)");
+    for (const path of cappedFiles) parts.push(`- ${path}`);
+    if (files.length > FILES_APPENDIX_MAX) parts.push(`- …+${files.length - FILES_APPENDIX_MAX} more`);
+  }
+  if (cappedCommands.length > 0) {
+    parts.push("## Commands run");
+    for (const command of cappedCommands) parts.push(`- ${command}`);
+    if (commands.length > 10) parts.push(`- …+${commands.length - 10} more`);
+  }
+  return parts.join("\n");
+}
+
+/** R129-CTX2 (ZCode D4 — the re-injection paths): the ≤5 MOST RECENTLY READ
+ * distinct paths in the summarized region — the files that were literally
+ * in the model's hands when the cut happened. These ride the event payload
+ * (reinjectedPaths) and every applyCompaction renders the reminder note. */
+export function recentReadPaths(messages: readonly SeqMessage[], max = 5): string[] {
+  const touches = parseToolTouches(messages);
+  const byPath = new Map<string, number>();
+  for (let i = 0; i < touches.length; i++) {
+    const touch = touches[i];
+    if (touch.toolName !== "read_file" && touch.toolName !== "list_dir") continue;
+    if (touch.path === null) continue;
+    byPath.set(touch.path, i); // later reads overwrite earlier indices
+  }
+  return [...byPath.entries()]
+    .sort((a, b) => b[1] - a[1]) // newest read first
+    .slice(0, max)
+    .map(([path]) => path);
+}
+
+/** R129-CTX2 (ZCode D4): the reminder note applyCompaction appends after
+ * the summary when the payload carries reinjectedPaths — the model's
+ * "you were holding these files" pointer, so post-compaction it re-opens
+ * its working set by name instead of guessing. */
+export function reinjectionNoteMessage(paths: readonly string[]): SeqMessage {
+  return {
+    role: "user",
+    content:
+      `[context reminder] The files you were most recently reading before the conversation was compacted: ` +
+      `${paths.join(", ")}. Re-read any of them you still need.`,
+    throughSeq: 0,
+  };
+}
 
 /** Render the messages-to-summarize as a transcript for the summarizer. */
 export function renderTranscript(messages: readonly SeqMessage[]): string {
@@ -968,6 +1177,25 @@ export async function assembleWithCompaction(
     return { messages, compacted: false };
   }
 
+  // R129-CTX2 (cline's guaranteed ## Files section — the deterministic
+  // half): when the model's own summary omits the files section, the
+  // event-log-derived appendix rides verbatim — a hallucinated (or
+  // forgotten) path can never displace the log's own record. When the
+  // model DID write one, its section stands (the model had the full
+  // transcript in front of it; the duplicate would only add weight).
+  const hasFilesSection = /## (Relevant )?[Ff]iles/.test(summary);
+  if (!hasFilesSection) {
+    const appendix = buildFilesAppendix(plan.toSummarize);
+    if (appendix !== "") {
+      summary = `${summary}\n\n${appendix}`;
+    }
+  }
+
+  // R129-CTX2 (ZCode D4): the re-injection paths — the ≤5 most-recently-read
+  // files of the summarized region, persisted on the event so every future
+  // applyCompaction (restart, fork, the meter) renders the reminder.
+  const reinjectedPaths = recentReadPaths(plan.toSummarize);
+
   const beforeTokens = estimateMessageTokens(applied.map(({ role, content }) => ({ role, content })));
   const compact: CompactionPayload = {
     summary,
@@ -988,8 +1216,18 @@ export async function assembleWithCompaction(
     // guards keep them honest on the read side).
     roundAligned: plan.roundAligned,
     preservedRounds: plan.preservedRounds,
+    // R129-CTX2 (D4): the reminder's source of truth — additive (old events
+    // lack the field; applyCompaction renders the note only when present).
+    ...(reinjectedPaths.length > 0 ? { reinjectedPaths } : {}),
   };
-  const finalMessages: SeqMessage[] = [summaryMessage(compact), ...plan.keep];
+  const finalMessages: SeqMessage[] = [
+    summaryMessage(compact),
+    // R129-CTX2 (D4): the reminder rides the immediate post-compaction list
+    // too (applyCompaction adds it on every FUTURE assembly; this is the
+    // turn's own first use of the new shape).
+    ...(compact.reinjectedPaths !== undefined ? [reinjectionNoteMessage(compact.reinjectedPaths)] : []),
+    ...plan.keep,
+  ];
   compact.tokensSaved = Math.max(
     0,
     beforeTokens - estimateMessageTokens(finalMessages.map(({ role, content }) => ({ role, content }))),

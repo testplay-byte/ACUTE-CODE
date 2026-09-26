@@ -580,6 +580,30 @@ export function renderAttachments(content: string, attachments: readonly Message
 }
 
 /**
+ * ROUND-129 (R129-CTX1 — cline's old-attachment stripping, the research
+ * synthesis's C1 companion): the replay rendering for every
+ * attachment-bearing user message EXCEPT the newest one. The BODIES do not
+ * ride — one line per attachment, naming the file + its saved path + the
+ * honest "re-read it if needed" pointer (the file lives in the project, so
+ * nothing is lost — the weight simply stops being re-sent on every outer
+ * loop iteration forever, the exact inflation the owner's "100 million
+ * context in no time" complaint named). The newest attachment-bearing
+ * message keeps renderAttachments verbatim (the model just received those).
+ * PURE, string-in/string-out like its sibling — pinnable without a DB.
+ */
+export function renderOldAttachmentStubs(
+  content: string,
+  attachments: readonly MessageAttachment[],
+): string {
+  let out = content;
+  for (const a of attachments) {
+    const path = typeof a.path === "string" && a.path !== "" ? a.path : null;
+    out += `\n\n--- attached file: ${a.name}${path !== null ? ` (saved at ${path})` : ""} — body not re-sent (only the newest attachment rides in full); re-read it if needed ---`;
+  }
+  return out;
+}
+
+/**
  * ROUND-94 (R94-D1): the prepareStep the adapter wires into BOTH SDK call
  * sites (generateText + streamText) when the input carries
  * consumeQueuedForStep. The boundary contract, verbatim from the owner's
@@ -883,7 +907,18 @@ export function summarizeToolOutput(output: unknown, toolName?: string): string 
     const head = text.slice(0, budget / 2);
     const tail = text.slice(-budget / 2);
     const omitted = text.length - budget;
-    text = `${head}\n…[truncated ${omitted} chars]…\n${tail}`;
+    // R129-CTX1 (the actionable truncation marker — opencode's pointer
+    // discipline at ACUTE's budget shape): the read family's marker NAMES
+    // the recovery move (re-read with an offset), so a truncated file read
+    // is a pointer, not dead weight; every other family keeps the plain
+    // count marker (their outputs are not re-fetchable by an offset).
+    const readFamily =
+      toolName === "read_file" || toolName === "list_dir" || toolName === "search_files" ||
+      toolName === "grep" || toolName === "glob";
+    const marker = readFamily
+      ? `[truncated ${omitted} chars — re-read with an offset to see the omitted middle]`
+      : `[truncated ${omitted} chars]`;
+    text = `${head}\n…${marker}…\n${tail}`;
   }
   return text;
 }
