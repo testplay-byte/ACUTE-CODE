@@ -1,0 +1,6 @@
+{
+  "_doc": "R129-GHA (round-129.md §1 Wave GHA): the RELEASE TARGET SELECTION — the versioned file the Release + Mobile APK workflows read at every tag/dispatch to decide which platform builds run. The owner's directive: 'building only the versions which are needed, like your Linux version and the Windows version, and also skipping your Linux version sometimes if you don't need it. But if you do need it, like for testing purposes, then do build it… skipping the Android version if that is not needed, and just directly doing the release and letting the things build by themselves.' Edit this file, commit, tag — the workflows build exactly what it says. windows: the NSIS installer + launcher kit (the owner's daily driver — always on unless a round is mobile-only). linux: the x64 + arm64 deb/AppImage bundles (build for testing when a round touches Rust/the bundler; skip otherwise — the owner runs Windows + Android). android: the arm64 APK (on whenever mobile/ changed in the round). The per-push gates are NOT governed by this file: ci.yml (the full verify chain) + rust-checks.yml + mobile-ci.yml stay path-filtered per R122's Actions-economy round — only the RELEASE builds select here.",
+  "windows": true,
+  "linux": false,
+  "android": true
+}

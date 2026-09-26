@@ -59,7 +59,50 @@ on:
       - "v*"
 
 jobs:
+  # R129-GHA (round-129.md §1 Wave GHA — the release-target selection): the
+  # versioned file scripts/release/targets.json decides which platform
+  # builds this release runs — the owner's "building only the versions
+  # which are needed… skipping your Linux version sometimes… skipping the
+  # Android version if that is not needed, and just directly doing the
+  # release and letting the things build by themselves." This job reads the
+  # file once (seconds) and exports the booleans; every gated job keys on
+  # needs.read-targets.outputs.*. Editing the file + re-tagging is the WHOLE
+  # control surface — no manual dispatch required, no workflow edits.
+  read-targets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      linux: ${{ steps.targets.outputs.linux }}
+      android: ${{ steps.targets.outputs.android }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the release target selection
+        id: targets
+        run: |
+          # node (preinstalled) parses the JSON; the fallback is the
+          # all-platforms default (a missing/malformed file must never
+          # silently skip a platform the owner expects).
+          read_fields() {
+            node -e '
+              const fs = require("node:fs");
+              try {
+                const t = JSON.parse(fs.readFileSync("scripts/release/targets.json", "utf8"));
+                process.stdout.write(`${t.linux === true}\n${t.android === true}`);
+              } catch {
+                process.stdout.write("true\ntrue");
+              }
+            '
+          }
+          VALUES="$(read_fields)"
+          LINUX="$(echo "$VALUES" | sed -n '1p')"
+          ANDROID="$(echo "$VALUES" | sed -n '2p')"
+          echo "linux=${LINUX}" >> "$GITHUB_OUTPUT"
+          echo "android=${ANDROID}" >> "$GITHUB_OUTPUT"
+          echo "release targets: linux=${LINUX} android=${ANDROID} (scripts/release/targets.json)"
+
   launcher-kit:
+    needs: read-targets
     runs-on: ubuntu-latest
     # ROUND-103: every job in this workflow is bounded — a wedged job
     # fails visibly in minutes instead of hanging for hours (the v0.100.0
@@ -321,6 +364,14 @@ jobs:
   # → the pinned Linux Node runtime → the R57-style pre-pack boot gate
   # (bash port) → tauri build with --bundles deb,appimage → artifact upload.
   linux-bundles:
+    # R129-GHA: gated on scripts/release/targets.json's linux flag (the
+    # read-targets job's output) — "skipping your Linux version sometimes
+    # if you don't need it. But if you do need it, like for testing
+    # purposes, then do build it" (edit the file to true for a round that
+    # touches Rust/the bundler). EVERY dispatch builds it (a manual run is
+    # an explicit ask for artifacts).
+    needs: read-targets
+    if: needs.read-targets.outputs.linux == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -528,6 +579,10 @@ jobs:
   # tags, never per-push (rust-checks.yml's `rust-linux-arm64` is the
   # per-push gate since ROUND-122 — path-gated on src-tauri/**).
   linux-bundles-arm64:
+    # R129-GHA: the same targets.json linux gate as the x64 twin (they are
+    # one logical target — the "Linux version" — in two runner shapes).
+    needs: read-targets
+    if: needs.read-targets.outputs.linux == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
@@ -718,8 +773,13 @@ jobs:
 
   # Draft release ONLY on tag pushes — the owner reviews + publishes manually.
   github-release:
-    needs: [launcher-kit, desktop-installer, linux-bundles, linux-bundles-arm64]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [read-targets, launcher-kit, desktop-installer, linux-bundles, linux-bundles-arm64]
+    # R129-GHA: !failure() && !cancelled() (not the implicit default) — the
+    # Linux jobs SKIP when targets.json says linux:false, and a skipped
+    # need would otherwise skip THE RELEASE too. With the explicit guard the
+    # release proceeds on the kit + installer (+ the APK from mobile.yml's
+    # own gate) exactly as the target selection ordered.
+    if: startsWith(github.ref, 'refs/tags/v') && !failure() && !cancelled()
     runs-on: ubuntu-latest
     # ROUND-103 (the release-pipeline hardening): bounded like its siblings.
     # The v0.100.0 tag run (35243431119) hung 27+ minutes in the old
@@ -746,7 +806,11 @@ jobs:
           path: installer
 
       # ROUND-100 (R100-B): the Linux bundles join the same draft release.
+      # R129-GHA: the download is gated on the ACTUAL job result (a skipped
+      # linux-bundles leaves no artifact) — the publish script's BUILD_LINUX
+      # env carries the same flag.
       - name: Download the Linux bundles artifact
+        if: needs.linux-bundles.result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: acute-bundles-linux
@@ -756,12 +820,15 @@ jobs:
       # release (kept in a DISTINCT dir — the tag-verify + files globs
       # below address each arch by name).
       - name: Download the Linux ARM64 bundles artifact
+        if: needs.linux-bundles-arm64.result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: acute-bundles-linux-arm64
           path: linux-bundles-arm64
 
       - name: Verify the tag matches the released version
+        env:
+          BUILD_LINUX: ${{ needs.read-targets.outputs.linux }}
         run: |
           if [ "${{ github.ref_name }}" != "v${{ needs.launcher-kit.outputs.version }}" ]; then
             echo "::error::tag '${{ github.ref_name }}' does not match the repo version '${{ needs.launcher-kit.outputs.version }}' — run 'pnpm version:set <version>' and re-tag"
@@ -773,20 +840,26 @@ jobs:
             echo "::error::expected installer/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_x64-setup.exe — got: $(ls installer/)"
             exit 1
           fi
-          # Same guard for the Linux bundles (bundler contract:
-          # <productName>_<version>_<arch>.deb/.AppImage → _amd64).
-          if ! ls "linux-bundles/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_amd64.deb" >/dev/null 2>&1 \
-            || ! ls "linux-bundles/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_amd64.AppImage" >/dev/null 2>&1; then
-            echo "::error::expected linux-bundles/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_amd64.{deb,AppImage} — got: $(ls linux-bundles/)"
-            exit 1
-          fi
-          # And the ARM64 bundles (R101-E; the PROVEN first-run naming:
-          # the deb carries dpkg's `_arm64`, the AppImage carries the Rust
-          # triple's `_aarch64` — the R101 hotfix corrected the expectation).
-          if ! ls "linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_arm64.deb" >/dev/null 2>&1 \
-            || ! ls "linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_aarch64.AppImage" >/dev/null 2>&1; then
-            echo "::error::expected linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_arm64.deb + _aarch64.AppImage — got: $(ls linux-bundles-arm64/)"
-            exit 1
+          # R129-GHA: the Linux bundle guards run ONLY when the target
+          # selection built them (linux:false → no bundles to verify).
+          if [ "${BUILD_LINUX}" = "true" ]; then
+            # Same guard for the Linux bundles (bundler contract:
+            # <productName>_<version>_<arch>.deb/.AppImage → _amd64).
+            if ! ls "linux-bundles/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_amd64.deb" >/dev/null 2>&1 \
+              || ! ls "linux-bundles/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_amd64.AppImage" >/dev/null 2>&1; then
+              echo "::error::expected linux-bundles/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_amd64.{deb,AppImage} — got: $(ls linux-bundles/)"
+              exit 1
+            fi
+            # And the ARM64 bundles (R101-E; the PROVEN first-run naming:
+            # the deb carries dpkg's `_arm64`, the AppImage carries the Rust
+            # triple's `_aarch64` — the R101 hotfix corrected the expectation).
+            if ! ls "linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_arm64.deb" >/dev/null 2>&1 \
+              || ! ls "linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_aarch64.AppImage" >/dev/null 2>&1; then
+              echo "::error::expected linux-bundles-arm64/ACUTE-CODE_${{ needs.launcher-kit.outputs.version }}_arm64.deb + _aarch64.AppImage — got: $(ls linux-bundles-arm64/)"
+              exit 1
+            fi
+          else
+            echo "release target selection: linux SKIPPED (scripts/release/targets.json)"
           fi
 
       # ROUND-103 (the release-pipeline hardening): the softprops action is
@@ -811,4 +884,8 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
           VERSION: ${{ needs.launcher-kit.outputs.version }}
+          # R129-GHA: the release-target selection threads through — the
+          # publish script trims the four Linux bundle assets from its
+          # manifest, upload set, and final verify when linux was skipped.
+          BUILD_LINUX: ${{ needs.read-targets.outputs.linux }}
         run: bash scripts/release/publish-github-release.sh

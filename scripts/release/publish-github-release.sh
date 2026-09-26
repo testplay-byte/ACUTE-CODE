@@ -48,6 +48,13 @@
 #   GH_TOKEN   — token with contents:write (the job's secrets.GITHUB_TOKEN)
 #   REPO       — owner/name (github.repository)
 #   TAG        — the tag being released (github.ref_name, "vX.Y.Z")
+#   BUILD_LINUX — optional "true"/"false" (default "true"): the R129-GHA
+#                 release-target selection — "false" (scripts/release/
+#                 targets.json says linux:false) means the four Linux
+#                 bundle assets are NOT part of this release: they are
+#                 absent from the manifest, the upload set, and the final
+#                 verify list. The kit + the Windows installer are ALWAYS
+#                 part of the contract (the owner's daily driver).
 #   VERSION    — the repo version X.Y.Z (needs.launcher-kit.outputs.version)
 #   CHANGELOG  — body source (default: CHANGELOG.md at the repo root)
 # Artifact layout expected (the job's download-artifact steps):
@@ -84,21 +91,29 @@ api() {
 
 # --- 1. the asset manifest (smallest first: the flaky giants upload last,
 #        so a stall near the end has already banked the small wins) ---
+# R129-GHA (the release-target selection): BUILD_LINUX=false trims the four
+# Linux bundle assets from the contract (targets.json's linux:false — the
+# owner's "skipping your Linux version sometimes if you don't need it").
+BUILD_LINUX="${BUILD_LINUX:-true}"
 declare -a FILES=(
   "acute-launcher-kit-v${VERSION}.zip"
   "installer/ACUTE-CODE_${VERSION}_x64-setup.exe"
-  "linux-bundles/ACUTE-CODE_${VERSION}_amd64.deb"
-  "linux-bundles-arm64/ACUTE-CODE_${VERSION}_arm64.deb"
-  "linux-bundles/ACUTE-CODE_${VERSION}_amd64.AppImage"
-  "linux-bundles-arm64/ACUTE-CODE_${VERSION}_aarch64.AppImage"
 )
+if [ "${BUILD_LINUX}" = "true" ]; then
+  FILES+=(
+    "linux-bundles/ACUTE-CODE_${VERSION}_amd64.deb"
+    "linux-bundles-arm64/ACUTE-CODE_${VERSION}_arm64.deb"
+    "linux-bundles/ACUTE-CODE_${VERSION}_amd64.AppImage"
+    "linux-bundles-arm64/ACUTE-CODE_${VERSION}_aarch64.AppImage"
+  )
+fi
 for f in "${FILES[@]}"; do
   if [ ! -f "$f" ]; then
     echo "::error::missing artifact '${f}' — the download-artifact steps must run before this script"
     exit 1
   fi
 done
-echo "release contract: ${#FILES[@]} assets for ${TAG} (version ${VERSION})"
+echo "release contract: ${#FILES[@]} assets for ${TAG} (version ${VERSION}, linux=${BUILD_LINUX})"
 
 # --- 2. find (or create) THE draft release for this tag -----------------
 # Walk the release list (drafts included, paginated), collecting every
@@ -338,18 +353,21 @@ done
 # --- 5. final verification: every expected asset present AND byte-exact ---
 echo "— final verification (bytes on the draft == bytes on disk) —"
 api "${API}/repos/${REPO}/releases/${RELEASE_ID}" > "${TMPI}/final.json"
-python3 - "${VERSION}" "${TMPI}/final.json" <<'PY'
+python3 - "${VERSION}" "${TMPI}/final.json" "${BUILD_LINUX}" <<'PY'
 import json, sys, os
-version, path = sys.argv[1], sys.argv[2]
+version, path, build_linux = sys.argv[1], sys.argv[2], sys.argv[3]
 rel = json.load(open(path))
 expected = [
     f"acute-launcher-kit-v{version}.zip",
     f"installer/ACUTE-CODE_{version}_x64-setup.exe",
-    f"linux-bundles/ACUTE-CODE_{version}_amd64.deb",
-    f"linux-bundles-arm64/ACUTE-CODE_{version}_arm64.deb",
-    f"linux-bundles/ACUTE-CODE_{version}_amd64.AppImage",
-    f"linux-bundles-arm64/ACUTE-CODE_{version}_aarch64.AppImage",
 ]
+if build_linux == "true":
+    expected += [
+        f"linux-bundles/ACUTE-CODE_{version}_amd64.deb",
+        f"linux-bundles-arm64/ACUTE-CODE_{version}_arm64.deb",
+        f"linux-bundles/ACUTE-CODE_{version}_amd64.AppImage",
+        f"linux-bundles-arm64/ACUTE-CODE_{version}_aarch64.AppImage",
+    ]
 on_release = {a["name"]: a.get("size") or 0 for a in rel.get("assets", [])}
 bad = []
 for path_ in expected:

@@ -52,6 +52,16 @@ name: Mobile APK
 # a `paths: mobile/**` filter on this trigger would let a docs-only v*
 # tag SKIP the APK build entirely (a release with no APK). The tag
 # trigger carries no path conditions, on purpose.
+#
+# ROUND-129 (R129-GHA, the release-target selection — the owner's
+# "skipping the Android version if that is not needed"): the tag's
+# UNCONDITIONAL APK law above now rides the VERSIONED targets file
+# (scripts/release/targets.json, the same file the Release workflow
+# reads) instead of being absolute: android:false skips the build + the
+# attach (a release with no APK by explicit, committed choice — e.g. a
+# desktop-only round). Manual dispatches build it regardless (the
+# rig/testing path). The per-push mobile-ci.yml gate is NOT governed by
+# the targets file — per-push testing stays path-filtered.
 
 on:
   push:
@@ -63,7 +73,38 @@ permissions:
   contents: read
 
 jobs:
+  # R129-GHA (round-129.md §1 Wave GHA — the release-target selection): the
+  # same versioned file the Release workflow reads (scripts/release/
+  # targets.json) gates the APK too — the owner's "skipping the Android
+  # version if that is not needed". android:false skips BOTH jobs (no APK
+  # artifact, no attach); every MANUAL dispatch builds it (an explicit ask
+  # for artifacts — the rig/testing path).
+  read-targets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      android: ${{ steps.targets.outputs.android }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the release target selection
+        id: targets
+        run: |
+          ANDROID="$(node -e '
+            const fs = require("node:fs");
+            try {
+              const t = JSON.parse(fs.readFileSync("scripts/release/targets.json", "utf8"));
+              process.stdout.write(`${t.android === true}`);
+            } catch {
+              process.stdout.write("true");
+            }
+          ')"
+          echo "android=${ANDROID}" >> "$GITHUB_OUTPUT"
+          echo "release targets: android=${ANDROID} (scripts/release/targets.json)"
+
   android-apk:
+    needs: read-targets
+    if: needs.read-targets.outputs.android == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 50
     outputs:
@@ -159,7 +200,11 @@ jobs:
   # release.yml's publisher creates in its parallel run).
   attach-apk-to-release:
     needs: android-apk
-    if: startsWith(github.ref, 'refs/tags/v')
+    # R129-GHA: gated on the build job's ACTUAL result — android:false
+    # skips android-apk, and there is no artifact to attach (a bare
+    # !cancelled() guard would run this job straight into a failed
+    # download).
+    if: startsWith(github.ref, 'refs/tags/v') && needs.android-apk.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 50
     permissions:
