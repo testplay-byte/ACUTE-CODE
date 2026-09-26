@@ -279,6 +279,55 @@ export function toolRowTitle(item: ToolItem): string {
 
 // ── the rail's collapsed tool hints (R120-CM, item 40) ──────────────────────
 
+// ── R130 — the tool FAMILY + the GROUP label (the mobile tool groups) ───────
+
+/** R130 — the five tool families the mobile transcript color-codes and
+ * groups by (the PC's own family sets, one classifier spelling). */
+export type ToolFamily = "write" | "terminal" | "read" | "web" | "other";
+
+/** Classify a tool name into its family (pure — the row's color coding and
+ * the group label's glance both read this one spelling). */
+export function toolFamily(toolName: string): ToolFamily {
+  if (WRITE_TOOLS.has(toolName)) return "write";
+  if (TERMINAL_TOOLS.has(toolName)) return "terminal";
+  if (READ_TOOLS.has(toolName)) return "read";
+  if (WEB_TOOLS.has(toolName) || BROWSER_TOOLS.has(toolName)) return "web";
+  return "other";
+}
+
+/** The family's glance word (the group label's compact vocabulary). */
+const FAMILY_GLANCE_WORD: Record<ToolFamily, string> = {
+  write: "edit",
+  terminal: "run",
+  read: "read",
+  web: "web",
+  other: "tool",
+};
+
+/**
+ * R130 — the tool GROUP's header label: a run of ONE call speaks its own row
+ * title (the group header IS that call's line); a run of MANY calls speaks
+ * the count + the family glance ("3 calls · 2 read · 1 edit" — the top two
+ * families, count-prefixed when plural). Pure — jest pins the grammar.
+ */
+export function toolGroupLabel(items: ToolItem[]): string {
+  if (items.length === 1) {
+    const only = items[0];
+    return only !== undefined ? toolRowTitle(only) : "1 call";
+  }
+  const counts = new Map<ToolFamily, number>();
+  for (const item of items) {
+    const family = toolFamily(item.toolName);
+    counts.set(family, (counts.get(family) ?? 0) + 1);
+  }
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const glance = ranked
+    .slice(0, 2)
+    .map(([family, count]) => (count === 1 ? FAMILY_GLANCE_WORD[family] : `${count} ${FAMILY_GLANCE_WORD[family]}`))
+    .join(" · ");
+  return glance !== "" ? `${items.length} calls · ${glance}` : `${items.length} calls`;
+}
+
 /** How many hints the collapsed rail carries before the "+N more" tail — one
  *  line, glance-sized (the well behind the tap owns the full story). */
 export const TOOL_HINT_MAX = 3;

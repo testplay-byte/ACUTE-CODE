@@ -10,17 +10,18 @@
  *     own law). The component renders the plan's order verbatim.
  *
  * ROUND-129 (R129-M — the separated-elements rework): the R123 well's
- * container contracts are RE-PINNED to chat.md §Transcript R129's separated
+ * container contracts were RE-PINNED to chat.md §Transcript's separated
  * grammar — `turnElementsPlan` (pure, exported) is the render contract the
- * component renders verbatim, so the pins assert the OWNER's demands
- * against it: the reply is FLAT (no container/bubble/surface on it or the
- * turn), the thinking row is its own SIBLING element (never nested in a
- * shared well with the tool cards), the tool cards carry the house card
- * padding (12 = spacing.md) + the r12 radius + the 8px gaps, the rail is a
- * PLAIN line (no chevron, no expand, never a control), and the toolActivity
- * pref matrix (hidden/compact/detailed) shapes the separated elements. The
- * R123-W-m card law survives re-pinned: every tool card's body renders OPEN
- * by default (the owner must SEE the work). The content-logic pins
+ * component renders verbatim.
+ *
+ * ROUND-130 (R130 — the tool groups + the interleaving): the plan is
+ * RE-PINNED to chat.md §Transcript R130's grammar: EMISSION-ORDER
+ * INTERLEAVING (tool groups and text runs alternate in the order the work
+ * happened — the R129 all-cards-above-one-reply-bottom shape is dead), the
+ * TOOL GROUP (one clay card per RUN of consecutive calls, live-open →
+ * 2.5s-hold → auto-collapse, failures stay open, collapsed when settled —
+ * the R123-W-m open-by-default law RETIRED by the owner's own ask), and the
+ * geometry renamed to the group's own fields. The content-logic pins
  * (toolStatusWord, the tools-hidden hint, the user bubble's plan) ride
  * untouched below.
  *
@@ -191,29 +192,28 @@ describe("R123-W-m — userBubbleBodyPlan (the images-ABOVE-the-text contract)",
   });
 });
 
-// ── R129-M — the separated-elements plan (the render contract) ─────────────
+// ── R129-M/R130 — the separated-elements plan (the render contract) ───────
 
-describe("R129-M — the reply is FLAT (no container, no bubble, no surface)", () => {
-  it("the reply element carries NO surface — and neither does the turn container it rides in", () => {
+describe("R129-M/R130 — the text is FLAT (no container, no bubble, no surface)", () => {
+  it("the turn container carries NO surface — the text elements ride the flat turn column", () => {
     const plan = planOf([
       assistantItem("a1", { thinking: "hmm", thinkingMs: 8_000 }),
       toolItem("t1"),
       assistantItem("a2", { content: "done" }),
     ]);
     expect(plan.containerSurface).toBeNull();
-    const reply = plan.elements.find((el) => el.element === "reply");
-    expect(reply).not.toBeNull();
-    expect(reply?.element === "reply" && reply.surface).toBeNull();
+    const texts = plan.elements.filter((el) => el.element === "text");
+    expect(texts.length).toBeGreaterThan(0);
   });
 
-  it("a turn with NO reply content renders NO reply element (the thinking-only turn keeps its clean shape)", () => {
+  it("a turn with NO text content renders NO text element (the thinking-only turn keeps its clean shape)", () => {
     const plan = planOf([assistantItem("a1", { thinking: "hmm", thinkingMs: 8_000 })]);
-    expect(plan.elements.some((el) => el.element === "reply")).toBe(false);
+    expect(plan.elements.some((el) => el.element === "text")).toBe(false);
   });
 });
 
-describe("R129-M — the thinking row is its own SIBLING element (never nested with the tool cards)", () => {
-  it("rail → thinking → tool cards → reply, all SIBLINGS in ONE flat element list — the owner's 'combined with the tool cards' verdict dies here", () => {
+describe("R129-M — the thinking row is its own SIBLING element (never nested with the tool groups)", () => {
+  it("rail → thinking → tool group → text, all SIBLINGS in ONE flat element list — the owner's 'combined with the tool cards' verdict dies here", () => {
     const plan = planOf([
       assistantItem("a1", { thinking: "planning", thinkingMs: 3_000 }),
       toolItem("t1", { toolName: "write_file", argsSummary: "path: src/a.ts, content: x" }),
@@ -223,21 +223,21 @@ describe("R129-M — the thinking row is its own SIBLING element (never nested w
     expect(plan.elements.map((el) => el.element)).toEqual([
       "rail",
       "thinking",
-      "tool-card",
-      "tool-card",
-      "reply",
+      "tool-group",
+      "text",
     ]);
     // SIBLINGS by construction: every element rides the SAME flat list (the
     // plan's vocabulary carries no wrapper/well element at all), and the
-    // thinking text lives OUTSIDE every tool card.
+    // thinking text lives OUTSIDE every tool group.
     const thinking = plan.elements.find((el) => el.element === "thinking");
     expect(thinking?.element === "thinking" && thinking.text).toBe("planning");
-    expect(plan.elements.filter((el) => el.element === "tool-card")).toHaveLength(2);
+    const group = plan.elements.find((el) => el.element === "tool-group");
+    expect(group?.keys).toEqual(["t1", "t2"]);
   });
 
-  it("a turn with NO thinking renders NO thinking row (the cards render without one)", () => {
+  it("a turn with NO thinking renders NO thinking row (the groups render without one)", () => {
     const plan = planOf([toolItem("t1"), assistantItem("a1", { content: "done" })]);
-    expect(plan.elements.map((el) => el.element)).toEqual(["rail", "tool-card", "reply"]);
+    expect(plan.elements.map((el) => el.element)).toEqual(["rail", "tool-group", "text"]);
   });
 
   it("the label grammar — Thinking… live / Thought for 8s settled / Thought process when the wire carried no span", () => {
@@ -265,14 +265,108 @@ describe("R129-M — the thinking row is its own SIBLING element (never nested w
   });
 });
 
-describe("R129-M — the tool cards' geometry (the un-cramping contract)", () => {
-  it("the house CARD padding (12 = spacing.md, all sides), the r12 radius, and the 8px gaps between cards", () => {
+describe("R130 — EMISSION-ORDER INTERLEAVING (the text renders WHERE IT WAS RECEIVED)", () => {
+  it("text BETWEEN two tool runs renders BETWEEN them — never all tools at the top with the text at the bottom", () => {
+    const plan = planOf([
+      toolItem("t1", { toolName: "read_file", argsSummary: "path: src/a.ts" }),
+      toolItem("t2", { toolName: "read_file", argsSummary: "path: src/b.ts" }),
+      assistantItem("a1", { content: "I read both files." }),
+      toolItem("t3", { toolName: "run_command", argsSummary: "command: npm test" }),
+      assistantItem("a2", { content: "The tests pass." }),
+    ]);
+    expect(plan.elements.map((el) => el.element)).toEqual([
+      "rail",
+      "tool-group",
+      "text",
+      "tool-group",
+      "text",
+    ]);
+    // The runs fold correctly: two consecutive read calls are ONE group;
+    // the later command is its own group BETWEEN the two text runs.
+    const [first, second] = plan.elements.filter((el) => el.element === "tool-group");
+    expect(first?.keys).toEqual(["t1", "t2"]);
+    expect(second?.keys).toEqual(["t3"]);
+    // The meta line rides the FIRST text element only.
+    const [textA, textB] = plan.elements.filter((el) => el.element === "text");
+    expect(textA?.showMeta).toBe(true);
+    expect(textB?.showMeta).toBe(false);
+    expect(textA?.keys).toEqual(["a1"]);
+    expect(textB?.keys).toEqual(["a2"]);
+  });
+
+  it("a thinking-only item neither starts a text run nor breaks a tool run — mid-turn thinking keeps the calls in ONE group", () => {
+    const plan = planOf([
+      toolItem("t1"),
+      assistantItem("a-think", { thinking: "reconsidering" }),
+      toolItem("t2"),
+      assistantItem("a1", { content: "done" }),
+    ]);
+    const groups = plan.elements.filter((el) => el.element === "tool-group");
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.keys).toEqual(["t1", "t2"]);
+  });
+
+  it("consecutive text segments fold into ONE text element (the segment keys in order)", () => {
+    const plan = planOf([
+      assistantItem("a1", { content: "first" }),
+      assistantItem("a2", { content: "second" }),
+    ]);
+    const texts = plan.elements.filter((el) => el.element === "text");
+    expect(texts).toHaveLength(1);
+    expect(texts[0]?.keys).toEqual(["a1", "a2"]);
+  });
+});
+
+describe("R130 — the tool groups' geometry + lifecycle (the PC Working-fold grammar, ported)", () => {
+  it("the house CARD padding (12 = spacing.md), the r12 radius, the 8px gaps between groups, and the 2.5s auto-collapse hold", () => {
     const plan = planOf([toolItem("t1"), toolItem("t2")]);
-    expect(plan.toolCardPadding).toBe(12);
-    expect(plan.toolCardPadding).toBe(spacing.md);
-    expect(plan.toolCardRadius).toBe(12);
-    expect(plan.toolCardGap).toBe(8);
-    expect(plan.toolCardGap).toBe(spacing.sm);
+    expect(plan.toolGroupPadding).toBe(12);
+    expect(plan.toolGroupPadding).toBe(spacing.md);
+    expect(plan.toolGroupRadius).toBe(12);
+    expect(plan.toolGroupGap).toBe(8);
+    expect(plan.toolGroupGap).toBe(spacing.sm);
+    expect(plan.toolGroupCollapseHoldMs).toBe(2500);
+  });
+
+  it("COLLAPSED when settled — the owner's explicit ask (the R123-W-m open-by-default law is retired)", () => {
+    const plan = planOf([
+      toolItem("t1"),
+      toolItem("t2"),
+      toolItem("t3"),
+    ]);
+    for (const group of plan.elements.filter((el) => el.element === "tool-group")) {
+      if (group.element !== "tool-group") throw new Error("expected a tool-group element");
+      expect(group.defaultOpen).toBe(false);
+      expect(group.live).toBe(false);
+    }
+  });
+
+  it("OPEN while the turn is live (the seeing, scoped to live)", () => {
+    const plan = planOf([
+      assistantItem("a1", { live: true, chunks: [] }),
+      toolItem("t1", { ok: null, live: true }),
+    ]);
+    const group = plan.elements.find((el) => el.element === "tool-group");
+    expect(group?.element === "tool-group" && group.defaultOpen).toBe(true);
+    expect(group?.element === "tool-group" && group.live).toBe(true);
+    expect(group?.element === "tool-group" && group.hasRunning).toBe(true);
+  });
+
+  it("a group holding a FAILED call stays open (failures never auto-collapse)", () => {
+    const plan = planOf([
+      toolItem("t1", { ok: false }),
+      toolItem("t2", { ok: true }),
+    ]);
+    const group = plan.elements.find((el) => el.element === "tool-group");
+    expect(group?.element === "tool-group" && group.hasFailed).toBe(true);
+    expect(group?.element === "tool-group" && group.defaultOpen).toBe(true);
+  });
+
+  it("a thinking-only turn renders no groups — the thinking row keeps its own settled collapse (the R124 law stands)", () => {
+    const plan = planOf([assistantItem("a1", { thinking: "hmm" })]);
+    expect(plan.elements.some((el) => el.element === "tool-group")).toBe(false);
+    const row = plan.elements.find((el) => el.element === "thinking");
+    expect(row?.element === "thinking" && row.defaultOpen).toBe(false);
   });
 });
 
@@ -320,32 +414,31 @@ describe("R129-M — the rail is a PLAIN line (no chevron, no expand, never a co
   });
 });
 
-describe("R129-M — the toolActivity pref matrix against the separated shapes", () => {
-  it("detailed: the full anatomy — every card expandable with its body OPEN by default", () => {
+describe("R129-M/R130 — the toolActivity pref matrix against the separated shapes", () => {
+  it("detailed: the full anatomy — every group expandable, COLLAPSED when settled (the fold is a deliberate look)", () => {
     const plan = planOf([toolItem("t1"), assistantItem("a1", { content: "done" })], "detailed");
-    const cards = plan.elements.filter((el) => el.element === "tool-card");
-    expect(cards).toHaveLength(1);
-    for (const card of cards) {
-      if (card.element !== "tool-card") throw new Error("expected a tool-card element");
-      expect(card.expandable).toBe(true);
-      expect(card.bodyOpen).toBe(true);
+    const groups = plan.elements.filter((el) => el.element === "tool-group");
+    expect(groups).toHaveLength(1);
+    for (const group of groups) {
+      if (group.element !== "tool-group") throw new Error("expected a tool-group element");
+      expect(group.expandable).toBe(true);
+      expect(group.defaultOpen).toBe(false);
     }
   });
 
-  it("compact: ONE-LINE cards, no expansion — the body never renders", () => {
+  it("compact: ONE-LINE rows, no expansion — the details never render", () => {
     const plan = planOf([toolItem("t1"), assistantItem("a1", { content: "done" })], "compact");
-    const cards = plan.elements.filter((el) => el.element === "tool-card");
-    expect(cards).toHaveLength(1);
-    for (const card of cards) {
-      if (card.element !== "tool-card") throw new Error("expected a tool-card element");
-      expect(card.expandable).toBe(false);
-      expect(card.bodyOpen).toBe(false);
+    const groups = plan.elements.filter((el) => el.element === "tool-group");
+    expect(groups).toHaveLength(1);
+    for (const group of groups) {
+      if (group.element !== "tool-group") throw new Error("expected a tool-group element");
+      expect(group.expandable).toBe(false);
     }
   });
 
-  it("hidden: NO tool cards at all — the rail only while thinking text exists (the clean document), the reply stays flat", () => {
+  it("hidden: NO tool groups at all — the rail only while thinking text exists (the clean document), the text stays flat and IN ORDER", () => {
     // With thinking: the rail reads the honest thinking word and never
-    // teases a count the cards will not show.
+    // teases a count the groups will not show.
     const withThinking = planOf(
       [
         assistantItem("a1", { thinking: "hmm", thinkingMs: 8_000 }),
@@ -354,38 +447,44 @@ describe("R129-M — the toolActivity pref matrix against the separated shapes",
       ],
       "hidden",
     );
-    expect(withThinking.elements.map((el) => el.element)).toEqual(["rail", "thinking", "reply"]);
+    expect(withThinking.elements.map((el) => el.element)).toEqual(["rail", "thinking", "text"]);
     const rail = withThinking.elements.find((el) => el.element === "rail");
     expect(rail?.element === "rail" && rail.summary).toBe("Thought for 8s");
-    // Without thinking: the clean document — no rail, no cards, no thinking
-    // row; only the flat reply.
+    // Without thinking: the clean document — no rail, no groups, no thinking
+    // row; only the flat text.
     const clean = planOf([toolItem("t1"), assistantItem("a1", { content: "done" })], "hidden");
-    expect(clean.elements.map((el) => el.element)).toEqual(["reply"]);
+    expect(clean.elements.map((el) => el.element)).toEqual(["text"]);
+    // Interleaved text under hidden merges into ONE flat element — the
+    // invisible calls never break the text runs (the emission order never
+    // collapses what the user can see; the segments keep their keys in
+    // order, separated by the house segment gap at render).
+    const interleaved = planOf(
+      [toolItem("t1"), assistantItem("a1", { content: "first" }), toolItem("t2"), assistantItem("a2", { content: "second" })],
+      "hidden",
+    );
+    expect(interleaved.elements.map((el) => el.element)).toEqual(["text"]);
+    const texts = interleaved.elements.filter((el) => el.element === "text");
+    expect(texts[0]?.keys).toEqual(["a1", "a2"]);
   });
 });
 
-describe("R129-M — the tool cards' OPEN-by-default law (R123-W-m surviving, re-pinned)", () => {
-  it("every tool card renders its body OPEN by default — settled or live, one call or many (the owner must SEE the work)", () => {
-    const plans = [
-      planOf([toolItem("t1")]),
-      planOf([toolItem("t1"), toolItem("t2"), toolItem("t3")]),
-      planOf([toolItem("t1", { ok: null, live: true })]),
-    ];
-    for (const plan of plans) {
-      const cards = plan.elements.filter((el) => el.element === "tool-card");
-      expect(cards.length).toBeGreaterThan(0);
-      for (const card of cards) {
-        if (card.element !== "tool-card") throw new Error("expected a tool-card element");
-        expect(card.bodyOpen).toBe(true);
-      }
-    }
+describe("R130 — the tool group label's grammar (toolGroupLabel, pure)", () => {
+  it("a single call speaks its own row title (the row IS the fold head)", () => {
+    const plan = planOf([
+      toolItem("t1", { toolName: "read_file", argsSummary: "path: src/a.ts" }),
+    ]);
+    const group = plan.elements.find((el) => el.element === "tool-group");
+    expect(group?.element === "tool-group" && group.label).toBe("read file · src/a.ts");
   });
 
-  it("a thinking-only turn renders no cards to open — the thinking row keeps its own settled collapse (the R124 law stands)", () => {
-    const plan = planOf([assistantItem("a1", { thinking: "hmm" })]);
-    expect(plan.elements.some((el) => el.element === "tool-card")).toBe(false);
-    const row = plan.elements.find((el) => el.element === "thinking");
-    expect(row?.element === "thinking" && row.defaultOpen).toBe(false);
+  it("a run of calls speaks the count + the family glance (top two families, plural counts)", () => {
+    const plan = planOf([
+      toolItem("t1", { toolName: "read_file", argsSummary: "path: src/a.ts" }),
+      toolItem("t2", { toolName: "read_file", argsSummary: "path: src/b.ts" }),
+      toolItem("t3", { toolName: "run_command", argsSummary: "command: npm test" }),
+    ]);
+    const group = plan.elements.find((el) => el.element === "tool-group");
+    expect(group?.element === "tool-group" && group.label).toBe("3 calls · 2 read · run");
   });
 });
 

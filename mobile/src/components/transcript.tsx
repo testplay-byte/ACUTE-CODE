@@ -171,7 +171,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { BookOpenText, Check, ChevronDown, ChevronUp, CircleX, Copy, FileCode2, Globe, ImageIcon, RefreshCw, Square, SquareTerminal, Wrench } from "lucide-react-native";
+import { BookOpenText, Check, ChevronDown, ChevronUp, CircleX, Copy, FileCode2, Globe, ImageIcon, Layers, RefreshCw, Square, SquareTerminal, Wrench } from "lucide-react-native";
 import { useTheme, useChatPrefs, type ToolActivity } from "@/design/theme";
 import { decisionHaptic, selectionHaptic, warningHaptic } from "@/design/haptics";
 import { Badge, LiveCaret, Skeleton, TypeBody, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
@@ -200,6 +200,8 @@ import {
   groupDisplayRows,
   orderDisplayItems,
   thinkingRowLabel,
+  toolFamily,
+  toolGroupLabel,
   toolRowTitle,
   turnActivityFacts,
   turnBlockA11yLabel,
@@ -208,6 +210,7 @@ import {
   writeLineDiff,
   type DisplayRow,
   type StandaloneTranscriptItem,
+  type ToolFamily,
   type ToolItem,
   type TurnGroup,
 } from "@/features/turn-block";
@@ -219,10 +222,12 @@ import {
   SPRING,
 } from "@/design/motion";
 import {
+  CHART_HUES,
   RADIUS_CARD,
   RADIUS_INPUT,
   RADIUS_PILL,
   RADIUS_ROUND,
+  chartHue,
   fontFamily,
   mixHex,
   spacing,
@@ -255,6 +260,32 @@ const RADIUS_IMAGE = 12;
  *  round's caveats — the amendment's "RADIUS_CARD r12" names a value the
  *  token does not carry). */
 const RADIUS_TOOL_CARD = 12;
+
+/** R130 — the tool GROUP's auto-collapse HOLD after a live group settles
+ *  (ms): the PC WorkingSection ToolLine's own TOOL_COLLAPSE_HOLD_MS
+ *  (2500), ported for parity — the outcome stays readable for a beat
+ *  before the fold closes; a group holding a FAILED call never arms it. */
+const TOOL_GROUP_COLLAPSE_HOLD_MS = 2500;
+
+/** R130 — the tool row's family COLOR (the color-coding contract): write =
+ *  the accent terracotta, terminal = the warning amber, read = the accent2
+ *  taupe, web/browser = the chart's sage teal (the data-viz exploration
+ *  hue — the one documented extra-hue exception), generic = textSecondary.
+ *  The stripe + the leading icon share this one spelling per row. */
+function toolFamilyColor(family: ToolFamily, tokens: { accent: string; warning: string; accent2: string; textSecondary: string }, isDark: boolean): string {
+  switch (family) {
+    case "write":
+      return tokens.accent;
+    case "terminal":
+      return tokens.warning;
+    case "read":
+      return tokens.accent2;
+    case "web":
+      return chartHue(CHART_HUES.output, isDark);
+    default:
+      return tokens.textSecondary;
+  }
+}
 /** chat.md — the WhatsApp tail hint: the user bubble's bottom-right corner. */
 const RADIUS_BUBBLE_TAIL = 16;
 /** One leg of the placeholder's calm ~1.2s breathe + the dots' pulse. */
@@ -1045,48 +1076,73 @@ export type ThinkingElement = {
   defaultOpen: boolean;
 };
 
-/** The plan's TOOL CARD element (one clay card per call). */
-export type ToolCardElement = {
-  element: "tool-card";
+/** The plan's TOOL GROUP element (R130 — one clay card per RUN of
+ * consecutive tool calls; the PC Working-fold grammar, ported). */
+export type ToolGroupElement = {
+  element: "tool-group";
   key: string;
-  /** detailed = the tap-to-collapse anatomy; compact = no expansion. */
+  /** The run's item keys, in emission order. */
+  keys: string[];
+  /** The group header's glance label (pure — toolGroupLabel). */
+  label: string;
+  /** The TURN is live (the group auto-opens while it works). */
+  live: boolean;
+  /** Any call in the run FAILED (the group never auto-collapses). */
+  hasFailed: boolean;
+  /** Any call in the run is still running. */
+  hasRunning: boolean;
+  /** detailed = the tap-to-expand anatomy; compact = one-line rows, no
+   *  expansion (the header only for multi-call groups). */
   expandable: boolean;
-  /** R123-W-m surviving in the separated grammar: OPEN by default — the
-   *  owner must SEE the work (compact renders no body at all). */
-  bodyOpen: boolean;
+  /** R130 — the owner's ask: OPEN while the turn is live, COLLAPSED once
+   *  settled (the R123-W-m open-by-default law is retired; the live-open
+   *  law carries the seeing). */
+  defaultOpen: boolean;
 };
 
-/** The plan's REPLY element (FLAT — no card, no container, NO bubble). */
-export type ReplyElement = {
-  element: "reply";
-  /** FLAT: no surface rides the reply's wrapper, ever. */
-  surface: null;
+/** The plan's TEXT element (R130 — a run of consecutive assistant
+ * segments, FLAT, rendered WHERE IT WAS RECEIVED — interleaved with the
+ * tool groups in emission order; the R129 all-cards-above-one-reply-bottom
+ * shape is retired). */
+export type TextElement = {
+  element: "text";
+  key: string;
+  /** The run's segment keys, in emission order. */
+  keys: string[];
+  /** The meta line (model · time) rides the FIRST text element with
+   *  content — only when content starts. */
+  showMeta: boolean;
 };
 
 /** One element of the turn's separated layout. */
 export type TurnElementDescriptor =
   | RailElement
   | ThinkingElement
-  | ToolCardElement
-  | ReplyElement;
+  | ToolGroupElement
+  | TextElement;
 
-/** R129-M — the turn's SEPARATED-ELEMENTS plan (the pure render contract). */
+/** R129-M/R130 — the turn's SEPARATED-ELEMENTS plan (the pure render
+ * contract). */
 export interface TurnElementsPlan {
   /** The turn container carries NO surface (no clay card, no well, no
    *  bubble) — the elements render directly on the screen background. */
   containerSurface: null;
-  /** The turn's ordered sibling elements (rail → thinking → cards → reply;
-   *  only the elements the turn actually has — a thinking-less turn renders
-   *  no thinking element, a hidden-tools turn renders no cards). */
+  /** The turn's ordered sibling elements (rail → thinking → then the
+   *  emission-order interleave of TOOL GROUPS and TEXT runs; only the
+   *  elements the turn actually has — a thinking-less turn renders no
+   *  thinking element, a hidden-tools turn renders no groups). */
   elements: TurnElementDescriptor[];
-  /** One clay card per tool call — the house CARD padding (spacing.md = 12,
-   *  the comfortable literal; the density pref's compact rung halves the
-   *  vertical at the component, per its pinned contract). */
-  toolCardPadding: number;
-  /** chat.md R129 — the tool card's radius (r12). */
-  toolCardRadius: number;
-  /** The 8px vertical gaps between cards (spacing.sm). */
-  toolCardGap: number;
+  /** One clay card per RUN of consecutive calls — the house CARD padding
+   *  (spacing.md = 12, the comfortable literal; the density pref's compact
+   *  rung halves the vertical at the component, per its pinned contract). */
+  toolGroupPadding: number;
+  /** chat.md — the tool group card's radius (r12). */
+  toolGroupRadius: number;
+  /** The 8px vertical gaps between groups (spacing.sm). */
+  toolGroupGap: number;
+  /** R130 — the auto-collapse HOLD after a live group settles (ms; the PC
+   *  ToolLine's own TOOL_COLLAPSE_HOLD_MS, ported for parity). */
+  toolGroupCollapseHoldMs: number;
 }
 
 /**
@@ -1094,12 +1150,24 @@ export interface TurnElementsPlan {
  * pref (pure — the component renders this verbatim, the tests pin it):
  * presence follows the SAME pure predicates the renderers use (the rail
  * from `activitySummary`, the thinking row from `turnThinkingText`, the
- * cards from the pref's visibility, the reply from `turnReplyText`), and
- * the pref shapes them exactly the way chat.md R129 rules: hidden = no
- * tool cards + the rail only while thinking text exists (the clean
- * document — the summary never teases a count the cards will not show);
- * compact = one-line cards, no expansion; detailed = the full anatomy with
- * the body OPEN by default.
+ * groups from the pref's visibility, the text runs from the content-bearing
+ * assistant segments), and the pref shapes them exactly the way chat.md
+ * rules: hidden = no tool groups + the rail only while thinking text exists
+ * (the clean document — the summary never teases a count the groups will
+ * not show); compact = one-line rows, no expansion; detailed = the full
+ * anatomy with the R130 fold lifecycle (live-open → hold → auto-collapse,
+ * failures stay open).
+ *
+ * R130 — EMISSION-ORDER INTERLEAVING: after the rail + thinking row, the
+ * plan walks `group.items` IN ORDER, folding runs of consecutive tool items
+ * into TOOL GROUP elements and runs of consecutive content-bearing
+ * assistant segments into TEXT elements — the text renders WHERE IT WAS
+ * RECEIVED, the groups where the calls were made (the owner: "when the text
+ * was received, then the text should be shown; when the tool cards were
+ * made, there the tool cards should be made"). A thinking-only assistant
+ * item neither starts a text run NOR breaks a tool run — the merged
+ * thinking row above owns it (mid-turn thinking between two calls keeps
+ * the calls in ONE group).
  */
 export function turnElementsPlan(group: TurnGroup, activity: ToolActivity): TurnElementsPlan {
   const visibility = toolActivityVisibility(activity);
@@ -1126,26 +1194,65 @@ export function turnElementsPlan(group: TurnGroup, activity: ToolActivity): Turn
       defaultOpen: group.live,
     });
   }
-  if (!visibility.hidden) {
-    for (const item of group.items) {
-      if (item.kind !== "tool") continue;
+  const segmentHasContent = (seg: TranscriptItem & { kind: "assistant" }): boolean => {
+    const live = seg.live && seg.chunks !== null ? seg.chunks.join("") : "";
+    return live !== "" || (!seg.live && seg.content !== "");
+  };
+  let toolRun: ToolItem[] = [];
+  let textRun: Array<TranscriptItem & { kind: "assistant" }> = [];
+  let firstTextSeen = false;
+  const flushTools = (): void => {
+    if (toolRun.length === 0) return;
+    const hasFailed = toolRun.some((it) => it.ok === false && it.interrupted !== true);
+    elements.push({
+      element: "tool-group",
+      key: `grp-${toolRun[0]?.key ?? "?"}`,
+      keys: toolRun.map((it) => it.key),
+      label: toolGroupLabel(toolRun),
+      live: group.live,
+      hasFailed,
+      hasRunning: toolRun.some((it) => it.ok === null),
+      expandable: visibility.expandable,
+      defaultOpen: group.live || hasFailed,
+    });
+    toolRun = [];
+  };
+  const flushText = (): void => {
+    const withContent = textRun.filter(segmentHasContent);
+    if (withContent.length > 0) {
       elements.push({
-        element: "tool-card",
-        key: item.key,
-        expandable: visibility.expandable,
-        bodyOpen: visibility.expandable,
+        element: "text",
+        key: `txt-${withContent[0]?.key ?? "?"}`,
+        keys: withContent.map((seg) => seg.key),
+        showMeta: !firstTextSeen,
       });
+      firstTextSeen = true;
+    }
+    textRun = [];
+  };
+  for (const item of group.items) {
+    if (item.kind === "tool") {
+      if (!visibility.hidden) {
+        flushText();
+        toolRun.push(item);
+      }
+    } else if (item.kind === "assistant") {
+      if (segmentHasContent(item)) {
+        flushTools();
+        textRun.push(item);
+      }
+      // thinking-only items: neither a text run nor a run-breaker.
     }
   }
-  if (turnReplyText(group.items) !== "") {
-    elements.push({ element: "reply", surface: null });
-  }
+  flushTools();
+  flushText();
   return {
     containerSurface: null,
     elements,
-    toolCardPadding: spacing.md,
-    toolCardRadius: RADIUS_TOOL_CARD,
-    toolCardGap: spacing.sm,
+    toolGroupPadding: spacing.md,
+    toolGroupRadius: RADIUS_TOOL_CARD,
+    toolGroupGap: spacing.sm,
+    toolGroupCollapseHoldMs: TOOL_GROUP_COLLAPSE_HOLD_MS,
   };
 }
 
@@ -1263,18 +1370,17 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
     (item): item is TranscriptItem & { kind: "assistant" } => item.kind === "assistant",
   );
 
-  // ── R129-M — the SEPARATED-ELEMENTS plan (pure, exported above): the
-  // render contract — which elements exist, in what order, with which
+  // ── R129-M/R130 — the SEPARATED-ELEMENTS plan (pure, exported above):
+  // the render contract — which elements exist, in what order, with which
   // geometry. The component renders the plan verbatim (presence comes from
   // the plan's elements; the content below fills each element in). ────────
   const plan = turnElementsPlan(group, prefs.toolActivity);
   const railEl = plan.elements.find((el): el is RailElement => el.element === "rail") ?? null;
   const thinkingEl =
     plan.elements.find((el): el is ThinkingElement => el.element === "thinking") ?? null;
-  const toolCardEls = plan.elements.filter(
-    (el): el is ToolCardElement => el.element === "tool-card",
+  const toolGroupEls = plan.elements.filter(
+    (el): el is ToolGroupElement => el.element === "tool-group",
   );
-  const replyEl = plan.elements.find((el): el is ReplyElement => el.element === "reply") ?? null;
 
   // ── the rail's facts + ONE summary line (pure — features/turn-block.ts) ──
   const facts = turnActivityFacts(group, prefs.toolActivity);
@@ -1293,8 +1399,16 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
   const showToolsHiddenHint =
     !hintGone && acquireToolsHiddenHint(hintOwner, visibility.hidden, toolItems.length);
 
-  // ── the reply's body (the retired AssistantBlock's grammar, now FLAT —
-  // the segments render directly on the screen background, full width) ────
+  // ── the text body's shared lookups (R130 — the segments render WHERE THEY
+  // WERE RECEIVED, inside their TEXT elements): the segment map + the LAST
+  // LIVE segment's key (the shared LiveCaret rides that one segment,
+  // wherever its element sits in the interleave). ─────────────────────────
+  const segmentByKey = new Map(assistantItems.map((seg) => [seg.key, seg] as const));
+  let caretKey: string | null = null;
+  for (const seg of assistantItems) {
+    const liveText = seg.live && seg.chunks !== null ? seg.chunks.join("") : "";
+    if (liveText !== "") caretKey = seg.key;
+  }
   const textSegments = assistantItems.filter((seg) => {
     const live = seg.live && seg.chunks !== null ? seg.chunks.join("") : "";
     return live !== "" || (!seg.live && seg.content !== "");
@@ -1319,10 +1433,10 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
   useEffect(() => {
     if (!thinkingUserTouched.current) {
       if (group.live) setThinkingOpen(true);
-      else if (prevLive.current !== group.live && toolCardEls.length === 0) setThinkingOpen(false);
+      else if (prevLive.current !== group.live && toolGroupEls.length === 0) setThinkingOpen(false);
     }
     prevLive.current = group.live;
-  }, [group.live, toolCardEls.length]);
+  }, [group.live, toolGroupEls.length]);
 
   // ── the live rail's breath — the retired placeholder's own 0.85↔1 ~1.2s
   // cycle, calm, only while the turn WORKS (once text streams, the shared
@@ -1425,57 +1539,75 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
           text={thinkingEl.text}
         />
       )}
-      {/* THE TOOL CARDS — one clay card per call, 8px vertical gaps between
-          cards (the turn column's own beat; the plan carries the geometry
-          the styles speak). */}
-      {toolCardEls.map((el) => {
-        const item = toolItems.find((tool) => tool.key === el.key);
-        return item === undefined ? null : (
-          <ToolCard key={el.key} item={item} expandable={el.expandable} />
+      {/* R130 — THE EMISSION-ORDER INTERLEAVE: the plan's remaining elements
+          (TOOL GROUPS and TEXT runs) render IN THE ORDER THE WORK HAPPENED —
+          the text where it was received, the groups where the calls were
+          made (the R129 all-cards-above-one-reply-bottom shape is retired).
+          The turn column's own 8dp beat spaces the siblings. */}
+      {plan.elements.map((el) => {
+        if (el.element === "rail" || el.element === "thinking") return null;
+        if (el.element === "tool-group") {
+          const items = el.keys
+            .map((key) => toolItems.find((tool) => tool.key === key))
+            .filter((item): item is ToolItem => item !== undefined);
+          if (items.length === 0) return null;
+          return (
+            <ToolGroup
+              key={el.key}
+              items={items}
+              expandable={el.expandable}
+              live={el.live}
+              holdMs={plan.toolGroupCollapseHoldMs}
+            />
+          );
+        }
+        // el.element === "text" — the FLAT run: the meta line above its
+        // first chunk (when this element is the turn's first content), then
+        // the markdown directly on the screen background.
+        return (
+          <View key={el.key}>
+            {el.showMeta && hasContent && (group.model !== null || clock !== null) && (
+              <TypeMono
+                numberOfLines={1}
+                style={{ color: tokens.textTertiary, fontSize: 10.5 }}
+                testID="transcript-assistant-meta"
+              >
+                {[group.model, clock].filter((part) => part !== null).join(" · ")}
+              </TypeMono>
+            )}
+            {el.keys.map((key, index) => {
+              const seg = segmentByKey.get(key);
+              if (seg === undefined) return null;
+              const liveText = seg.live && seg.chunks !== null ? seg.chunks.join("") : "";
+              // R123-W-m — the rhythm law: consecutive segments of one turn are
+              // SEPARATE utterances (the owner: "there was no separation with the
+              // elements… it was looking off"), so every segment after the first
+              // carries the extra gap — the turn column's own 8dp beat on top of
+              // the container gap, double the markdown paragraph's internal
+              // rhythm, never one wall of text.
+              const segmentGap = index > 0 ? styles.assistantSegmentGap : undefined;
+              if (liveText !== "") {
+                return (
+                  <View key={seg.key} style={[styles.assistantLive, segmentGap]}>
+                    <MarkdownText content={liveText} textScale={scale} />
+                    {/* R118-B — the shared LiveCaret (the private recipe's exact
+                        extraction; reuse, never re-roll) rides the LAST live
+                        segment, wherever its element sits in the interleave. */}
+                    {seg.key === caretKey && (
+                      <LiveCaret color={tokens.accent} label="the agent is still writing" />
+                    )}
+                  </View>
+                );
+              }
+              return seg.content !== "" ? (
+                <View key={seg.key} style={segmentGap}>
+                  <MarkdownText content={seg.content} textScale={scale} />
+                </View>
+              ) : null;
+            })}
+          </View>
         );
       })}
-      {/* THE REPLY — FLAT: the meta line above the first content chunk, then
-          the markdown directly on the screen background (the retired
-          AssistantBlock's grammar minus any container). */}
-      {replyEl !== null && (
-        <>
-          {hasContent && (group.model !== null || clock !== null) && (
-            <TypeMono
-              numberOfLines={1}
-              style={{ color: tokens.textTertiary, fontSize: 10.5 }}
-              testID="transcript-assistant-meta"
-            >
-              {[group.model, clock].filter((part) => part !== null).join(" · ")}
-            </TypeMono>
-          )}
-          {textSegments.map((seg, index) => {
-            const liveText = seg.live && seg.chunks !== null ? seg.chunks.join("") : "";
-            // R123-W-m — the rhythm law: consecutive segments of one turn are
-            // SEPARATE utterances (the owner: "there was no separation with the
-            // elements… it was looking off"), so every segment after the first
-            // carries the extra gap — the turn column's own 8dp beat on top of
-            // the container gap, double the markdown paragraph's internal
-            // rhythm, never one wall of text.
-            const segmentGap = index > 0 ? styles.assistantSegmentGap : undefined;
-            if (liveText !== "") {
-              const isLast = index === textSegments.length - 1;
-              return (
-                <View key={seg.key} style={[styles.assistantLive, segmentGap]}>
-                  <MarkdownText content={liveText} textScale={scale} />
-                  {/* R118-B — the shared LiveCaret (the private recipe's exact
-                      extraction; reuse, never re-roll). */}
-                  {isLast && <LiveCaret color={tokens.accent} label="the agent is still writing" />}
-                </View>
-              );
-            }
-            return seg.content !== "" ? (
-              <View key={seg.key} style={segmentGap}>
-                <MarkdownText content={seg.content} textScale={scale} />
-              </View>
-            ) : null;
-          })}
-        </>
-      )}
     </View>
   );
 }
@@ -1685,81 +1817,289 @@ function PulseDot({ color, size }: { color: string; size: number }) {
   );
 }
 
-// ── the tool cards (R129-M — one clay CARD per call; the retired rows'
-// content logic PRESERVED) ──────────────────────────────────────────────────
+// ── the tool groups (R130 — the PC Working-fold grammar, PORTED: one clay
+// CARD per RUN of consecutive calls + one-line color-coded rows) ───────────
 //
-// THE TOOL CARD: the house card treatment around the retired row's content —
-// 12px card padding (spacing.md; the density pref's compact rung halves the
-// vertical, its pinned contract), r12 (chat.md R129), the CARD surface
-// (tokens.card — never surfaceWell) with a hairline clayRim + the small clay
-// shadow, 8px gaps between cards (the turn column's beat). The anatomy: the
-// HEAD line (icon + verb + target — `toolRowTitle`; the write family's +A/−B
-// diff chips inline; the quiet status chip) + the BODY, OPEN by default
-// (R123-W-m's law survives — the owner must SEE the work): the write
-// family's streaming tail + "Wrote {file}" + output summary, the terminal
-// family's streamed output tail + exit summary, the read family's quiet
-// one-liner, the generic fallback's args + output. Tap the head toggles the
-// body (the house disclosure motion); compact pins the card to its head
-// line — one-line cards, no expansion; hidden never renders cards at all.
+// THE TOOL GROUP: the house card treatment (12px padding, r12, the card
+// surface + hairline clayRim + small clay shadow — the R129 card's own
+// geometry, now around a RUN of calls) wrapping either a SINGLE call's row
+// (the row IS the group's fold head — its details render behind the group's
+// own disclosure) or a GROUP HEADER + the calls as ONE-LINE rows behind the
+// fold. The auto-lifecycle law ports from the PC's own ToolLine
+// (WorkingSection.tsx, MOTION.md §4): OPEN while the turn is live (the
+// owner watches the work happen — the R123-W-m seeing, now scoped to
+// live), a ~2.5s HOLD after the turn settles, then COLLAPSE (the quiet
+// transcript the owner asked for); a group holding a FAILED call NEVER
+// auto-collapses; the user's tap wins for the group's lifetime. Compact
+// pins the group to its one line(s) — no expansion; hidden renders no
+// groups at all.
 //
-// The failed call's tell stays the R116-m grammar: the inline danger chip on
-// the head line + the card's quiet danger wash; running = the small warning
-// chip; success = NOTHING. R128-W6: an INTERRUPTED settle (the turn's
-// terminal frame landed before the result — sessions.ts settles the stuck
-// running cards) reads NEUTRAL — the quiet "interrupted" chip, no danger
-// wash; the rehydrate swap remains the truth.
+// THE TOOL ROW: one line — the family stripe (2.5px, the family color) +
+// the family icon (the same color — the R130 color coding: write = accent,
+// terminal = warning amber, read = accent2, web/browser = the chart sage
+// teal, generic = textSecondary) + the verb·target title (mono, one line)
+// + the write family's +A/−B diff chips + the QUIET status chip + the
+// chevron while expandable. THE ROW IS THE PRESS TARGET — the whole row's
+// card, not a head-line strip inside it (the R129 head-row-only target
+// left dead zones in the card padding — the owner: "I tapped on it, it
+// apparently did nothing. I had to click the arrow"). A RUNNING call's
+// streaming tails render OUTSIDE the fold (always visible live work); the
+// settled details render behind the row's own disclosure clip. The failed
+// call's tell stays the R116-m grammar (the inline danger chip + the row's
+// quiet danger wash); running = the small warning chip; success = NOTHING;
+// R128-W6's INTERRUPTED settle stays NEUTRAL.
 
-function ToolCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
+function ToolGroup({
+  items,
+  expandable,
+  live,
+  holdMs,
+}: {
+  items: ToolItem[];
+  expandable: boolean;
+  /** The TURN is live (the group auto-opens while it works). */
+  live: boolean;
+  /** The auto-collapse hold after a live group settles (the plan's constant). */
+  holdMs: number;
+}) {
   const { tokens } = useTheme();
   const prefs = useChatPrefs();
-  // R123-W-m surviving in the separated grammar: the card's body renders
-  // OPEN by default (the owner must SEE the work); a user's head tap wins
-  // for the card's lifetime.
-  const [open, setOpen] = useState(true);
-  // R128-W6 — an INTERRUPTED settle (the turn ended before the result frame)
-  // is neutral, not a failure: no danger wash, the quiet "interrupted" chip.
+  // R128-W6 — an INTERRUPTED settle is neutral, not a failure: a group of
+  // interrupted calls collapses like any other (only real failures pin).
+  const hasFailed = items.some((it) => it.ok === false && it.interrupted !== true);
+  const single = items.length === 1;
+
+  // ── R130 — the fold's AUTO-LIFECYCLE (the PC ToolLine's own law, ported):
+  // OPEN while the turn is live; once the live flag settles, HOLD ~holdMs
+  // so the outcome is readable, then COLLAPSE — unless the group holds a
+  // FAILED call (failures stay open for the transcript's lifetime) or the
+  // user has tapped (the manual toggle wins for the group's lifetime).
+  const [open, setOpen] = useState(live || hasFailed);
+  const userTouched = useRef(false);
+  const collapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevLive = useRef(live);
+  const clearCollapseTimer = (): void => {
+    if (collapseTimer.current !== null) {
+      clearTimeout(collapseTimer.current);
+      collapseTimer.current = null;
+    }
+  };
+  useEffect(() => {
+    if (userTouched.current) {
+      prevLive.current = live;
+      return;
+    }
+    if (live) {
+      // The turn went (back) live → OPEN, and a pending close is cancelled
+      // (a retried call re-arms the automation).
+      clearCollapseTimer();
+      setOpen(true);
+    } else if (prevLive.current !== live) {
+      // Just settled → the hold, then the timed close; a FAILED group
+      // never arms it (and stays open).
+      if (hasFailed) {
+        setOpen(true);
+      } else if (collapseTimer.current === null) {
+        collapseTimer.current = setTimeout(() => {
+          collapseTimer.current = null;
+          if (!userTouched.current) setOpen(false);
+        }, holdMs);
+      }
+    }
+    prevLive.current = live;
+  }, [live, hasFailed, holdMs]);
+  // A pending close never outlives the group.
+  useEffect(() => () => clearCollapseTimer(), []);
+
+  const toggle = (): void => {
+    userTouched.current = true;
+    clearCollapseTimer();
+    setOpen((value) => !value);
+  };
+
+  const label = toolGroupLabel(items);
+  const running = items.some((it) => it.ok === null);
+
+  return (
+    <View
+      style={[
+        styles.toolCallCard,
+        {
+          // R129-M's card surface (never surfaceWell) + the hairline clayRim
+          // + the small clay shadow (the chat cards' own weight); the R130
+          // GROUP carries the same treatment around the RUN of calls. A
+          // failed call washes its own ROW, not the whole group card.
+          backgroundColor: tokens.card,
+          borderColor: tokens.clayRim,
+          boxShadow: tokens.clayShadowSm,
+          paddingVertical: densityVerticalPadding(prefs.chatDensity),
+        },
+      ]}
+      testID="transcript-tool-group"
+    >
+      {single ? (
+        // A single call: the row IS the group's fold head — its details
+        // render behind the group's own lifecycle, so the row takes the
+        // CONTROLLED open state.
+        items[0] !== undefined && (
+          <ToolRow item={items[0]} expandable={expandable} open={open} onToggle={toggle} />
+        )
+      ) : (
+        <>
+          <ToolGroupHeader
+            label={label}
+            running={running}
+            failed={hasFailed}
+            expanded={open && expandable}
+            expandable={expandable}
+            onToggle={toggle}
+          />
+          {/* The calls as ONE-LINE rows behind the group's fold — compact
+              renders no rows at all (the header only). */}
+          {expandable && (
+            <DisclosureClip open={open}>
+              {items.map((item) => (
+                <ToolRow key={item.key} item={item} expandable={expandable} />
+              ))}
+            </DisclosureClip>
+          )}
+        </>
+      )}
+    </View>
+  );
+}
+
+/** The multi-call group's HEADER line: the stacked-layers glyph + the glance
+ * label (toolGroupLabel — "3 calls · 2 read · 1 edit"; a single call never
+ * renders a header, its row speaks) + the running/failed chip + the chevron
+ * while expandable. The WHOLE line is the press target (R130's tap-anywhere
+ * law at the group level too). */
+function ToolGroupHeader({
+  label,
+  running,
+  failed,
+  expanded,
+  expandable,
+  onToggle,
+}: {
+  label: string;
+  running: boolean;
+  failed: boolean;
+  expanded: boolean;
+  expandable: boolean;
+  onToggle: () => void;
+}) {
+  const { tokens } = useTheme();
+  const row = (
+    <View style={styles.toolGroupHead}>
+      <Layers size={13} color={tokens.accent} strokeWidth={2.2} />
+      <TypeMono
+        style={{ color: tokens.text, fontFamily: fontFamily.monoMedium, flex: 1 }}
+        numberOfLines={1}
+      >
+        {label}
+      </TypeMono>
+      {running ? <ToolWordChip word="running" /> : null}
+      {failed ? <ToolWordChip word="failed" /> : null}
+      {expandable ? (
+        expanded ? (
+          <ChevronUp size={15} color={tokens.textTertiary} strokeWidth={2} />
+        ) : (
+          <ChevronDown size={15} color={tokens.textTertiary} strokeWidth={2} />
+        )
+      ) : null}
+    </View>
+  );
+  if (!expandable) return row;
+  return (
+    <Pressable
+      accessibilityLabel={`Tool calls: ${label}${failed ? ", failed" : ""}${running ? ", running" : ""}${
+        expanded ? ", expanded" : ""
+      }`}
+      accessibilityRole="button"
+      onPress={onToggle}
+    >
+      {row}
+    </Pressable>
+  );
+}
+
+/**
+ * R130 — THE TOOL ROW: one call's ONE-LINE row inside the group (or AS a
+ * single-call group's whole fold head): the family STRIPE (2.5px, the
+ * family color) + the family ICON (the same color — the color-coding
+ * contract) + the verb·target title (`toolRowTitle`, mono, one line) + the
+ * write family's +A/−B diff chips + the QUIET status chip (running =
+ * warning; failed = danger + the row's quiet danger wash; interrupted =
+ * neutral; success = NOTHING — the result rides the line) + the chevron
+ * while expandable.
+ *
+ * THE WHOLE ROW IS THE PRESS TARGET (R130's tap-anywhere fix): the
+ * Pressable wraps the row's own card — no dead zones in the padding; a
+ * compact row is a plain View (no press, no chevron, no details).
+ *
+ * The RUNNING call's streaming tails (the write family's content tail, the
+ * terminal family's output tail) render OUTSIDE every fold — the live work
+ * is always visible while it streams. The settled details render behind
+ * the row's own DisclosureClip: CONTROLLED by the group's fold when the
+ * row IS a single-call group's head (`open`/`onToggle` provided), else the
+ * row's own tap-to-expand state (the multi-call group's rows start
+ * collapsed — the details are a deliberate look).
+ */
+function ToolRow({
+  item,
+  expandable,
+  open: openProp,
+  onToggle: onToggleProp,
+}: {
+  item: ToolItem;
+  expandable: boolean;
+  /** The single-call group's fold state (the row IS the fold head). */
+  open?: boolean;
+  onToggle?: () => void;
+}) {
+  const { tokens, mode, systemIsDark } = useTheme();
+  const isDark = mode === "dark" || (mode === "system" && systemIsDark);
+  // R128-W6 — an INTERRUPTED settle is neutral, not a failure: no danger
+  // wash, the quiet "interrupted" chip.
   const failed = item.ok === false && item.interrupted !== true;
   const running = item.ok === null;
   const isWrite = WRITE_TOOLS.has(item.toolName);
   const isTerminal = TERMINAL_TOOLS.has(item.toolName);
   const isRead = READ_TOOLS.has(item.toolName);
-  // R123-W-m — the WEB families join the card grammar: the web pair
-  // (web_search/web_fetch) and the embedded browser (browser_control) are
-  // tools the agent ACTUALLY runs, and the generic Wrench + raw key:value
-  // dump was the shapeless rendering behind the owner's "no tool calls
-  // were shown to me". The families wear the PC's own Globe icon in the
-  // read family's accent2 voice (the exploration register the reference
-  // screenshots' "Explore" rows speak), and their targets come from the
-  // pure extractors (features/turn-block.ts's R123 note).
   const isWeb = WEB_TOOLS.has(item.toolName);
   const isBrowser = BROWSER_TOOLS.has(item.toolName);
 
-  // The head's ONE line — the families' existing grammar, moved from the
-  // retired cards: the write family keeps its "Writing {file}… · {n} chars"
-  // streaming verb and "Wrote {file}" settle; every other family carries the
-  // CompactToolRow's own one-line law, "verb · target". R120-CM: the string
-  // lives in the PURE `toolRowTitle` (features/turn-block.ts) — the card's
-  // grammar is jest-pinned there, the component stays a renderer.
+  // R130 — the family's COLOR + ICON (one spelling per family: the stripe,
+  // the icon, and the glance word in the group label all read toolFamily).
+  const family = toolFamily(item.toolName);
+  const familyColor = toolFamilyColor(family, tokens, isDark);
+  const icon = isWrite ? (
+    <FileCode2 size={13} color={familyColor} strokeWidth={2.2} />
+  ) : isTerminal ? (
+    <SquareTerminal size={13} color={familyColor} strokeWidth={2.2} />
+  ) : isRead ? (
+    <BookOpenText size={13} color={familyColor} strokeWidth={2.2} />
+  ) : isWeb || isBrowser ? (
+    <Globe size={13} color={familyColor} strokeWidth={2.2} />
+  ) : (
+    <Wrench size={13} color={familyColor} strokeWidth={2.2} />
+  );
+
+  // The row's ONE line — the families' existing grammar: the write family
+  // keeps its "Writing {file}… · {n} chars" streaming verb and "Wrote
+  // {file}" settle; every other family the "verb · target" one-line law.
+  // R120-CM: the string lives in the PURE `toolRowTitle` — the grammar is
+  // jest-pinned there, the component stays a renderer.
   const preview = extractWritePreview(item.inputRaw ?? "");
   const streaming = running && isWrite && item.inputRaw !== null;
   const title = toolRowTitle(item);
-  const icon = isWrite ? (
-    <FileCode2 size={13} color={tokens.accent} strokeWidth={2.2} />
-  ) : isTerminal ? (
-    <SquareTerminal size={13} color={tokens.accent} strokeWidth={2.2} />
-  ) : isRead ? (
-    <BookOpenText size={13} color={tokens.accent2} strokeWidth={2.2} />
-  ) : isWeb || isBrowser ? (
-    <Globe size={13} color={tokens.accent2} strokeWidth={2.2} />
-  ) : (
-    <Wrench size={13} color={tokens.textSecondary} strokeWidth={2.2} />
-  );
-  // R116-m — the settled edit's +A/−B chips ride the head line (null while
-  // running, on failures, and for plain writes — the byte summary line below
-  // carries those stories honestly).
+  // R116-m — the settled edit's +A/−B chips ride the row line (null while
+  // running, on failures, and for plain writes — the byte summary line
+  // below carries those stories honestly).
   const diff = isWrite ? writeLineDiff(item) : null;
   // The quiet content tail — the LAST 160 chars of what has arrived (the
-  // R58-c streamed-args preview: the head lives in the reducer's raw; the
+  // R58-c streamed-args preview: the line lives in the reducer's raw; the
   // tail is what is being typed NOW).
   const writeTail =
     streaming && preview.content !== ""
@@ -1771,39 +2111,102 @@ function ToolCard({ item, expandable }: { item: ToolItem; expandable: boolean })
   // persisted fold never carries one — live-only, exactly the old card).
   const terminalTail = isTerminal && item.outputTail !== null && item.outputTail !== "" ? item.outputTail : null;
 
-  return (
+  // The fold state: CONTROLLED (the single-call group's head) or the row's
+  // own tap-to-expand (the multi-call group's rows, collapsed by default).
+  const [ownOpen, setOwnOpen] = useState(false);
+  const controlled = openProp !== undefined && onToggleProp !== undefined;
+  const open = controlled ? openProp : ownOpen;
+  const statusWord = toolStatusWord(item);
+  const statusSuffix = statusWord === null ? " succeeded" : ` ${statusWord}`;
+
+  const line = (
     <View
       style={[
-        styles.toolCallCard,
+        styles.toolRow,
         {
-          // R129-M — the CARD surface (never surfaceWell) + the failed
-          // call's quiet danger wash (donts #37's card-wide tint, translated
-          // from the retired row to the card) + the hairline clayRim + the
-          // small clay shadow (the chat cards' own weight).
-          backgroundColor: failed ? mixHex(tokens.card, tokens.danger, 0.08) : tokens.card,
-          borderColor: tokens.clayRim,
-          boxShadow: tokens.clayShadowSm,
-          paddingVertical: densityVerticalPadding(prefs.chatDensity),
+          // The failed call's quiet danger wash (donts #37's card-wide tint,
+          // translated to the ROW inside the group — precise, never the
+          // whole group).
+          backgroundColor: failed ? mixHex(tokens.card, tokens.danger, 0.08) : "transparent",
         },
       ]}
-      testID="transcript-tool-card"
     >
-      <ToolHeadRow
-        item={item}
-        icon={icon}
-        title={title}
-        expanded={expandable && open}
-        expandable={expandable}
-        onToggle={expandable ? () => setOpen((v) => !v) : undefined}
-        after={diff !== null ? <WriteDiffChips added={diff.added} removed={diff.removed} /> : undefined}
-      />
-      {/* The BODY — the retired rows' content logic (the old main lines +
-          the old expanded details), OPEN by default behind the house
-          disclosure motion; compact renders no body at all (one-line
-          cards, no expansion). */}
+      {/* R130 — the family STRIPE: a 2.5px family-colored bar at the row's
+          left edge (the glanceable color coding). */}
+      <View style={[styles.toolRowStripe, { backgroundColor: familyColor }]} />
+      {icon}
+      <TypeMono
+        style={{ color: tokens.text, fontFamily: fontFamily.monoMedium, flex: 1 }}
+        numberOfLines={1}
+      >
+        {title}
+      </TypeMono>
+      {diff !== null ? <WriteDiffChips added={diff.added} removed={diff.removed} /> : null}
+      {statusWord !== null ? <ToolWordChip word={statusWord} /> : null}
+      {expandable ? (
+        open ? (
+          <ChevronUp size={15} color={tokens.textTertiary} strokeWidth={2} />
+        ) : (
+          <ChevronDown size={15} color={tokens.textTertiary} strokeWidth={2} />
+        )
+      ) : null}
+    </View>
+  );
+
+  return (
+    <View testID="transcript-tool-row">
+      {expandable ? (
+        <Pressable
+          accessibilityLabel={`Tool ${item.toolName}${statusSuffix}${open ? ", expanded" : ""}`}
+          accessibilityRole="button"
+          onPress={controlled ? onToggleProp : () => setOwnOpen((value) => !value)}
+          // R130's tap-anywhere law: the row's whole card is the target —
+          // hitSlop keeps the one-line target forgiving at the edges.
+          hitSlop={{ top: 4, bottom: 4, left: 0, right: 0 }}
+        >
+          {line}
+        </Pressable>
+      ) : (
+        line
+      )}
+      {/* The RUNNING call's streaming tails — OUTSIDE every fold: the live
+          work is always visible while it streams (the R123-W-m seeing,
+          scoped to live). */}
+      {running && writeTail !== null && (
+        <TypeMono
+          style={[
+            styles.terminalBlock,
+            {
+              color: tokens.textTertiary,
+              backgroundColor: tokens.monoBg,
+              borderColor: tokens.borderSubtle,
+            },
+          ]}
+          numberOfLines={3}
+        >
+          {writeTail}
+        </TypeMono>
+      )}
+      {running && terminalTail !== null && (
+        <TypeMono
+          style={[
+            styles.terminalBlock,
+            {
+              color: tokens.textTertiary,
+              backgroundColor: tokens.monoBg,
+              borderColor: tokens.borderSubtle,
+            },
+          ]}
+        >
+          {terminalTail}
+        </TypeMono>
+      )}
+      {/* The settled details — behind the fold (the group's when the row is
+          a single-call head; the row's own otherwise); compact renders no
+          details at all. */}
       {expandable && (
         <DisclosureClip open={open}>
-          {writeTail !== null && (
+          {!running && writeTail !== null && (
             <TypeMono
               style={[
                 styles.terminalBlock,
@@ -1818,7 +2221,7 @@ function ToolCard({ item, expandable }: { item: ToolItem; expandable: boolean })
               {writeTail}
             </TypeMono>
           )}
-          {terminalTail !== null && (
+          {!running && terminalTail !== null && (
             <TypeMono
               style={[
                 styles.terminalBlock,
@@ -1856,45 +2259,6 @@ function ToolCard({ item, expandable }: { item: ToolItem; expandable: boolean })
   );
 }
 
-/**
- * R116-m — the head's QUIET status chip (donts #37: the right-side FAIL
- * text badge column is retired): "running" rides a small warning-tinted
- * chip only while the call runs, a compact danger chip when it failed, a
- * quiet neutral chip when the turn ended underneath it (R128-W6's
- * "interrupted" settle) — and NOTHING on success (the result rides the head
- * line itself, never a badge). One quiet chip, never a shouty column.
- */
-function ToolStatusChip({ item }: { item: ToolItem }) {
-  const { tokens } = useTheme();
-  const word = toolStatusWord(item);
-  if (word === null) return null;
-  if (word === "running") {
-    return (
-      <View style={[styles.statusChip, { backgroundColor: mixHex(tokens.card, tokens.warning, 0.12) }]}>
-        <TypeMono style={{ color: tokens.warning, fontSize: 10, lineHeight: 13 }} numberOfLines={1}>
-          running
-        </TypeMono>
-      </View>
-    );
-  }
-  if (word === "interrupted") {
-    return (
-      <View style={[styles.statusChip, { backgroundColor: mixHex(tokens.card, tokens.textSecondary, 0.1) }]}>
-        <TypeMono style={{ color: tokens.textSecondary, fontSize: 10, lineHeight: 13 }} numberOfLines={1}>
-          interrupted
-        </TypeMono>
-      </View>
-    );
-  }
-  return (
-    <View style={[styles.statusChip, { backgroundColor: mixHex(tokens.card, tokens.danger, 0.1) }]}>
-      <TypeMono style={{ color: tokens.danger, fontSize: 10, lineHeight: 13 }} numberOfLines={1}>
-        failed
-      </TypeMono>
-    </View>
-  );
-}
-
 /** The +A/−B count chips (mono 11px, inline in the settled head row): the
  * added count on a quiet success tint, the removed count on a quiet danger
  * tint — the PC chat's own diff-chip grammar, ported through mixHex. The
@@ -1917,63 +2281,26 @@ function WriteDiffChips({ added, removed }: { added: number; removed: number }) 
   );
 }
 
-/** The head row every card leads with: icon + title (mono, one line) +
- * the optional inline result (the write card's +A/−B chips) + the QUIET
- * status chip + the chevron while expandable (R116-m — the badge column is
- * retired). Tappable as the whole card's expand when `onToggle` is set. */
-function ToolHeadRow({
-  item,
-  icon,
-  title,
-  expanded,
-  expandable,
-  onToggle,
-  after,
-}: {
-  item: ToolItem;
-  icon: React.ReactNode;
-  title: string;
-  expanded: boolean;
-  expandable: boolean;
-  onToggle?: () => void;
-  /** R116-m — inline content between the title and the status chip (the
-   * settled write card's line-count chips; nothing for every other card). */
-  after?: React.ReactNode;
-}) {
+/** The QUIET word chip shared by the row + the group header (donts #37:
+ * the right-side FAIL text badge column is retired): "running" rides the
+ * small warning-tinted chip, "failed"/"interrupted" their compact tints —
+ * and NOTHING on success (the result rides the row line itself, never a
+ * badge). One quiet chip, never a shouty column. */
+function ToolWordChip({ word }: { word: "running" | "failed" | "interrupted" }) {
   const { tokens } = useTheme();
-  // R128-W6 — the one status-word vocabulary ("interrupted" included — the
-  // a11y label hears exactly what the chip shows).
-  const statusWord = toolStatusWord(item);
-  const statusSuffix = statusWord === null ? " succeeded" : ` ${statusWord}`;
-  const row = (
-    <View style={styles.toolHead}>
-      {icon}
-      <TypeMono
-        style={{ color: tokens.text, fontFamily: fontFamily.monoMedium, flex: 1 }}
-        numberOfLines={1}
-      >
-        {title}
-      </TypeMono>
-      {after}
-      <ToolStatusChip item={item} />
-      {expandable ? (
-        expanded ? (
-          <ChevronUp size={15} color={tokens.textTertiary} strokeWidth={2} />
-        ) : (
-          <ChevronDown size={15} color={tokens.textTertiary} strokeWidth={2} />
-        )
-      ) : null}
-    </View>
-  );
-  if (onToggle === undefined) return row;
+  const tint =
+    word === "running"
+      ? mixHex(tokens.card, tokens.warning, 0.12)
+      : word === "interrupted"
+        ? mixHex(tokens.card, tokens.textSecondary, 0.1)
+        : mixHex(tokens.card, tokens.danger, 0.1);
+  const ink = word === "running" ? tokens.warning : word === "interrupted" ? tokens.textSecondary : tokens.danger;
   return (
-    <Pressable
-      accessibilityLabel={`Tool ${item.toolName}${statusSuffix}${expanded ? ", expanded" : ""}`}
-      accessibilityRole="button"
-      onPress={onToggle}
-    >
-      {row}
-    </Pressable>
+    <View style={[styles.statusChip, { backgroundColor: tint }]}>
+      <TypeMono style={{ color: ink, fontSize: 10, lineHeight: 13 }} numberOfLines={1}>
+        {word}
+      </TypeMono>
+    </View>
   );
 }
 
@@ -3132,17 +3459,43 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
     borderRadius: RADIUS_PILL,
   },
-  /** R129-M — THE TOOL CARD: one clay card per call — the house CARD
-   *  padding (spacing.md = 12px all sides; the density pref's compact rung
-   *  halves the VERTICAL at the call site, its pinned contract), r12
-   *  (chat.md R129), the card fill + hairline clayRim + the small clay
-   *  shadow at the call site. The 8px gaps BETWEEN cards ride the turn
-   *  column's own beat (the plan's toolCardGap). */
+  /** R129-M/R130 — THE TOOL GROUP CARD: one clay card per RUN of consecutive
+   *  calls — the house CARD padding (spacing.md = 12px all sides; the
+   *  density pref's compact rung halves the VERTICAL at the call site, its
+   *  pinned contract), r12 (chat.md), the card fill + hairline clayRim +
+   *  the small clay shadow at the call site. The 8px gaps BETWEEN groups
+   *  ride the turn column's own beat (the plan's toolGroupGap). */
   toolCallCard: {
     borderRadius: RADIUS_TOOL_CARD,
     borderWidth: StyleSheet.hairlineWidth,
     padding: spacing.md,
     gap: spacing.sm,
+  },
+  /** R130 — the multi-call group's HEADER line: the Layers glyph + the
+   *  glance label + the status chip + the chevron; the WHOLE line is the
+   *  press target (the tap-anywhere law at the group level). */
+  toolGroupHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    minHeight: 32,
+  },
+  /** R130 — THE TOOL ROW: one call's one-line row — the family stripe +
+   *  icon + title + chips + chevron; the whole row is the press target. */
+  toolRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    minHeight: 32,
+    borderRadius: 8,
+    paddingHorizontal: spacing.xs,
+  },
+  /** R130 — the row's family STRIPE: a 2.5px family-colored bar at the
+   *  row's left edge (the glanceable color coding — chat.md §Transcript). */
+  toolRowStripe: {
+    width: 2.5,
+    alignSelf: "stretch",
+    borderRadius: 1.25,
   },
   assistantLive: {
     flexDirection: "row",

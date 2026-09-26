@@ -42,6 +42,8 @@ import {
   runningToolWord,
   thinkingRowLabel,
   TOOL_HINT_MAX,
+  toolFamily,
+  toolGroupLabel,
   toolHint,
   toolHintList,
   toolRowTitle,
@@ -896,6 +898,59 @@ describe("turn-block — toolRowTitle (R120-CM — the well row's ONE-line gramm
     expect(toolRowTitle(toolItem("tb3", { toolName: "browser_control", argsSummary: "" }))).toBe(
       "browser control",
     );
+  });
+});
+
+describe("turn-block — toolFamily + toolGroupLabel (R130 — the tool groups' classifier + glance)", () => {
+  it("toolFamily classifies every family set (write/terminal/read/web/other)", () => {
+    expect(toolFamily("write_file")).toBe("write");
+    expect(toolFamily("edit_file")).toBe("write");
+    expect(toolFamily("run_command")).toBe("terminal");
+    expect(toolFamily("bash")).toBe("terminal");
+    expect(toolFamily("read_file")).toBe("read");
+    expect(toolFamily("read_skill")).toBe("read");
+    expect(toolFamily("search_skills")).toBe("read");
+    expect(toolFamily("web_search")).toBe("web");
+    expect(toolFamily("web_fetch")).toBe("web");
+    expect(toolFamily("browser_control")).toBe("web");
+    expect(toolFamily("delegate_task")).toBe("other");
+    expect(toolFamily("")).toBe("other");
+  });
+
+  it("a single call's group label is the call's own row title (the row IS the fold head)", () => {
+    expect(
+      toolGroupLabel([toolItem("g1", { toolName: "read_file", argsSummary: "path: src/a.ts" })]),
+    ).toBe("read file · src/a.ts");
+    expect(
+      toolGroupLabel([toolItem("g2", { toolName: "run_command", argsSummary: "command: npm test" })]),
+    ).toBe("run command · npm test");
+  });
+
+  it("a run of many: the count + the family glance, ranked by count, capped at two families", () => {
+    // two reads + one command → "3 calls · 2 read · run"
+    expect(
+      toolGroupLabel([
+        toolItem("g3", { toolName: "read_file", argsSummary: "path: src/a.ts" }),
+        toolItem("g4", { toolName: "read_file", argsSummary: "path: src/b.ts" }),
+        toolItem("g5", { toolName: "run_command", argsSummary: "command: npm test" }),
+      ]),
+    ).toBe("3 calls · 2 read · run");
+    // one per family: the count + the two top families (ranked by count —
+    // insertion order breaks ties deterministically)
+    expect(
+      toolGroupLabel([
+        toolItem("g6", { toolName: "write_file", argsSummary: "path: src/a.ts" }),
+        toolItem("g7", { toolName: "read_file", argsSummary: "path: src/b.ts" }),
+        toolItem("g8", { toolName: "run_command", argsSummary: "command: ls" }),
+      ]),
+    ).toBe("3 calls · edit · read");
+    // all one family: the count + the family word, plural
+    expect(
+      toolGroupLabel([
+        toolItem("g9", { toolName: "read_file", argsSummary: "path: src/a.ts" }),
+        toolItem("g10", { toolName: "read_file", argsSummary: "path: src/b.ts" }),
+      ]),
+    ).toBe("2 calls · 2 read");
   });
 });
 
