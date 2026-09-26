@@ -464,25 +464,65 @@ describe("R125-B: the mid-turn checkpoint phase (runFeedbackWriter phase param)"
   });
 
   it("turn-end (explicit and omitted): NO banner in the transcript — the R122 prompt input is byte-identical", async () => {
+    // R129-SF (re-pinned): the byte-identical law is about the PHASE
+    // SPELLING never leaking into the transcript — and the R129 dedup
+    // preamble makes the writer STATEFUL (the second call sees the first
+    // call's ledger entry), so the two calls now run on FRESH dataDirs
+    // (same session, same ledger state) instead of one shared dir. The
+    // law's intent is preserved exactly: omitted vs "turn-end" are the
+    // same bytes. The preamble's statefulness — the dedup feature itself —
+    // is pinned separately right below.
     const db = openDatabase(join(tempDir, `${randomUUID()}.db`));
     try {
       const sessionId = sessionWithTranscript(db, false);
+      const dataDirA = mkdtempSync(join(tempDir, "data-a-"));
+      const dataDirB = mkdtempSync(join(tempDir, "data-b-"));
       const { chat: chatA, inputs: inputsA } = fakeChat("### What I was trying to do\nx");
       await runFeedbackWriter(
-        { db, keyring: new ProviderKeyring(), chat: chatA, dataDir },
+        { db, keyring: new ProviderKeyring(), chat: chatA, dataDir: dataDirA },
         { ...baseWriterParams(sessionId) },
       );
       const { chat: chatB, inputs: inputsB } = fakeChat("### What I was trying to do\nx");
       await runFeedbackWriter(
-        { db, keyring: new ProviderKeyring(), chat: chatB, dataDir },
+        { db, keyring: new ProviderKeyring(), chat: chatB, dataDir: dataDirB },
         { ...baseWriterParams(sessionId), phase: "turn-end" },
       );
       const transcriptA = (inputsA[0] as { messages?: Array<{ content: string }> }).messages?.[0].content ?? "";
       const transcriptB = (inputsB[0] as { messages?: Array<{ content: string }> }).messages?.[0].content ?? "";
       expect(transcriptA.startsWith("NOTE: this is a PARTIAL turn")).toBe(false);
       expect(transcriptA).toBe(transcriptB);
-      // And the ledger's two entries carry NO Phase line at all.
-      expect(readFeedbackLedger(dataDir).content).not.toContain("- **Phase**");
+      // And the ledgers' entries carry NO Phase line at all.
+      expect(readFeedbackLedger(dataDirA).content).not.toContain("- **Phase**");
+      expect(readFeedbackLedger(dataDirB).content).not.toContain("- **Phase**");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("R129-SF: the previously-reported preamble is STATEFUL by design — the second entry's transcript carries the first entry's issue headlines", async () => {
+    // The dedup feature's own contract: a fresh ledger renders "(this is
+    // the first entry)"; after an entry WITH an issue lands, the next
+    // write's transcript carries that issue's headline — the machine-
+    // extracted window the prompt's DEDUP LAW teaches the model to use.
+    const db = openDatabase(join(tempDir, `${randomUUID()}.db`));
+    try {
+      const sessionId = sessionWithTranscript(db, false);
+      const dataDir = mkdtempSync(join(tempDir, "data-dedup-"));
+      const first = fakeChat(
+        "### What I was trying to do\nx\n\n### What actually happened\ny\n\n### Issues & problems encountered\nterminal failed 3 times.\n\n### Glitches & anomalies noticed\nNothing to report.\n\n### Expectations vs reality\nMet expectations.\n\n### Suggested improvements\nNone this turn.",
+      );
+      await runFeedbackWriter(
+        { db, keyring: new ProviderKeyring(), chat: first.chat, dataDir },
+        { ...baseWriterParams(sessionId) },
+      );
+      const second = fakeChat("### What I was trying to do\nx");
+      await runFeedbackWriter(
+        { db, keyring: new ProviderKeyring(), chat: second.chat, dataDir },
+        { ...baseWriterParams(sessionId) },
+      );
+      const transcript = (second.inputs[0] as { messages?: Array<{ content: string }> }).messages?.[0].content ?? "";
+      expect(transcript).toContain("PREVIOUSLY REPORTED IN THIS LEDGER");
+      expect(transcript).toContain("terminal failed 3 times.");
     } finally {
       db.close();
     }

@@ -135,6 +135,18 @@ const FEEDBACK_REPORTER_SYSTEM_PROMPT = [
   // stays byte-exact).
   "CONTEXT TELEMETRY (ROUND-127): the transcript you receive carries a machine-written CONTEXT TELEMETRY block (immediately after the PARTIAL-turn banner on a mid-turn checkpoint). Those numbers are measured, not estimated by you — the context window and its provenance, the output reserve, the available budget, the provider-anchored context usage at the last provider call, and the session's lifetime token totals. Weave them into your report where they explain the outcome (a turn that hit the context ceiling, a compaction that fired mid-turn, a usage anomaly, a cache that never hit); cite them plainly (e.g. 'context was at 61% of the 200k window'). Never restate the whole block — use the numbers that matter to the story, and never invent a number the block does not carry.",
   "",
+  // R129-SF (the accuracy set): the three preamble laws + the evidence
+  // laws — the owner's "sometimes wrongly addresses the things" answered
+  // at the prompt level (the machine-written halves landed in the
+  // transcript assembly below).
+  "TOOL OUTCOMES (ROUND-129): the transcript also carries a machine-written TOOL OUTCOMES block — the per-tool ok/failed tally over the whole session, with each failing tool's first failure one-liner. It is counted, not judged: your \"Issues & problems encountered\" list may not CONTRADICT it (a tool the block counts as ok-only never appears as a failure; a FAILED count is never dropped), and it is your fastest anchor for which tools actually misbehaved.",
+  "",
+  "EVIDENCE LAW (ROUND-129): every issue you report must carry its label — CONFIRMED (the failure/misbehavior is directly visible in the transcript: name the tool and quote the essential error text) or SUSPECTED (an inference from what you observed: say what you saw AND what you infer, separately). Never present a SUSPECTED issue as CONFIRMED, and never file an issue with no visible trace at all.",
+  "",
+  "ATTRIBUTION LAW (ROUND-129): separate the APPLICATION's defects from the MODEL's own mistakes. When the root cause is the model's own reasoning — a wrong path it chose, an output it misread, a step it skipped — attribute it to the model plainly; do not file it as an application issue. \"Suggested improvements\" address the application (its tools, UI, defaults) only.",
+  "",
+  "DEDUP LAW (ROUND-129): the PREVIOUSLY REPORTED block lists issue headlines from this ledger's most recent entries. Do not re-narrate a listed issue at length — if it recurred, note it as recurring in one line and spend your words on what is NEW or DIFFERENT this time.",
+  "",
   "RULES:",
   "- Raw facts from the transcript ONLY. Never invent events and never speculate beyond what is written; when unsure, say so plainly.",
   "- No politeness, no flattery, no self-congratulation — this ledger is a diagnostic instrument.",
@@ -257,6 +269,101 @@ function buildContextTelemetryBlock(
 const FEEDBACK_REPORTER_TEMPERATURE = 0.2;
 /** A single completion — the reporter has NO tools, so there is nothing to loop. */
 const FEEDBACK_REPORTER_MAX_TURNS = 1;
+
+/* ── ROUND-129 (R129-SF — the ACCURACY SET; the owner's verdict: "the self
+ * feedback is not proper… sometimes wrongly addresses the things"): three
+ * machine-written preambles + the prompt's evidence laws. The design law
+ * (the R127-W7 telemetry's own): every number or list the reporter could
+ * misread is WRITTEN BY THE MACHINE — the model's job is diagnosis, never
+ * counting. ───────────────────────────────────────────────────────────── */
+
+/** R129-SF: the fixed opening of the tool-outcomes preamble. */
+const TOOL_OUTCOMES_HEADER = "TOOL OUTCOMES (machine-counted over the whole session — your issue list may not contradict it):";
+
+/** R129-SF: the machine-counted tool tally — the reporter reads which
+ * tools ACTUALLY failed (and each failure's first one-liner) before it
+ * reads the transcript, so a misread tool result can never become a
+ * misattributed issue (the exact "wrongly addresses" failure the owner
+ * named: entries that blamed tools which never failed, or dropped the
+ * ones that did). Pure over the session's events; empty when the session
+ * made no tool calls (the honest "no tool calls" line). */
+function buildToolOutcomesBlock(db: SqliteDatabase, sessionId: string): string {
+  const events = listSessionEvents(db, sessionId);
+  const byTool = new Map<string, { ok: number; failed: number; firstFailure: string | null }>();
+  for (const ev of events) {
+    if (ev.type !== "tool.use") continue;
+    const payload =
+      ev.payload && typeof ev.payload === "object" ? (ev.payload as Record<string, unknown>) : {};
+    const toolName = typeof payload.toolName === "string" ? payload.toolName : "tool";
+    const ok = payload.ok !== false;
+    const outputSummary = typeof payload.outputSummary === "string" ? payload.outputSummary : "";
+    const entry = byTool.get(toolName) ?? { ok: 0, failed: 0, firstFailure: null };
+    if (ok) {
+      entry.ok += 1;
+    } else {
+      entry.failed += 1;
+      if (entry.firstFailure === null && outputSummary !== "") {
+        // The first failure's one-liner, capped — a lead, not the story.
+        entry.firstFailure = outputSummary.split("\n")[0].slice(0, 140);
+      }
+    }
+    byTool.set(toolName, entry);
+  }
+  if (byTool.size === 0) {
+    return [TOOL_OUTCOMES_HEADER, "· no tool calls in this session"].join("\n");
+  }
+  const lines = [TOOL_OUTCOMES_HEADER];
+  for (const [toolName, entry] of [...byTool.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    lines.push(
+      `· ${toolName}: ${entry.ok} ok${entry.failed > 0 ? ` / ${entry.failed} FAILED` : ""}` +
+        (entry.firstFailure !== null ? ` — first failure: "${entry.firstFailure}"` : ""),
+    );
+  }
+  return lines.join("\n");
+}
+
+/** R129-SF: the fixed opening of the previously-reported preamble. */
+const PREVIOUSLY_REPORTED_HEADER =
+  "PREVIOUSLY REPORTED IN THIS LEDGER (machine-extracted headlines from the most recent entries — do not re-report these at length; note a recurrence in one line and spend your words on what is NEW or DIFFERENT):";
+
+/** R129-SF: the dedup preamble — the issue/glitch headlines of the ledger's
+ * last entries, machine-extracted (pure string ops on the ledger content —
+ * the first line of each non-"Nothing to report" Issues/Glitches section,
+ * capped). The reporter stays CONTEXT-FREE in the R122 sense (it never sees
+ * another entry's full text — just these headlines); the owner's repeated
+ * complaint about the ledger was the same issues re-narrated every entry.
+ * Degrades to the honest "(this is the first entry)" line on an empty or
+ * unreadable ledger — never blocks the entry. */
+function buildPreviouslyReportedBlock(dataDir: string): string {
+  try {
+    const ledger = readFeedbackLedger(dataDir);
+    if (!ledger.exists || ledger.entries === 0) {
+      return [PREVIOUSLY_REPORTED_HEADER, "· (this is the first entry)"].join("\n");
+    }
+    // The last TWO entries (the recency window): split on the entry
+    // separator, take the tail, extract the headlines.
+    const chunks = ledger.content.split(/^## Entry /m).filter((c) => c.trim() !== "");
+    const recent = chunks.slice(-2);
+    const headlines: string[] = [];
+    for (const chunk of recent) {
+      for (const section of ["### Issues & problems encountered", "### Glitches & anomalies noticed"]) {
+        const at = chunk.indexOf(section);
+        if (at < 0) continue;
+        const after = chunk.slice(at + section.length).trim();
+        const firstLine = after.split("\n")[0].trim();
+        if (firstLine !== "" && !/^Nothing to report\.?$/.test(firstLine)) {
+          headlines.push(firstLine.slice(0, 140));
+        }
+      }
+    }
+    if (headlines.length === 0) {
+      return [PREVIOUSLY_REPORTED_HEADER, "· (the recent entries reported no issues)"].join("\n");
+    }
+    return [PREVIOUSLY_REPORTED_HEADER, ...headlines.slice(0, 8).map((h) => `· ${h}`)].join("\n");
+  } catch {
+    return [PREVIOUSLY_REPORTED_HEADER, "· (the ledger could not be read — proceed without it)"].join("\n");
+  }
+}
 
 /** Scrub keyring-held secrets from the transcript before it leaves the
  * process boundary (the ROUND-34 pattern, same as the debug analyst). */
@@ -418,9 +525,24 @@ async function writeFeedbackEntry(
   // the telemetry block follows as the machine-written preamble the
   // prompt's CONTEXT TELEMETRY paragraph teaches the model to use. The
   // turn-end transcript opens directly with the telemetry block.
+  // R129-SF (the accuracy set — the order law EXTENDED): tool outcomes
+  // THIRD (the machine-counted tally anchors the issue list before the
+  // transcript can be misread) and the previously-reported headlines
+  // FOURTH (the dedup window) — both machine-written, both degrading to
+  // their honest unavailable lines, never blocking the entry.
+  let toolOutcomesBlock: string;
+  try {
+    toolOutcomesBlock = buildToolOutcomesBlock(deps.db, params.sessionId);
+  } catch {
+    toolOutcomesBlock = [
+      TOOL_OUTCOMES_HEADER,
+      "· tool outcomes unavailable — the tally was not counted; do not guess it. The transcript below is unaffected.",
+    ].join("\n");
+  }
+  const previouslyReportedBlock = buildPreviouslyReportedBlock(deps.dataDir);
   const transcriptForModel =
     (phase === "mid-turn" ? `${MID_TURN_TRANSCRIPT_NOTE}\n\n` : "") +
-    `${telemetryBlock}\n\n${transcript}`;
+    `${telemetryBlock}\n\n${toolOutcomesBlock}\n\n${previouslyReportedBlock}\n\n${transcript}`;
 
   const input = {
     provider: params.provider,
