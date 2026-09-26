@@ -1107,9 +1107,6 @@ export function ContextDonut({
       void report.refetch();
     }, CONTEXT_ERROR_HEAL_MS);
     return () => window.clearTimeout(healTimer);
-    // report.isError/isFetching/refetch are stable-enough members; the
-    // effect's own refs make the loop safe.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report.isError, report.isFetching, streaming]);
 
   const data = report.data ?? null;
