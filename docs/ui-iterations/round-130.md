@@ -359,3 +359,15 @@ THE EVIDENCE (shots/r130/):
 - The PC meter's mid-iteration number steps per COMPLETED provider
   request (the anchor's honest granularity — a finer live estimate rides
   the standing queue in round.next).
+
+## §7 The release end-state
+
+v0.123.0 tagged at `682b4b7` → **all five workflows SUCCESS** (CI + Mobile
+CI + Rust Checks on the push; Release + Mobile APK on the tag). The
+release **published** in one PATCH (draft:false, make_latest:true, body =
+the [0.123.0] CHANGELOG section, the house-style name) carrying EXACTLY 3
+assets — the arm64 APK + the Windows setup + the launcher kit (Linux
+trimmed per the committed targets.json, no Rust changes this round).
+`/releases/latest` answers v0.123.0; the APK's ranged read answers the PK
+magic. Zero drafts remaining. The rollback door:
+`backup/pre-r130-improvements`.
