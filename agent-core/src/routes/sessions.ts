@@ -109,6 +109,18 @@ import {
   unregisterTurn,
 } from "../lib/turn-registry.js";
 import { errorBody } from "./helpers.js";
+// R129-S (SCREENS.md §2 laws #8 + #9 — the Scratchpad): the per-session
+// workspace create/remove helpers (storage/general-project.ts — the
+// Scratchpad module). POST /sessions creates a Scratchpad session's OWN
+// folder; DELETE /sessions/:id removes it with the row (containment-
+// guarded; every normal session/project delete touches files NEVER).
+import {
+  ensureScratchpadSessionWorkspace,
+  GENERAL_PROJECT_ID,
+  removeScratchpadSessionWorkspace,
+} from "../storage/general-project.js";
+// The route layer's logging idiom (lib/log.ts — never a bare console call).
+import { log } from "../lib/log.js";
 
 /** Max attachments per send (mirrors /attachments/read's path cap). */
 const MAX_ATTACHMENTS_PER_SEND = 20;
@@ -415,7 +427,22 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
       // identical no matter who created it.
       ...(deviceAuthOf(request) !== null ? { source: "device" as const } : {}),
     });
-    return reply.code(202).send(session);
+    // R129-S (SCREENS.md §2 law #9): a Scratchpad session gets its OWN
+    // workspace folder — <dataDir>/scratchpad/<sessionId>/ — created and
+    // written to the row (migration 0043's root_path) right here at
+    // creation, so the conversation's files never share another
+    // Scratchpad session's folder. No dataDir (hermetic tests build the
+    // server without one) → no folder: the session falls back to the
+    // project root, and the one warning says so — never a create failure.
+    if (ctx.dataDir !== undefined) {
+      ensureScratchpadSessionWorkspace(db, ctx.dataDir, session.id, projectId);
+    } else if (projectId === GENERAL_PROJECT_ID) {
+      log("warn", "scratchpad.session_workspace_no_datadir", { sessionId: session.id });
+    }
+    // R129-S: the 202 body re-reads the row so rootPath — the workspace the
+    // turn will actually run in — is truthful in the response (the helper's
+    // UPDATE lands after the INSERT above).
+    return reply.code(202).send(getSession(db, session.id) ?? session);
   });
 
   scope.get("/sessions", async (request) => {
@@ -701,6 +728,16 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
     }
     const project =
       session.projectId !== null ? getProject(db, session.projectId) : undefined;
+    // R129-S (SCREENS.md §2 law #9 — the one-truth law, R83's): the meter
+    // mirrors prepareTurn's EFFECTIVE ROOT — session.rootPath (the
+    // Scratchpad per-session workspace override) ?? the project's root —
+    // for the environment, modes, skills, custom rules, the schema
+    // measurement, and the prompt's "PROJECT: … at <root>" line, so the
+    // meter can never disagree with the turn a send would actually run.
+    // projectScope stays project.id (the Scratchpad's project memory is
+    // app-level; the FILE workspace is per-session).
+    const sessionRoot = session.rootPath ?? null;
+    const effectiveRoot = sessionRoot ?? project?.rootPath ?? undefined;
 
     // Tool names: the post-mode, post-allowlist set a REAL turn would
     // receive (runtime.ts effectiveToolNames — shared with prepareTurn's
@@ -718,10 +755,12 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
     // ephemeral (they depend on the NEXT user message, unknowable here)
     // and stay out — the estimate errs small, labeled as estimated.
     const environment =
-      project !== undefined ? await buildPromptEnvironment(project.rootPath) : undefined;
+      project !== undefined && effectiveRoot !== undefined
+        ? await buildPromptEnvironment(effectiveRoot)
+        : undefined;
     const modeResolution =
-      project !== undefined
-        ? resolveEffectiveModes(project.rootPath)
+      project !== undefined && effectiveRoot !== undefined
+        ? resolveEffectiveModes(effectiveRoot)
         : { modes: [] as ReturnType<typeof resolveEffectiveModes>["modes"] };
     // Read-only mirror of prepareTurn's active-mode resolution (a STALE
     // mode id resolves to nothing here — the meter never WRITES; the
@@ -733,7 +772,7 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
     const meterSkills =
       project !== undefined
         ? resolveEffectiveSkills(db, {
-            ...(project !== undefined ? { projectRoot: project.rootPath, projectScope: project.id } : {}),
+            ...(effectiveRoot !== undefined ? { projectRoot: effectiveRoot, projectScope: project.id } : {}),
             ...(agent.skills.length > 0 ? { agentSkills: agent.skills } : {}),
           }).map((skill) => ({ name: skill.name, description: skill.description }))
         : [];
@@ -744,15 +783,18 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
       project !== undefined
         ? buildSystemPromptSections({
             projectName: project.name,
-            rootPath: project.rootPath,
+            rootPath: effectiveRoot ?? project.rootPath,
             toolNames,
-            customRules: readCustomRules(project.rootPath),
+            customRules: readCustomRules(effectiveRoot ?? project.rootPath),
             maxTurns: agent.maxTurns,
             // ROUND-83: the merged AGENTIC LOOP section's outer cap —
             // the same line prepareTurn passes.
             maxOuterLoops: agent.maxOuterLoops ?? 5,
             indexSummary:
-              session.projectId !== null
+              // R129-S: mirror the turn's skip — a Scratchpad session's
+              // files are NOT the project root's files; the project index
+              // would lie about the workspace the model actually sees.
+              sessionRoot === null && session.projectId !== null
                 ? getIndexSummary(db, session.projectId) ?? undefined
                 : undefined,
             memoryDigest:
@@ -804,7 +846,9 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
     // mcpTools: honest 0 (no MCP system yet — the UI shows "none").
     const systemPrompt = sections !== null ? estimateTokens(sections.identity) : estimateTokens(agent.systemPrompt);
     const schemaTokens =
-      project !== undefined ? await measureToolSchemaTokens(project.rootPath, toolNames) : 0;
+      project !== undefined && effectiveRoot !== undefined
+        ? await measureToolSchemaTokens(effectiveRoot, toolNames)
+        : 0;
     const systemTools = sections !== null ? estimateTokens(sections.tools) + schemaTokens : 0;
     const memory = sections !== null ? estimateTokens(sections.memory) : 0;
     const meta = sections !== null ? estimateTokens(sections.meta) : 0;
@@ -1178,13 +1222,35 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
   // snapshots). The append-only contract (ADR-0010) governs in-flight
   // operation — a wholesale session delete at the owner's request is the
   // documented exception, executed as one transaction.
+  // R129-S (SCREENS.md §2 laws #8 + #9 — the delete-materiality law): a
+  // SCRATCHPAD session's workspace folder is removed WITH its records
+  // (removeScratchpadSessionWorkspace: containment-guarded to a direct
+  // child of <dataDir>/scratchpad); every NORMAL session's files are
+  // NEVER touched. A folder failure must not fail the 204 — the belt
+  // try/catch logs it and the records-only delete stands.
   scope.delete("/sessions/:id", async (request, reply) => {
     const { id } = request.params as Record<string, string>;
     const session = getSession(db, id);
     if (session === undefined) {
       return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
     }
+    // R129-S: grab the workspace root BEFORE the row is gone (the folder
+    // removal keys on it below).
+    const sessionRootPath = session.rootPath ?? null;
     deleteSession(db, id);
+    if (sessionRootPath !== null && ctx.dataDir !== undefined) {
+      try {
+        removeScratchpadSessionWorkspace(db, ctx.dataDir, sessionRootPath);
+      } catch (err) {
+        // The helper never throws by contract; this belt catches the
+        // unexpected (a fs edge) so the 204 stands regardless.
+        log("warn", "scratchpad.session_workspace_delete_failed", {
+          sessionId: id,
+          rootPath: sessionRootPath,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     return reply.code(204).send();
   });
   // ── ROUND-44 (R44-c, owner directive: "complete the whole agentic coding
@@ -1203,7 +1269,17 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
     if (fork === undefined) {
       return reply.code(404).send(errorBody("NOT_FOUND", `no session with id ${id}`));
     }
-    return reply.code(201).send({ session: fork });
+    // R129-S (SCREENS §2 law #9): a fork of a SCRATCHPAD session gets its
+    // OWN workspace folder — never the source's (forkSession deliberately
+    // starts the copy rootless; see its comment). The same create-path
+    // helper + the same no-dataDir fallback as POST /sessions.
+    if (ctx.dataDir !== undefined) {
+      ensureScratchpadSessionWorkspace(db, ctx.dataDir, fork.id, fork.projectId);
+    } else if (fork.projectId === GENERAL_PROJECT_ID) {
+      log("warn", "scratchpad.session_workspace_no_datadir", { sessionId: fork.id });
+    }
+    // Truthful body: rootPath reflects the folder the fork's turns will use.
+    return reply.code(201).send({ session: getSession(db, fork.id) ?? fork });
   });
   // POST /sessions/:id/revert — rewind the event log to an earlier message.
   // Body: { keepThroughSeq: integer >= 0 } — ROUND-77 (R77) semantics: the

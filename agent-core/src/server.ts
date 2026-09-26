@@ -2329,9 +2329,10 @@ function isNonLoopbackAcuteHost(raw: string | undefined): boolean {
 /** Opens the database, binds 127.0.0.1 (loopback only), prints the ready line. */
 export async function startServer(options: StartServerOptions): Promise<RunningSidecar> {
   const db = openDatabase(options.dbPath);
-  // R128-W3 (SCREENS §2 law #9 — the General conversation): seed the app's
-  // internal workspace project (id "general", root <dataDir>/general)
-  // idempotently at boot. Best-effort by design — a seeding failure is
+  // R128-W3 → R129-S (SCREENS §2 law #9 — the Scratchpad): seed the app's
+  // internal workspace project (stable id "general", NAME "Scratchpad",
+  // root <dataDir>/scratchpad — renamed + re-rooted this round) idempotently
+  // at boot. Best-effort by design — a seeding failure is
   // logged and NEVER kills boot (the app still serves everything else; the
   // seed retries on the next restart).
   try {

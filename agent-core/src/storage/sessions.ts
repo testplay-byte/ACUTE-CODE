@@ -86,6 +86,17 @@ export interface Session {
    * session.selectedModel → agent row. The desktop's localStorage pick and
    * the phone's "Auto" both converge on THIS row — the cross-device truth. */
   selectedModel: SessionSelectedModel | null;
+  /** ROUND-129 (R129-S, SCREENS §2 law #9 — the Scratchpad): the session's
+   * OWN workspace root (migration 0043). NULL for every normal session —
+   * the project's root_path IS the workspace (the pre-R129 behavior,
+   * byte-identical composition for every existing row); set ONLY for
+   * Scratchpad sessions, to <dataDir>/scratchpad/<sessionId>/ (written by
+   * ensureScratchpadSessionWorkspace at creation). prepareTurn threads it
+   * as the EFFECTIVE ROOT override (tools, environment, modes, skills,
+   * custom rules, the prompt's "PROJECT: … at <root>" line) while the
+   * memory/index scope stays project-scoped; deleting the session removes
+   * the folder with the row (containment-guarded — see general-project.ts). */
+  rootPath: string | null;
 }
 
 export interface SessionInput {
@@ -120,6 +131,13 @@ export interface SessionInput {
    * auto-navigate to the phone's new chat. Absent = the pre-R115 frame
    * shape (shell, CLI, delegation children, forks — every other creator). */
   source?: "device";
+  /** ROUND-129 (R129-S): the session's OWN workspace root (migration
+   * 0043's sessions.root_path). Persisted ONLY when the caller sets it —
+   * the Scratchpad create path writes it through
+   * ensureScratchpadSessionWorkspace's UPDATE (the route) or here directly
+   * (a caller that already knows the path); absent/null = the project's
+   * root is the workspace (every normal session, the pre-R129 behavior). */
+  rootPath?: string | null;
 }
 
 /** Event JSON as served by the API (API.md §5.6). `agentId` comes from the payload. */
@@ -163,6 +181,10 @@ interface SessionRow {
    * default). */
   model_provider?: string | null;
   model_id?: string | null;
+  /** ROUND-129 (R129-S): nullable since migration 0043; the fallback keeps
+   * hand-opened pre-0043 databases readable (null = the project root is
+   * the workspace). */
+  root_path?: string | null;
 }
 
 interface EventRow {
@@ -224,6 +246,11 @@ function toSession(row: SessionRow): Session {
       typeof row.model_id === "string" && row.model_id !== ""
         ? { providerId: row.model_provider, model: row.model_id }
         : null,
+    // ROUND-129 (R129-S): same fail-open read for the per-session workspace
+    // root — a garbage/empty root_path reads as null (the project root is
+    // the workspace, the pre-R129 behavior; a corrupted row must never
+    // break a turn or point tools at a bogus folder).
+    rootPath: typeof row.root_path === "string" && row.root_path !== "" ? row.root_path : null,
   };
 }
 
@@ -268,6 +295,12 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
     // follow the agent default — the pre-R114 behavior); selection happens
     // through PATCH /sessions/:id { model }.
     selectedModel: null,
+    // ROUND-129 (R129-S): sessions START rootless (NULL = the project root
+    // is the workspace — the pre-R129 behavior); the Scratchpad create
+    // path writes the per-session folder afterwards (the route's
+    // ensureScratchpadSessionWorkspace UPDATE, or this input directly when
+    // the caller already knows the path).
+    rootPath: input.rootPath ?? null,
   };
   // ROUND-75 (R75) + ROUND-79 (R79-a): active_mode and delegate_task_id join
   // the INSERT ONLY when the caller set them (delegation children copying
@@ -280,6 +313,10 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
   // combination binds exactly the columns + values its pre-R79 branch did.
   const hasActiveMode = typeof input.activeMode === "string" && input.activeMode !== "";
   const hasTaskId = typeof input.taskId === "string" && input.taskId !== "";
+  // R129-S: same conditional-column law for the per-session workspace root
+  // — a pre-0043 database (migration-test schemas recreate old layouts
+  // verbatim) never sees the unknown column.
+  const hasRootPath = typeof input.rootPath === "string" && input.rootPath !== "";
   // column → named-binding key (the bound object's keys are camelCase —
   // the exact pairs the pre-R79 statements spelled out inline).
   const pairs: Array<[column: string, param: string]> = [
@@ -297,6 +334,7 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
   ];
   if (hasActiveMode) pairs.push(["active_mode", "activeMode"]);
   if (hasTaskId) pairs.push(["delegate_task_id", "taskId"]);
+  if (hasRootPath) pairs.push(["root_path", "rootPath"]);
   db.prepare(
     `INSERT INTO sessions (${pairs.map(([c]) => c).join(", ")})
      VALUES (${pairs.map(([, p]) => `@${p}`).join(", ")})`,
@@ -310,6 +348,7 @@ export function createSession(db: SqliteDatabase, input: SessionInput): Session 
     // (the documented pre-0027 pattern; the NULL default applies).
     ...(hasActiveMode ? { activeMode: input.activeMode } : {}),
     ...(hasTaskId ? { taskId: input.taskId } : {}),
+    ...(hasRootPath ? { rootPath: input.rootPath } : {}),
   });
   // R113-a: announce the new session on the events bus — watchers
   // (desktop sidebar / phone session list) refresh. Covers POST /sessions,
@@ -1324,6 +1363,14 @@ export function forkSession(db: SqliteDatabase, sessionId: string): Session | un
     // rule): the copy's first turn follows the AGENT default until the
     // owner picks on the fork itself. Both columns stay NULL.
     selectedModel: null,
+    // ROUND-129 (R129-S): the workspace root is likewise NOT carried over —
+    // a fork sharing the source's folder would violate the Scratchpad's
+    // every-session-independent law (the fork would write into the
+    // ORIGINAL's workspace). The fork starts rootless (the project root);
+    // the fork ROUTE then hands it its OWN folder via
+    // ensureScratchpadSessionWorkspace when the source is a Scratchpad
+    // session — the same create-path law, one entry point later.
+    rootPath: null,
   };
   const copy = db.transaction((srcId: string) => {
     db.prepare(

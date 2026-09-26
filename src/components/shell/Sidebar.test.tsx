@@ -91,8 +91,8 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
         </Routes>
       </>,
     );
-    // Fixture seeds include marketing-site (plus the General entry — which
-    // never gets a delete affordance); deleting it now ASKS first.
+    // Fixture seeds include marketing-site (plus the Scratchpad entry —
+    // which never gets a delete affordance); deleting it now ASKS first.
     expect(await screen.findByText("marketing-site")).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", { name: "Delete marketing-site", hidden: true }),
@@ -102,6 +102,13 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     // contract); CANCEL keeps the project exactly where it was.
     expect(await screen.findByTestId("confirm-dialog")).toBeTruthy();
     expect(screen.getByText("Delete project?")).toBeTruthy();
+    // R129-S (law #8's copy — the delete-materiality law): the dialog SAYS
+    // the project's folder and files on disk are NOT touched.
+    expect(
+      screen.getByText(
+        /Delete "marketing-site" and its 0 sessions\? This removes them from ACUTE — the project's folder and files on disk are NOT touched\./,
+      ),
+    ).toBeTruthy();
     fireEvent.click(screen.getByTestId("confirm-dialog-cancel"));
     await waitFor(() => expect(screen.queryByTestId("confirm-dialog")).toBeNull());
     expect(screen.getByText("marketing-site")).toBeTruthy();
@@ -137,9 +144,11 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     );
     // The blast radius is enumerated: the project's name + its session
     // count (from the sessions query data) + what dies with them.
+    // R129-S (law #8's copy — the delete-materiality law): the project's
+    // folder and files on disk are NOT touched, and the dialog SAYS so.
     expect(await screen.findByTestId("confirm-dialog")).toBeTruthy();
     expect(
-      screen.getByText(/Delete "marketing-site" and its 2 sessions\? Their messages and tool history will be permanently removed\./),
+      screen.getByText(/Delete "marketing-site" and its 2 sessions\? This removes them from ACUTE — the project's folder and files on disk are NOT touched\./),
     ).toBeTruthy();
     // Cancel — the enumeration is an ask, never a side effect.
     fireEvent.click(screen.getByTestId("confirm-dialog-cancel"));
@@ -286,8 +295,9 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     );
     const rail = await screen.findByTestId("sidebar-rail");
     expect(rail).toBeTruthy();
-    // Fixture projects render as tiles (General pinned first, then the
-    // seeds); the tile's click now EXPANDS + TOGGLES instead of navigating.
+    // Fixture projects render as tiles (the two normal seeds, then the
+    // Scratchpad entry last — the R129-S section split does not reach the
+    // rail); the tile's click now EXPANDS + TOGGLES instead of navigating.
     const tile = await screen.findByRole("button", { name: /^show marketing-site sessions$/i, hidden: true });
     fireEvent.click(tile);
     // The sidebar expanded (the rail is gone, the full panel is back)...
@@ -610,7 +620,7 @@ describe("Sidebar minimized rail polish (R101-C)", () => {
   });
 
   it("R101-C: >10 projects renders the +N overflow tile; clicking it EXPANDS the sidebar without navigating", async () => {
-    // 3 seeds (incl. the R128-W3 General entry) + 10 created = 13 projects
+    // 3 seeds (incl. the R129-S Scratchpad entry) + 10 created = 13 projects
     // → 10 rail tiles + a "+3" tile.
     const backend = getFixtureProjects();
     for (let i = 0; i < 10; i += 1) {
@@ -643,7 +653,7 @@ describe("Sidebar minimized rail polish (R101-C)", () => {
   it("R101-C: ≤10 projects renders NO overflow tile (the affordance appears only when the cap bites)", async () => {
     renderMinimizedRail();
     await screen.findByTestId("sidebar-rail");
-    // 3 fixture projects (the two seeds + the General entry) → 3 tiles, no
+    // 3 fixture projects (the two seeds + the Scratchpad entry) → 3 tiles, no
     // overflow tile.
     await waitFor(() => {
       expect(screen.getAllByRole("button", { name: /^show /i, hidden: true })).toHaveLength(3);
@@ -1361,14 +1371,17 @@ describe("R126: ProjectView clay landing (the well grammar)", () => {
   });
 });
 
-/* ── ROUND-128 (R128-W3, SCREENS.md §2 law #9): THE GENERAL CONVERSATION ──────
- * The projects section carries a persistent General entry — conversations
- * that need no folder, living in the app's internal workspace (backend-boot
- * seeded, delete-protected). The sidebar pins it FIRST, hides its delete
- * affordance, and the section header offers the start-a-general-conversation
- * button (the wave's ONE navigation trigger). */
-describe("R128-W3: the General conversation (SCREENS §2 law #9)", () => {
-  it("General is pinned FIRST in the projects list and carries NO delete affordance", async () => {
+/* ── ROUND-129 (R129-S, SCREENS.md §2 law #9 — REWRITTEN from R128's
+ * General conversation): THE SCRATCHPAD — the no-folder conversation
+ * section, pinned LAST in its OWN separated section (spacer + hairline +
+ * its own SCRATCHPAD kicker row carrying its own "New chat" affordance),
+ * named "Scratchpad" (never "General"), delete-protected as a project, its
+ * row rendered with the SAME ProjectRow/SessionRow grammar as every normal
+ * project. Re-pinned from R128-W3's pinned-FIRST spelling by R129-S-finish
+ * (the interrupted prior run converted the component but never re-pinned
+ * this suite). */
+describe("R129-S: the Scratchpad section (SCREENS §2 law #9, REWRITTEN)", () => {
+  it("renders LAST in its OWN separated section — spacer + hairline + SCRATCHPAD kicker — and carries NO delete affordance", async () => {
     const { container } = renderWithProviders(
       <>
         <Sidebar />
@@ -1377,24 +1390,74 @@ describe("R128-W3: the General conversation (SCREENS §2 law #9)", () => {
         </Routes>
       </>,
     );
-    // The fixture seeds General (id "general") LAST; the SIDEBAR pins it
-    // first — the row order is [General, ACUTE-CODE, marketing-site].
+    // The fixture seeds ACUTE-CODE + marketing-site + the Scratchpad row.
+    // The R129-S section SPLIT renders the normal projects first and the
+    // Scratchpad LAST — never mixed in, never pinned first (the R128
+    // pinGeneralFirst spelling is retired).
     const rows = await waitFor(() => {
       const found = container.querySelectorAll<HTMLElement>('[role="button"][aria-expanded]');
       expect(found.length).toBe(3);
       return found;
     });
-    expect(rows[0].getAttribute("aria-label")).toBe("Expand General sessions");
-    expect(rows[1].getAttribute("aria-label")).toBe("Expand ACUTE-CODE sessions");
-    // Every OTHER project row keeps its delete affordance (hover-revealed
-    // in the overlay cluster); General NEVER offers one — the backend
-    // refuses its deletion (409 general_protected) and the UI agrees.
-    expect(screen.queryByRole("button", { name: "Delete General", hidden: true })).toBeNull();
+    expect(rows[0].getAttribute("aria-label")).toBe("Expand ACUTE-CODE sessions");
+    expect(rows[1].getAttribute("aria-label")).toBe("Expand marketing-site sessions");
+    expect(rows[2].getAttribute("aria-label")).toBe("Expand Scratchpad sessions");
+    // The separated section's anatomy: the 20px spacer (pt-5) + the
+    // full-width hairline + the SCRATCHPAD kicker row — and the Scratchpad
+    // row renders INSIDE it (the section is the LAST child of the list).
+    const section = container.querySelector<HTMLElement>("[data-scratchpad-section]");
+    expect(section).toBeTruthy();
+    expect(section?.className).toContain("pt-5");
+    expect(section?.firstElementChild?.className).toContain("border-t");
+    expect(rows[2].closest("[data-scratchpad-section]")).toBe(section);
+    expect(section?.parentElement?.lastElementChild).toBe(section);
+    // The kicker + the row name both spell "Scratchpad" (the owner: it
+    // "will not be called general, but it will be something else so that
+    // it looks proper").
+    expect(screen.getAllByText("Scratchpad")).toHaveLength(2);
+    // The section's OWN "New chat" affordance rides the kicker row
+    // (data-testid continuity with R128 kept).
+    expect(screen.getByTestId("start-general-conversation")).toBeTruthy();
+    // Every OTHER project row keeps its delete affordance; the Scratchpad
+    // NEVER offers one — the backend refuses its deletion (409
+    // general_protected) and the UI agrees.
+    expect(screen.queryByRole("button", { name: "Delete Scratchpad", hidden: true })).toBeNull();
     expect(screen.getByRole("button", { name: "Delete ACUTE-CODE", hidden: true })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Delete marketing-site", hidden: true })).toBeTruthy();
   });
 
-  it("the header's start-general button creates a General session and navigates to its chat", async () => {
+  it("the empty-projects edge: the section STILL renders when there are ZERO normal projects", async () => {
+    // Only the Scratchpad row exists — the normal list is empty (the
+    // "Add your first project" empty state shows) but the Scratchpad
+    // section is structural, not conditional on the projects list.
+    projectsOverride.backend = createFixtureProjects([
+      {
+        id: "general",
+        name: "Scratchpad",
+        rootPath: "/home/dev/.acute/scratchpad",
+        color: "#64748B",
+        createdAt: "2026-08-19T00:00:00Z",
+      },
+    ]);
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+        </Routes>
+      </>,
+    );
+    await waitFor(() => {
+      expect(container.querySelector("[data-scratchpad-section]")).toBeTruthy();
+    });
+    expect(screen.getByText("Add your first project")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Expand Scratchpad sessions", hidden: true }),
+    ).toBeTruthy();
+    expect(screen.getByTestId("start-general-conversation")).toBeTruthy();
+  });
+
+  it("the kicker row's New chat button creates a Scratchpad session and navigates to its chat", async () => {
     const backend = getFixtureSessions();
     const before = (await backend.list()).filter((s) => s.projectId === "general").length;
     renderWithProviders(
@@ -1413,11 +1476,12 @@ describe("R128-W3: the General conversation (SCREENS §2 law #9)", () => {
     });
     fireEvent.click(await screen.findByTestId("start-general-conversation"));
 
-    // The session landed in the backend, bound to the General project, and
-    // the app navigated to its chat — the ONE navigation this wave adds.
+    // The session landed in the backend, bound to the Scratchpad project
+    // (its R129 name rides the auto title), and the app navigated to its
+    // chat — the ONE navigation this section carries.
     expect(await screen.findByText("chat stub")).toBeTruthy();
     const created = (await backend.list()).find(
-      (s) => s.projectId === "general" && s.title === "New chat · General",
+      (s) => s.projectId === "general" && s.title === "New chat · Scratchpad",
     ) as Session | undefined;
     expect(created).toBeTruthy();
     expect((await backend.list()).filter((s) => s.projectId === "general").length).toBe(
@@ -1425,7 +1489,7 @@ describe("R128-W3: the General conversation (SCREENS §2 law #9)", () => {
     );
   });
 
-  it("honest degradation: with no General project and a refusing backend, the button toasts instead of navigating", async () => {
+  it("honest degradation: with no Scratchpad project and a refusing backend, the button toasts instead of navigating", async () => {
     // An OLDER sidecar shape: the projects list has no "general" row, and
     // the sessions backend refuses the create (the live POST /sessions
     // 404s on an unknown projectId — mirrored here).
@@ -1459,10 +1523,11 @@ describe("R128-W3: the General conversation (SCREENS §2 law #9)", () => {
     fireEvent.click(await screen.findByTestId("start-general-conversation"));
 
     // The quiet toast (the app's local-toast channel) — never a dead silent
-    // button, never an auto-create from the frontend.
+    // button, never an auto-create from the frontend. R129-S: the copy
+    // names the section by its new name.
     await waitFor(() => {
       expect(useNotificationStreamStore.getState().lastNotification?.title).toBe(
-        "General workspace unavailable",
+        "Scratchpad unavailable",
       );
     });
     expect(screen.getByText("dashboard stub")).toBeTruthy();
@@ -1473,8 +1538,12 @@ describe("R128-W3: the General conversation (SCREENS §2 law #9)", () => {
 /* ── ROUND-128 (R128-W3, SCREENS.md §2 law #8): the SESSION delete confirm ────
  * Deleting a session ALWAYS asks first (the shared danger ConfirmDialog);
  * only the confirm reaches deleteSession.mutate; deleting the ACTIVE
- * session navigates the chat pane away from the dead conversation. */
-describe("R128-W3: the session delete confirm (SCREENS §2 law #8)", () => {
+ * session navigates the chat pane away from the dead conversation.
+ * R129-S (law #8 REWRITTEN — the delete-materiality law): the copy now
+ * enumerates exactly what dies — a NORMAL session's files are NOT touched
+ * (and the dialog SAYS so); a SCRATCHPAD session's workspace folder dies
+ * with the conversation (and the dialog says THAT). */
+describe("R128-W3 + R129-S: the session delete confirm (SCREENS §2 law #8)", () => {
   /** Mirrors the route's URL (pathname + search) into the DOM. */
   function ChatProbe() {
     const { pathname, search } = useLocation();
@@ -1514,8 +1583,10 @@ describe("R128-W3: the session delete confirm (SCREENS §2 law #8)", () => {
     );
     expect(await screen.findByTestId("confirm-dialog")).toBeTruthy();
     expect(screen.getByText("Delete session?")).toBeTruthy();
+    // R129-S (law #8's copy): a NORMAL session's dialog SAYS the project's
+    // files on disk are NOT touched — the delete is records-only.
     expect(
-      screen.getByText(/Delete "Active chat"\? This permanently removes the session's messages, tool history, and usage rows\./),
+      screen.getByText(/Delete "Active chat"\? This removes the conversation's messages and tool history from ACUTE\. The project's files on disk are NOT touched\./),
     ).toBeTruthy();
     fireEvent.click(screen.getByTestId("confirm-dialog-cancel"));
     await waitFor(() => expect(screen.queryByTestId("confirm-dialog")).toBeNull());
@@ -1566,5 +1637,171 @@ describe("R128-W3: the session delete confirm (SCREENS §2 law #8)", () => {
         `/project/${project.id}/chat?session=${idle.id}`,
       );
     });
+  });
+
+  it("R129-S (law #8's copy): a SCRATCHPAD session's dialog says the workspace folder DIES with the conversation", async () => {
+    const backend = getFixtureSessions();
+    await backend.create({
+      mode: "single",
+      agentId: "agt_scribe",
+      projectId: "general",
+      title: "Scratch me",
+    });
+    const target = (await backend.list()).find((s) => s.projectId === "general") as Session;
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
+        </Routes>
+      </>,
+      { route: `/project/general/chat?session=${target.id}` },
+    );
+    await waitFor(() => {
+      expect(container.querySelectorAll("[data-session-row]").length).toBe(1);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete session Scratch me", hidden: true }));
+    expect(await screen.findByTestId("confirm-dialog")).toBeTruthy();
+    // The ONLY file-touching delete in the app — and the dialog SAYS so
+    // (the scratchpad workspace folder is removed with the conversation).
+    expect(
+      screen.getByText(/Delete "Scratch me"\? This permanently removes the conversation AND its scratchpad workspace folder\./),
+    ).toBeTruthy();
+    // The shared danger contract: CANCEL keeps the session.
+    fireEvent.click(screen.getByTestId("confirm-dialog-cancel"));
+    await waitFor(() => expect(screen.queryByTestId("confirm-dialog")).toBeNull());
+    expect((await backend.list()).some((s) => s.id === target.id)).toBe(true);
+  });
+});
+
+/* ── ROUND-129 (R129-S, SCREENS.md §2 law #2 — REWRITTEN): THE ROW GRAMMAR ────
+ * NO chevron glyph on project rows (the owner's second directive: "I was
+ * shown the arrows on the left sides of each one of the projects, which was
+ * not good. I told you to remove the arrows"); hairline separators BETWEEN
+ * project rows ("so that the projects are separate and they look much more
+ * cleaner"); and the hover actions are RESERVED-WIDTH flex buttons that
+ * SHRINK the name instead of overlaying it ("the text should shrink… so
+ * that there is enough space for… the new session button and the delete
+ * button") — ONE quiet ghost grammar for both. Re-pinned by R129-S-finish
+ * (the interrupted prior run converted the component but never re-pinned
+ * this suite). */
+describe("R129-S: the project row's grammar (SCREENS §2 law #2, REWRITTEN)", () => {
+  it("carries NO chevron — the row is tile + name + in-flow actions — and hairline separators sit BETWEEN project rows", async () => {
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+        </Routes>
+      </>,
+    );
+    const row = await waitFor(() => {
+      const el = container.querySelector<HTMLElement>('[aria-label="Expand ACUTE-CODE sessions"]');
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    // The FIRST element child is the color TILE (the R128 chevron glyph sat
+    // before it — retired ENTIRELY: no arrows anywhere on the row).
+    const first = row.firstElementChild as HTMLElement;
+    expect(first.getAttribute("aria-hidden")).toBe("true");
+    expect(first.textContent).toBe("A");
+    // The ONLY icons on the row are the TWO action buttons (+ and delete) —
+    // a third svg would be the retired chevron.
+    expect(row.querySelectorAll("svg")).toHaveLength(2);
+    // Hairline separators BETWEEN consecutive project rows (the first row
+    // carries none): one divider between ACUTE-CODE and marketing-site.
+    // The Scratchpad section's own full-width hairline (no mx-2) is a
+    // DIFFERENT element — the count below sees the project dividers only.
+    expect(container.querySelectorAll(".mx-2.my-1.border-t")).toHaveLength(1);
+    // aria-expanded survives on the row itself (the toggle contract).
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("hover actions are RESERVED-WIDTH (w-0 → w-7), in-flow — never an overlay — and share ONE ghost grammar", async () => {
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+        </Routes>
+      </>,
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[aria-label="Expand ACUTE-CODE sessions"]')).toBeTruthy();
+    });
+    const row = container.querySelector<HTMLElement>('[aria-label="Expand ACUTE-CODE sessions"]');
+    const newSession = screen.getByRole("button", { name: "Start new session in ACUTE-CODE", hidden: true });
+    const del = screen.getByRole("button", { name: "Delete ACUTE-CODE", hidden: true });
+    for (const btn of [newSession, del]) {
+      // REST: zero reserved width, invisible, mouse-dead (keyboard alive).
+      expect(btn.className).toContain("w-0");
+      expect(btn.className).toContain("opacity-0");
+      expect(btn.className).toContain("pointer-events-none");
+      // REVEAL: hover AND focus-within grow the SAME reserved width in.
+      expect(btn.className).toContain("group-hover:w-7");
+      expect(btn.className).toContain("group-hover:opacity-100");
+      expect(btn.className).toContain("group-hover:pointer-events-auto");
+      expect(btn.className).toContain("group-focus-within:w-7");
+      expect(btn.className).toContain("group-focus-within:opacity-100");
+      expect(btn.className).toContain("group-focus-within:pointer-events-auto");
+    }
+    // IN-FLOW: the cluster is a flex child of the row — NO absolute, NO
+    // z-index, NO covering background (the R128 overlay law, reversed).
+    const cluster = newSession.parentElement as HTMLElement;
+    expect(cluster.className).toContain("shrink-0");
+    expect(cluster.className).toContain("flex");
+    expect(cluster.className).not.toContain("absolute");
+    expect(cluster.className).not.toContain("z-20");
+    // The name column keeps its truncating flex-1 — the text SHRINKS to
+    // make room for the revealed buttons; it is never covered. (Counted by
+    // child iteration — :scope support in the DOM shim is unreliable.)
+    const nameCol = Array.from(row?.children ?? []).find(
+      (child) => (child as HTMLElement).className.includes("min-w-0"),
+    );
+    expect(nameCol).toBeTruthy();
+    expect((nameCol as HTMLElement).className).toContain("flex-1");
+    // ONE ghost grammar: the new-session button is a tertiary ghost like
+    // delete (same size, same hover, same corner) — the R128 accent-tint
+    // square is RETIRED.
+    expect(newSession.className).not.toContain("bg-accent-tint");
+    expect(newSession.className).toContain("hover:bg-hover");
+    expect(del.className).toContain("hover:bg-hover");
+  });
+
+  it("the SESSION row's rename/delete cluster uses the SAME reserved-width grammar (w-0 → w-6, no overlay)", async () => {
+    const [project] = await getFixtureProjects().list();
+    const backend = getFixtureSessions();
+    await backend.create({ mode: "single", agentId: "agt_scribe", projectId: project.id, title: "Hover grammar" });
+    const target = (await backend.list()).find((s) => s.projectId === project.id) as Session;
+    const { container } = renderWithProviders(
+      <>
+        <Sidebar />
+        <Routes>
+          <Route path="/" element={<div>dashboard stub</div>} />
+          <Route path="/project/:id/chat" element={<div>chat stub</div>} />
+        </Routes>
+      </>,
+      { route: `/project/${project.id}/chat?session=${target.id}` },
+    );
+    await waitFor(() => {
+      expect(container.querySelectorAll("[data-session-row]")).toHaveLength(1);
+    });
+    const rename = screen.getByRole("button", { name: "Rename session Hover grammar", hidden: true });
+    const del = screen.getByRole("button", { name: "Delete session Hover grammar", hidden: true });
+    for (const btn of [rename, del]) {
+      // The same reserved-width conversion, one size down (w-6).
+      expect(btn.className).toContain("w-0");
+      expect(btn.className).toContain("opacity-0");
+      expect(btn.className).toContain("pointer-events-none");
+      expect(btn.className).toContain("group-hover:w-6");
+      expect(btn.className).toContain("group-focus-within:w-6");
+      expect(btn.className).toContain("group-focus-within:pointer-events-auto");
+    }
+    // The R128 ABSOLUTE overlay is gone here too — the cluster is in-flow.
+    const cluster = rename.parentElement as HTMLElement;
+    expect(cluster.className).toContain("shrink-0");
+    expect(cluster.className).not.toContain("absolute");
+    expect(cluster.className).not.toContain("z-10");
   });
 });

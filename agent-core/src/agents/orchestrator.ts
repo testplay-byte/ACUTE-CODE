@@ -83,6 +83,12 @@ import {
 } from "../lib/turn-registry.js";
 import { getAgent } from "../storage/agents.js";
 import { getOrchestrationSettings } from "../storage/settings.js";
+// R129-S (SCREENS.md §2 law #9 — the Scratchpad): the child-of-scratchpad
+// workspace helper. The orchestrator is a process-level singleton with no
+// dataDir to thread (see createChildSession's comment); the helper derives
+// the scratchpad root from the project ROW the boot seed keeps in lockstep
+// with the data dir.
+import { ensureScratchpadChildWorkspace } from "../storage/general-project.js";
 import { resolveKeyPool, type ProviderKeyring } from "../providers/registry.js";
 import { runSingleAgentTurn, runStreamedAgentTurn, type TurnModelOverride } from "./runtime.js";
 import type { TurnDeps } from "./runtime.js";
@@ -1402,7 +1408,7 @@ class Orchestrator {
     role: SubRole,
     taskId?: string,
   ): Session {
-    return createSession(deps.db, {
+    const child = createSession(deps.db, {
       agentId: agent.id,
       mode: "single",
       projectId: parent.projectId,
@@ -1427,6 +1433,20 @@ class Orchestrator {
       // the pre-R79 shape).
       ...(taskId !== undefined ? { taskId } : {}),
     });
+    // R129-S (SCREENS.md §2 law #9): a child of a SCRATCHPAD parent gets
+    // its OWN workspace folder too — every Scratchpad session is
+    // independent ("each session gets a separate folder in of itself"),
+    // children included; a shared folder would re-create the exact
+    // cross-pollution the owner's directive kills, and the child's folder
+    // dies with the child row (the same DELETE /sessions/:id guard). This
+    // process-level singleton has no dataDir to thread through TurnDeps →
+    // ToolDeps → the delegation plugin, so ensureScratchpadChildWorkspace
+    // derives the scratchpad root from the project ROW (the boot seed
+    // keeps it in lockstep with the data dir) instead — no folder (the
+    // child falls back to the project root) when the row is missing or
+    // the mkdir fails; never throws into the delegation.
+    ensureScratchpadChildWorkspace(deps.db, child.id, parent.projectId);
+    return child;
   }
 
   /**
