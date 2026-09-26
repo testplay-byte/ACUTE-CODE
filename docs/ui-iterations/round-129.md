@@ -276,3 +276,21 @@ keys rode a prior session's environment). The context steward's
 coverage this round is the 28 new pins + the e2e black-box suite + the
 browser sweep above; the owner's free-tier device pass remains the live
 battery, exactly as §5 pre-declared.
+
+## 7. The release end-state (v0.122.0 — the first lean release)
+
+The R129 CLOSE commit (7c07e47) pushed with ALL THREE per-push gates
+GREEN on it (CI + Mobile CI + Rust Checks, runs 36252690928 / 36252690870
+/ 36252691000). v0.122.0 tagged at 7c07e47 → the Release + Mobile APK
+workflows both SUCCESS (36253432040 / 36253432021) — **the
+read-targets mechanism's first live fire**: both linux-bundles jobs
+SKIPPED per targets.json (linux:false), desktop-installer +
+launcher-kit + android-apk built. The draft carried EXACTLY 3 assets
+(the 2-asset Linux-trimmed publisher contract + the attached arm64
+APK), published in one PATCH (draft:false, make_latest:true, body = the
+[0.122.0] CHANGELOG section, the house-style name, no
+target_commitish); zero drafts remaining; `/releases/latest` answers
+v0.122.0. The APK content-checked over ranged HTTP: EOCD valid, 1241/1241
+central-directory entries, `lib/arm64-v8a` ONLY, the Hermes
+`index.android.bundle` PRESENT, 3 dex. The rollback door:
+`backup/pre-r129-improvements`.
