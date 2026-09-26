@@ -52,6 +52,17 @@
  * `summarySegment` (values run to the next ", key: " boundary, so a URL
  * with commas reads whole).
  *
+ * ROUND-129 (R129-M — the separated-elements rework): the grouping's OUTPUT
+ * feeds the turn's SEPARATED renderers now (chat.md §Transcript R129 — the
+ * R119-A "ONE clay container" law is retired as a CONTAINER): the rail is a
+ * PLAIN tertiary line (no control, no chevron — `activitySummary` unchanged),
+ * the thinking row is its own collapsible element (`thinkingRowLabel` below),
+ * the tool calls render as one clay CARD each, and the reply is FLAT. The
+ * DATA MODEL and the partition are untouched — the same `TurnGroup` stream,
+ * the same `orderDisplayItems` queued law, the same summary string table;
+ * only the renderers moved (transcript.tsx's `turnElementsPlan` is the new
+ * pure render contract).
+ *
  * Pure TypeScript, zero React Native — unit-tested directly.
  */
 
@@ -505,6 +516,20 @@ export function turnThoughtMs(items: TurnItem[]): number | null {
     }
   }
   return any ? total : null;
+}
+
+/**
+ * R129-M — the THINKING ROW's label (pure, pinned): "Thinking…" while the
+ * turn is live (the separated collapsible row's live-open state), else the
+ * settled duration word in the SAME span-measure grammar the rail's summary
+ * speaks (`Thought for 8s`; the plain "Thought process" fallback when the
+ * wire carried no measured span — never a guess). The separated thinking
+ * row renders no label at all when the turn has no thinking text (the
+ * component gates on `turnThinkingText`, not on this).
+ */
+export function thinkingRowLabel(live: boolean, thoughtMs: number | null): string {
+  if (live) return "Thinking…";
+  return thoughtMs !== null ? `Thought for ${thoughtSeconds(thoughtMs)}s` : "Thought process";
 }
 
 /** The reply's plain text (the a11y preview's source): the assistant

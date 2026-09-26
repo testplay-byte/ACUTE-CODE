@@ -40,6 +40,7 @@ import {
   orderDisplayItems,
   readTargetSegment,
   runningToolWord,
+  thinkingRowLabel,
   TOOL_HINT_MAX,
   toolHint,
   toolHintList,
@@ -751,6 +752,20 @@ describe("turn-block — the group's member text helpers", () => {
       turnReplyText([assistantItem("a1", { content: "first" }), assistantItem("a2", { content: "second" })]),
     ).toBe("first second");
     expect(turnReplyText([assistantItem("a1", {})])).toBe("");
+  });
+});
+
+// ── R129-M — the separated thinking row's label ─────────────────────────────
+
+describe("turn-block — thinkingRowLabel (R129-M — the separated thinking row's label)", () => {
+  it("live reads Thinking…; settled reads the span-measure duration word; a missing span reads the plain fallback", () => {
+    expect(thinkingRowLabel(true, 8_000)).toBe("Thinking…");
+    expect(thinkingRowLabel(true, null)).toBe("Thinking…");
+    expect(thinkingRowLabel(false, 8_000)).toBe("Thought for 8s");
+    // the same floor-and-round grammar the rail's summary speaks
+    expect(thinkingRowLabel(false, 500)).toBe("Thought for 1s");
+    expect(thinkingRowLabel(false, 12_400)).toBe("Thought for 12s");
+    expect(thinkingRowLabel(false, null)).toBe("Thought process");
   });
 });
 
