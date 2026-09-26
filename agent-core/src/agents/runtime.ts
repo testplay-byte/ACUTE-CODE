@@ -4285,11 +4285,23 @@ export async function runStreamedAgentTurn(
             : {}),
           ...(withStats
             ? {
-                usage: {
-                  inputTokens: iterInputTokens,
-                  outputTokens: iterOutputTokens,
-                  ...(iterSawCached ? { cachedInputTokens: iterCachedInputTokens } : {}),
-                },
+                // R130-C1 (owner: "if I stop a conversation midway… it would
+                // say the context window has been failed up and it is not
+                // proper"): a 0/0 pair means the finish frame NEVER arrived
+                // (a midway stop) — OMIT the usage block entirely. Absence
+                // is the honest encoding: the meter's `actual` scan then
+                // keeps the last REAL measurement instead of reporting a
+                // fabricated "0 measured at last request" (the anchor's own
+                // garbage-row guard, mirrored here at the source).
+                ...(iterInputTokens > 0 || iterOutputTokens > 0
+                  ? {
+                      usage: {
+                        inputTokens: iterInputTokens,
+                        outputTokens: iterOutputTokens,
+                        ...(iterSawCached ? { cachedInputTokens: iterCachedInputTokens } : {}),
+                      },
+                    }
+                  : {}),
                 ms: iterMs,
                 model,
               }
@@ -5156,7 +5168,10 @@ export async function runStreamedAgentTurn(
     // skips it (asChatMessage) and the UI merges its stats into the last
     // message (toProjectChatItems).
     const finalFlushed = flushSegment(true);
-    if (statsCarrierNeeded && !finalFlushed) {
+    if (statsCarrierNeeded && !finalFlushed && (iterInputTokens > 0 || iterOutputTokens > 0)) {
+      // R130-C1: the stats-carrier exists to CARRY real usage — a 0/0 pair
+      // (the finish frame never arrived) carries nothing but a fabricated
+      // zero the meter would trust, so it is not appended at all.
       const iterMs = Date.now() - startedAt;
       appendSessionEvent(db, session.id, {
         type: "message.assistant",

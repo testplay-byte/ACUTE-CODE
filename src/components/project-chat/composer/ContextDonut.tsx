@@ -115,6 +115,9 @@ const VIEWPORT_MARGIN_PX = 12;
 const POPOVER_MIN_HEIGHT_PX = 120;
 /** The context report's live-refresh cadence while a turn streams. */
 export const CONTEXT_LIVE_REFETCH_MS = 2_500;
+/** R130-C3 — the one delayed heal after a transient report failure while
+ * idle (the stop-boundary self-recovery; see the query's effect below). */
+export const CONTEXT_ERROR_HEAL_MS = 2_000;
 
 /** R96-G: the menu-overlay window's page paints a 6px padding around the
  * card — the OS window must reserve it on both axes (the R92-A menus' same
@@ -1081,6 +1084,33 @@ export function ContextDonut({
     refetchInterval: streaming ? CONTEXT_LIVE_REFETCH_MS : false,
     retry: false,
   });
+
+  // ── R130-C3 — the meter never strands on "unavailable" (the owner's
+  // stop-boundary verdict — "if I stop a conversation midway, then it would
+  // say… that the context window has been failed up and it is not proper"):
+  // while streaming, a failed poll self-heals (the 2.5s poll keeps firing
+  // on errored queries); but the STOP boundary's invalidation refetch can
+  // hit a transient failure exactly as `streaming` flips false — the poll
+  // stops, and the report used to park on the error title forever. ONE
+  // delayed heal (2s) per error episode while idle: a transient failure
+  // recovers itself; a real one (404/409/network-down) stays honestly
+  // failed instead of hammering the route.
+  const errorHealedRef = useRef(false);
+  useEffect(() => {
+    if (!report.isError) {
+      errorHealedRef.current = false;
+      return;
+    }
+    if (streaming || report.isFetching || errorHealedRef.current) return;
+    errorHealedRef.current = true;
+    const healTimer = window.setTimeout(() => {
+      void report.refetch();
+    }, CONTEXT_ERROR_HEAL_MS);
+    return () => window.clearTimeout(healTimer);
+    // report.isError/isFetching/refetch are stable-enough members; the
+    // effect's own refs make the loop safe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [report.isError, report.isFetching, streaming]);
 
   const data = report.data ?? null;
   const used = data?.usedTokens ?? 0;

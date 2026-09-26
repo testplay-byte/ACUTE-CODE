@@ -922,6 +922,16 @@ export function registerSessionRoutes(scope: FastifyInstance, ctx: RouteContext)
       ) {
         continue;
       }
+      // R130-C2 (the owner's midway-stop verdict — "it would say the context
+      // window has been failed up and it is not proper"): a zero input count
+      // is a GARBAGE row, not a measurement — the pre-R130 abort partial
+      // persisted usage {0,0} when the finish frame never arrived, and this
+      // scan accepted it (typeof 0 === "number"), so after a midway stop the
+      // meter reported a fabricated "0 measured at last request". The R127
+      // anchor's own garbage-row guard (compaction.ts — inputTokens ≤ 0
+      // rows are skipped) is mirrored HERE: the scan keeps looking UP for
+      // the last REAL measurement instead.
+      if (payload.usage.inputTokens <= 0) continue;
       actual = {
         inputTokens: payload.usage.inputTokens,
         outputTokens: payload.usage.outputTokens,

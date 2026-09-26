@@ -1680,7 +1680,15 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
         const usageRaw = payload.usage;
         if (typeof usageRaw === "object" && usageRaw !== null) {
           const u = usageRaw as { inputTokens?: unknown; outputTokens?: unknown };
-          if (typeof u.inputTokens === "number" && typeof u.outputTokens === "number") {
+          if (
+            typeof u.inputTokens === "number" &&
+            typeof u.outputTokens === "number" &&
+            // R130-C2: a 0/0 pair is a garbage row (a midway-stop partial
+            // whose finish frame never arrived), not a measurement — it
+            // must never overwrite the folded turn's last REAL usage (the
+            // reply chip's token line and the meter read this merge).
+            (u.inputTokens > 0 || u.outputTokens > 0)
+          ) {
             usage = { inputTokens: u.inputTokens, outputTokens: u.outputTokens };
           }
         }

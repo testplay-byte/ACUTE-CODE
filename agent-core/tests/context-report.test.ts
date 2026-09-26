@@ -398,6 +398,39 @@ describe("GET /api/v1/sessions/:id/context (ROUND-83 R83 additions)", () => {
     expect(third.actual.cachedInputTokens).toBeNull();
   });
 
+  it("R130-C2 — the midway-stop shape: a trailing 0/0 usage row is a GARBAGE row, never the actual (the last REAL measurement stands)", async () => {
+    const { sessionId, agentId } = await fixtureSession("test/r83-a2");
+    // The last REAL measurement lands first.
+    const realAt = appendSessionEvent(db, sessionId, {
+      type: "message.assistant",
+      agentId,
+      payload: { role: "assistant", content: "real work", usage: { inputTokens: 4_200, outputTokens: 400 }, model: "test/r83-a2" },
+    });
+    // Keep the two rows' timestamps apart (the same-ms case makes any ts
+    // comparison meaningless).
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // Then the owner STOPS the next turn midway — the pre-R130 abort
+    // partial persisted usage {0,0} (the finish frame never arrived). The
+    // scan must SKIP it (the R127 anchor's own garbage-row guard, mirrored)
+    // and keep reporting the real measurement — the owner's "it would say
+    // the context window has been failed up and it is not proper" verdict
+    // dies here.
+    const stoppedAt = appendSessionEvent(db, sessionId, {
+      type: "message.assistant",
+      agentId,
+      payload: { role: "assistant", content: "partial text that never finished", usage: { inputTokens: 0, outputTokens: 0 }, model: "test/r83-a2" },
+    });
+    void stoppedAt;
+    const report = (await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}/context` })).json();
+    expect(report.actual).not.toBeNull();
+    expect(report.actual.inputTokens).toBe(4_200);
+    expect(report.actual.outputTokens).toBe(400);
+    // The measurement is the REAL row's, not the stopped partial's.
+    expect(report.actual.at).toBe(realAt.ts);
+    // The honest no-usage encoding (R130-C1's source fix) never even lands
+    // as a candidate — but a legacy 0/0 row from an older build still is.
+  });
+
   it("§2.4/§3.2c closed: after a compaction the messages estimate DROPS (the model receives summary + tail, not the raw log) + the compaction field carries the detail", async () => {
     const { sessionId, agentId } = await fixtureSession("test/r83-a3");
     // A long conversation.

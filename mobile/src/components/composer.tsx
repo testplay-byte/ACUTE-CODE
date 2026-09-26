@@ -197,7 +197,9 @@ import {
 } from "@/features/attachments";
 import {
   contextPercent,
+  contextPressure,
   fetchSessionContext,
+  formatTokens,
   type SessionContextReport,
 } from "@/features/context-meter";
 import {
@@ -568,6 +570,17 @@ export function Composer({
     const timer = setInterval(refreshContext, 2_500);
     return () => clearInterval(timer);
   }, [streaming, connected, refreshContext]);
+  // ── R130-C4 — the SETTLE BOUNDARY's one final refresh: the live poll
+  // stops with the stream, so the LAST number the pill shows after a turn
+  // ends (or the user STOPS it midway) could be the mid-turn estimate.
+  // One more fetch as `streaming` flips false lands the honest post-turn
+  // number — the owner's "the actual context window should update while
+  // the agent is working… and after". ──
+  const prevStreaming = useRef(streaming);
+  useEffect(() => {
+    if (prevStreaming.current && !streaming) refreshContext();
+    prevStreaming.current = streaming;
+  }, [streaming, refreshContext]);
 
   // ── R115-I — the CONTROLLED sheets' open-time side effects ────────────────
   // The session screen owns the open sheet; this effect re-triggers the
@@ -1015,6 +1028,19 @@ export function Composer({
             {note}
           </TypeCaption>
         </View>
+      )}
+
+      {/* ── R130-C4 — THE LIVE CONTEXT PILL: the always-visible context
+          readout ABOVE the input row (the owner: "I did not saw the token
+          context window increasing or decreasing along the way while the
+          model was working… I should be showing the context window being
+          used in live view"). The SAME live-polled report the kebab's
+          Context level reads (one truth — the 2.5s poll while a turn
+          streams + the settle boundary's final refresh above), surfaced
+          where the eye already sits: the pressure-colored dot + the micro
+          mono percentage + the used/window caption + the 3px meter line. ── */}
+      {contextReport !== null && (
+        <ContextLivePill report={contextReport} live={streaming && connected} />
       )}
 
       {/* The @ quick-picker — a compact popup ABOVE the input (the desktop's
@@ -1596,6 +1622,50 @@ export const MAX_INPUT_HEIGHT = INPUT_MAX_LINES * 21 + INPUT_PADDING_Y * 2;
  *  used to drive the controlled height + the radius swap). */
 export const INPUT_TALL_THRESHOLD = INPUT_MIN_HEIGHT - INPUT_PADDING_Y * 2;
 
+/** R130-C4 — THE LIVE CONTEXT PILL: the always-visible context readout the
+ * composer renders above its input row. The SAME report the kebab's Context
+ * level reads (one truth): the pressure-colored dot (accent → warning →
+ * danger, the desktop donut's exact thresholds via contextPressure) + the
+ * micro mono percentage + the used/window caption + the 3px meter line.
+ * While a turn streams the numbers move on the 2.5s poll — the LIVE view
+ * the owner asked for; the settle boundary's final refresh above keeps the
+ * post-stop number honest. */
+function ContextLivePill({ report, live }: { report: SessionContextReport; live: boolean }) {
+  const { tokens } = useTheme();
+  const pct = contextPercent(report.usedTokens, report.contextWindow);
+  const pressure = contextPressure(report.usedTokens, report.contextWindow);
+  const dotColor =
+    pressure === "danger"
+      ? tokens.danger
+      : pressure === "filling"
+        ? tokens.warning
+        : tokens.accent;
+  const barColor = dotColor;
+  return (
+    <View
+      accessibilityLabel={`Context ${pct}% used, ${formatTokens(report.usedTokens)} of ${formatTokens(
+        report.contextWindow,
+      )} tokens${live ? ", updating live" : ""}`}
+      testID="composer-context-pill"
+    >
+      <View style={styles.contextPillRow}>
+        <View style={[styles.contextPillDot, { backgroundColor: dotColor }, live && styles.contextPillDotLive]} />
+        <TypeMono style={{ color: tokens.textSecondary, fontSize: 10.5 }} numberOfLines={1}>
+          {`context ${pct}%`}
+        </TypeMono>
+        <TypeCaption style={{ color: tokens.textTertiary, flex: 1 }} numberOfLines={1}>
+          {`${formatTokens(report.usedTokens)} of ${formatTokens(report.contextWindow)}${
+            live ? " · live" : ""
+          }`}
+        </TypeCaption>
+      </View>
+      <View style={[styles.contextPillTrack, { backgroundColor: tokens.subtle }]}>
+        <View style={{ height: 3, width: `${pct}%`, backgroundColor: barColor }} />
+      </View>
+    </View>
+  );
+}
+
 /** The model pill's compact label — the display name when one exists, else a
  * shortened model id (the desktop's graduated shrink, phone-sized). */
 function shortModelLabel(modelId: string, models: ModelRecord[] | null): string {
@@ -1655,6 +1725,30 @@ const styles = StyleSheet.create({
   },
   chipRow: {
     alignItems: "center",
+  },
+  /** R130-C4 — the live context pill: one compact row above the input
+   *  (dot + micro mono percentage + the used/window caption) over a 3px
+   *  meter track. */
+  contextPillRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  contextPillDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  /** The LIVE tell: the breathing opacity rides the dot while a turn
+   *  streams (the calibrating mark that the number is MOVING). */
+  contextPillDotLive: {
+    opacity: 0.85,
+  },
+  contextPillTrack: {
+    height: 3,
+    borderRadius: 1.5,
+    overflow: "hidden",
+    marginTop: 4,
   },
   chip: {
     borderRadius: RADIUS_ROUND,

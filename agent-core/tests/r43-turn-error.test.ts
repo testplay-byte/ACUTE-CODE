@@ -282,6 +282,15 @@ describe("runStreamedAgentTurn provider failure (ROUND-43)", () => {
     expect(events.map((e) => e.type)).toEqual(["message.user", "message.assistant"]);
     const partial = events[1].payload as { content?: string };
     expect(partial.content).toBe("starting…");
+    // R130-C1 (the owner's midway-stop meter verdict): the partial carries
+    // NO usage block at all — the finish frame never arrived, so the token
+    // counts are UNKNOWN (absence is the honest encoding; the pre-R130
+    // fabricated usage {0,0} made the meter report "0 measured at last
+    // request" after a stop — a lie the scan used to trust).
+    expect((partial as { usage?: unknown }).usage).toBeUndefined();
+    // The timing + model legs stay (they ARE known even mid-abort).
+    expect(typeof (partial as { ms?: unknown }).ms).toBe("number");
+    expect((partial as { model?: unknown }).model).toBe("test/model-1");
   });
 
   it("ROUND-58: a user STOP resets the session to queued (no eternal running spinner)", async () => {
