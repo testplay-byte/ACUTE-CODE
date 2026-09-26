@@ -220,3 +220,59 @@ easily edit any part" made literal. The stages, in order:
   including Linux when a round needs it.
 - Self-feedback accuracy improvements are prompt/telemetry-level; the
   ledger's fundamental freshness-vs-accuracy tradeoff is documented.
+
+## 6. The final gate stack + the live verification (close-out)
+
+**The gate stack on the release tree (all fresh, all green):**
+`pnpm version:check` — all 7 manifests agree on 0.122.0; mobile
+lock-sync proof (`npm ci --dry-run` in mobile/, 871 packages clean);
+root `tsc` CLEAN; agent-core `tsc` CLEAN; mobile `tsc` CLEAN (after a
+lockfile-exact `npm ci` — the sandbox's mobile/node_modules had been
+wiped between sessions; environmental, not code); FULL root vitest
+**296 files / 5,205 tests** (the +1 file/+4 tests vs the CTX wave's
+295/5,201 record reconciled exactly: the root sweep includes
+agent-core's tests — 128 root-src files + agent-core's 168 = 296 — and
+the SF wave's r129-sf-accuracy suite had only been counted in the
+agent-core gate until now); agent-core vitest 168/3,090; mobile jest
+48 suites / 1,096; eslint 0 findings; design-audit CLEAN at baseline
+(R1 100/101, R2 1536/1635, R3 0/0, R4 15/16, R5 13/21); docs:check
+283/0/0 (the servo.org/openrouter egress WARNs — the documented
+sandbox-only transients); `pnpm build` SUCCESS with the mermaid chunk
+gate ok; e2e 12/12 against the fresh dist; license audit clean (299
+production deps).
+
+**The live verification (agent-browser 1600×1000, a REAL sidecar on a
+fresh seeded temp DB — the Wave S world re-seeded: OpenRouter provider
+row, a Verifier agent, Alpha + Beta projects, three sessions, one
+Scratchpad conversation):** the boot → wizard → main-app walk with ZERO
+console/page errors (the update-checker's anonymous-403 warnings are
+the sandbox egress class, honest, non-blocking); the sidebar laws on
+the final tree — the SCRATCHPAD section LAST (data-scratchpad-section
+is the list container's last child, its own hairline + kicker + New
+chat), ZERO chevrons (0 leading svgs in every project row), 1 hairline
+separator between the 2 normal projects, the row click expanding the
+session well with the URL UNCHANGED; the hover-shrink geometry probe
+(transitions disabled, the group-hover widths applied directly): the
+name's column 156px → 100px while BOTH action buttons render at 28×28
+with an 8px gap and ZERO overlap — the text shrinks to make room, the
+buttons never cover it; the delete-materiality dialogs — normal session:
+"This removes the conversation's messages and tool history from ACUTE.
+The project's files on disk are NOT touched." (cancel preserved the
+row), Scratchpad session: "This permanently removes the conversation
+AND its scratchpad workspace folder." (the confirm click removed the
+row AND the /tmp/…/scratchpad/<sessionId>/ folder from disk, the
+sibling folder untouched); the chat — the composer with the context
+meter LIVE ("~5% of context window projected (13k of 256k tokens,
+estimated)") and its details dialog carrying the compaction line +
+the honest "not yet measured" state + the composition donut; the
+Workspace landing with honest counts ("3 projects · 3 sessions" — the
+deleted conversation reflected). 8 screenshots in shots/r129/
+(final-*).
+
+**The honest battery caveat:** a real-provider live battery (a real
+agent turn through the context steward) was NOT runnable from this
+sandbox session — no model keys are present on disk (the R120 battery's
+keys rode a prior session's environment). The context steward's
+coverage this round is the 28 new pins + the e2e black-box suite + the
+browser sweep above; the owner's free-tier device pass remains the live
+battery, exactly as §5 pre-declared.

@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-25 round-128 -->
+<!-- last-reviewed: 2026-09-26 round-129 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,43 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [0.122.0] — 2026-09-26 — the context-steward round: smarter context, the Scratchpad, the flat mobile transcript, leaner releases
+
+### The context window manages itself (the context steward)
+- **Auto-compaction now fires at 90% of the usable window — BEFORE the next request, not after it overflows.** When a long task fills the context to the line, the compression runs first ("without performing any of the next tasks"); the kept tail lands at ~60%, leaving a 30-point runway before the next one.
+- **Stale file reads stop weighing down the context.** When a file is re-read or written, every EARLIER read of it collapses to a one-line marker ("superseded — a newer read or write of this path appears below") — the dead output no longer rides along on every request. Failed reads and loaded skill instructions are exempt.
+- **Attachments ride once.** Only the newest message's attachment bodies are re-sent; older ones render a one-line pointer (the file is saved in the project and can be re-read on demand).
+- **Compaction summaries are state, not prose.** Every summary now carries fixed sections — Objective / Key decisions / Work state (completed, active, blocked) / Relevant files / Next move — with file paths, commands, and error strings preserved verbatim, and a deterministic complete file list derived from the event log appended when the model omits it (a hallucinated path can never displace the log's own record).
+- **After a compaction, the agent is reminded which files it was holding** — the five most recently read paths ride a pointer note with the summary, so it can re-open its working set by name.
+- **The output reserve can no longer overflow the window** — each request's max output is clamped to what the window actually has left (the class of hard errors free models throw on small tasks, long before any compaction threshold).
+- **Reverting a message now provably reverts the context** — the compacted summary and the re-injection roll back with the events; the original messages resurrect (pinned end-to-end).
+- The whole pipeline is documented as six stages with every constant and its test pins — see `docs/runbooks/CONTEXT-MANAGEMENT.md`.
+
+### The Scratchpad (the no-folder section, rebuilt)
+- **The no-folder conversation section sits at the very BOTTOM of the projects list** — separated by a divider with its own header and its own New chat button — and is named **Scratchpad** (not "General").
+- **Every Scratchpad conversation gets its own workspace folder** — its files never share (or pollute) another conversation's folder, and deleting a Scratchpad conversation removes its folder with its history.
+- **Deleting a normal session or project never touches files on disk** — it removes the conversation from ACUTE only, and the confirmation says so plainly.
+
+### The sidebar rows, cleaned up
+- **No more arrows on project rows.** The expand/collapse state reads from the session list itself; the chevron glyph is gone entirely.
+- **Projects are visually separated** — a divider and breathing room between rows.
+- **Hover actions make room instead of covering the name** — the new-session and delete buttons grow in from the right edge while the project or session name shrinks to fit beside them (it renders fully whenever the buttons are hidden). Both buttons share one quiet, consistent style.
+- The buttons are keyboard-reachable too (focusing a row reveals them).
+
+### The mobile transcript, un-combined
+- **Assistant replies render flat** — no bubble, no card: the text sits directly on the background, full width, the way modern chat apps do it.
+- **Thinking is its own row** — a collapsible "Thought for Ns" above the work, never bundled with the tool cards.
+- **Tool calls are proper cards** — one padded card per call, with real spacing between them, each open by default and independently collapsible (streaming write previews, diff chips, and terminal tails all preserved).
+- Your own messages keep the familiar bubble; the turn's summary line ("Thought for 8s · 3 actions · files…") stays as a quiet line above the work.
+
+### The self-feedback ledger, sharpened
+- **Every entry now reads the machine-counted tool tally first** (which tools actually failed, with each failure's one-liner) — an entry can no longer blame a tool that never failed or drop one that did.
+- **Issues must show their evidence** — CONFIRMED (visible in the transcript, error quoted) or SUSPECTED (an inference, labeled as such) — and **model mistakes are attributed to the model**, not filed as application bugs.
+- **Repeated issues are deduplicated** — the reporter sees the previous entries' issue headlines and notes a recurrence in one line instead of re-narrating it.
+
+### Releases build only what's needed
+- **A committed file now selects the release targets** (`scripts/release/targets.json`): this release ships the Windows installer, the launcher kit, and the Android APK — the Linux bundles are skipped (one file edit brings them back for any round that needs them, and manual dispatches always build them).
 
 ## [0.121.0] — 2026-09-25 — the reliability & trust pass: the guaranteed restart, the side tooltips, the honest sidebar, the living ledger row, the mobile trap closed
 

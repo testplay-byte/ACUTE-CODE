@@ -3,8 +3,8 @@
   "product": {
     "name": "Acute",
     "tagline": "Local-first multi-agent engineering workbench",
-    "version": "0.119.0",
-    "availability": "Private build — not yet distributed",
+    "version": "0.122.0",
+    "availability": "Private build \u2014 not yet distributed",
     "chips": [
       "Windows + Linux desktop",
       "Linux x64 + ARM64",
@@ -38,33 +38,33 @@
       "title": "Automation",
       "state": "planned",
       "progress": 10,
-      "summary": "Scheduling & workflow pillar — researched, additive plan ready"
+      "summary": "Scheduling & workflow pillar \u2014 researched, additive plan ready"
     }
   ],
   "milestones": [
     {
       "date": "2026-08-21",
-      "label": "Phase 0 — SPEC approved"
+      "label": "Phase 0 \u2014 SPEC approved"
     },
     {
       "date": "2026-08-22",
-      "label": "Phase 1 — architecture skeleton + CI green"
+      "label": "Phase 1 \u2014 architecture skeleton + CI green"
     },
     {
       "date": "2026-08-22",
-      "label": "Phase 2 — first live agent conversation"
+      "label": "Phase 2 \u2014 first live agent conversation"
     },
     {
       "date": "2026-08-22",
-      "label": "Setup wizard — owner-approved screen by screen"
+      "label": "Setup wizard \u2014 owner-approved screen by screen"
     },
     {
       "date": "2026-08-22",
-      "label": "Shell redo — Settings hub, honest connection test"
+      "label": "Shell redo \u2014 Settings hub, honest connection test"
     },
     {
       "date": "2026-08-23",
-      "label": "Agentic MVP — projects, sandboxed tools, live-proven file writes"
+      "label": "Agentic MVP \u2014 projects, sandboxed tools, live-proven file writes"
     },
     {
       "date": "2026-08-23",
@@ -84,308 +84,308 @@
     },
     {
       "date": "2026-08-23",
-      "label": "Governance round — blueprints, ADR backfill, workflow, this dashboard"
+      "label": "Governance round \u2014 blueprints, ADR backfill, workflow, this dashboard"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 27 — web tools (web_fetch + web_search) + critical deps-wiring fix (todos + checkpoints now live) + demo project built by the agent"
+      "label": "Round 27 \u2014 web tools (web_fetch + web_search) + critical deps-wiring fix (todos + checkpoints now live) + demo project built by the agent"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 28 — sandbox restore + master plan (1123L, 13 workstreams A-M, 5 milestones, 6 sub-agent reviews)"
+      "label": "Round 28 \u2014 sandbox restore + master plan (1123L, 13 workstreams A-M, 5 milestones, 6 sub-agent reviews)"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 28 — UX + agentic-quality overhaul (5 milestones delivered)"
+      "label": "Round 28 \u2014 UX + agentic-quality overhaul (5 milestones delivered)"
     },
     {
-      "label": "Round 30 — Windows bug fixes (CORS streaming + sessions) + sidebar/chat redesign"
-    },
-    {
-      "date": "2026-08-24",
-      "label": "Round 32 — owner-designed UI: floating panels + activity block"
+      "label": "Round 30 \u2014 Windows bug fixes (CORS streaming + sessions) + sidebar/chat redesign"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 33 — hello-loop fix + sidebar/logo system + headerless chat"
+      "label": "Round 32 \u2014 owner-designed UI: floating panels + activity block"
     },
     {
       "date": "2026-08-24",
-      "label": "Round 34 — multi-step tool feedback + settings redesign"
+      "label": "Round 33 \u2014 hello-loop fix + sidebar/logo system + headerless chat"
+    },
+    {
+      "date": "2026-08-24",
+      "label": "Round 34 \u2014 multi-step tool feedback + settings redesign"
     },
     {
       "date": "2026-08-25",
-      "label": "Round 35 — thinking + interleaved tool calls"
+      "label": "Round 35 \u2014 thinking + interleaved tool calls"
     },
     {
       "date": "2026-08-25",
-      "label": "Round 36 — sub-agent orchestration (Phase 3 core)"
+      "label": "Round 36 \u2014 sub-agent orchestration (Phase 3 core)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 55 — the engine-boot round (EISDIR + Credential-Manager namespace root causes)"
+      "label": "Round 55 \u2014 the engine-boot round (EISDIR + Credential-Manager namespace root causes)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 56 — the launch-choice round (app-or-site question + engine-failure recourse + immediate self-update)"
+      "label": "Round 56 \u2014 the launch-choice round (app-or-site question + engine-failure recourse + immediate self-update)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 57 — the engine-bundling round (the 189-junction link farm behind ERR_MODULE_NOT_FOUND; hoisted staging + zero-links gate + the Windows pre-pack boot gate)"
+      "label": "Round 57 \u2014 the engine-bundling round (the 189-junction link farm behind ERR_MODULE_NOT_FOUND; hoisted staging + zero-links gate + the Windows pre-pack boot gate)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; the frameless title bar, the stop/continue/live-write/engine-capping fixes, the settings restructure with visible keys, and the CLI chat harness)"
+      "label": "Round 58 \u2014 the desktop-polish round (the first fully-working Windows session; the frameless title bar, the stop/continue/live-write/engine-capping fixes, the settings restructure with visible keys, and the CLI chat harness)"
     },
     {
       "date": "2026-08-31",
-      "label": "Round 58 — the desktop-polish round (the first fully-working Windows session; frameless title bar, honest stops + Continue, live file-write preview, session-replay capping, settings restructure with visible keys, the CLI chat harness)"
+      "label": "Round 58 \u2014 the desktop-polish round (the first fully-working Windows session; frameless title bar, honest stops + Continue, live file-write preview, session-replay capping, settings restructure with visible keys, the CLI chat harness)"
     },
     {
       "date": "2026-09-01",
-      "label": "R59 — owner-feedback round: rounded window + pill scrollbars, pop-out custom chrome, settings honesty, response ratings with full-context capture, diagnostics console, prompt-section registry (1302 tests)"
+      "label": "R59 \u2014 owner-feedback round: rounded window + pill scrollbars, pop-out custom chrome, settings honesty, response ratings with full-context capture, diagnostics console, prompt-section registry (1302 tests)"
     },
     {
       "date": "2026-09-02",
-      "label": "R60 — second owner-feedback polish round: pop-out rounded view + gutter scrollbar (eval_with_callback channel), settings deep-clean (consistent key field, empty-by-default models + picker Free/All toggle, padding + scroll-reflow fix), title-bar sidebar toggle, browser-panel fixes (popover z-index, real DPI zoom) (1348 tests)"
+      "label": "R60 \u2014 second owner-feedback polish round: pop-out rounded view + gutter scrollbar (eval_with_callback channel), settings deep-clean (consistent key field, empty-by-default models + picker Free/All toggle, padding + scroll-reflow fix), title-bar sidebar toggle, browser-panel fixes (popover z-index, real DPI zoom) (1348 tests)"
     },
     {
       "date": "2026-09-02",
-      "label": "R61 — computer use: 30 desktop-control tools (a11y-first, gated by a master switch + approval postures, enforced kill switch, audit journal) + the separate vision model (own provider/model/key slot, or main-model vision when supported) + skills + MCP servers + the live monitor panel + the floating draggable mini window; prompts upgraded (tool discipline + honesty contract) (1491 tests)"
+      "label": "R61 \u2014 computer use: 30 desktop-control tools (a11y-first, gated by a master switch + approval postures, enforced kill switch, audit journal) + the separate vision model (own provider/model/key slot, or main-model vision when supported) + skills + MCP servers + the live monitor panel + the floating draggable mini window; prompts upgraded (tool discipline + honesty contract) (1491 tests)"
     },
     {
       "date": "2026-09-06",
-      "label": "R69 — the computer-use enforcement layer (milestones for R62–R68 live in CHANGELOG.md): observation receipts on all 11 mutating tools, click verification + hitElementName, stale-frame auto-refresh (frame_changed), screenshot-spam guard (screen_unchanged), the pngjs aHash frame memory, element middle/right clicks, wait() observable, the scroll-math/HWHEEL fix, the stdin long-type paste, the NOACTIVATE monitor (2082 tests)"
+      "label": "R69 \u2014 the computer-use enforcement layer (milestones for R62\u2013R68 live in CHANGELOG.md): observation receipts on all 11 mutating tools, click verification + hitElementName, stale-frame auto-refresh (frame_changed), screenshot-spam guard (screen_unchanged), the pngjs aHash frame memory, element middle/right clicks, wait() observable, the scroll-math/HWHEEL fix, the stdin long-type paste, the NOACTIVATE monitor (2082 tests)"
     },
     {
       "date": "2026-09-06",
-      "label": "R70 — the agent brain round (research-driven): env grounding (real OS/shell/date/git in the prompt), AGENTS.md/CLAUDE.md convention loading with @file imports, the four planning sections merged into one five-phase loop, the Codex dirty-worktree + verify-after-edit discipline, the ACI tool-feedback round (head+tail output caps, line-numbered read_file), file-based skills + 7 new builtins + sticky skill bodies + agent.skills wired; prompt 22,460→20,156 chars (2177 tests)"
+      "label": "R70 \u2014 the agent brain round (research-driven): env grounding (real OS/shell/date/git in the prompt), AGENTS.md/CLAUDE.md convention loading with @file imports, the four planning sections merged into one five-phase loop, the Codex dirty-worktree + verify-after-edit discipline, the ACI tool-feedback round (head+tail output caps, line-numbered read_file), file-based skills + 7 new builtins + sticky skill bodies + agent.skills wired; prompt 22,460\u219220,156 chars (2177 tests)"
     },
     {
       "date": "2026-09-07",
-      "label": "R71 — the discipline & reliability round (research-driven, the owner's 4 reference repos): the engineering-discipline prompt section (karpathy principles + [KNOWN]/[ASSUMED]/[UNKNOWN] + 3-strike + red flags), verification receipts + 🟢🟡🔴 confidence tags, 12 trigger-rich skills (focused-fix/zero-hallucination/self-eval/ship-gate), edit-failure escalation, owner-denial ≠ failure semantics, 6-class provider-error classification, context-overflow recovery (2287 tests)"
+      "label": "R71 \u2014 the discipline & reliability round (research-driven, the owner's 4 reference repos): the engineering-discipline prompt section (karpathy principles + [KNOWN]/[ASSUMED]/[UNKNOWN] + 3-strike + red flags), verification receipts + \ud83d\udfe2\ud83d\udfe1\ud83d\udd34 confidence tags, 12 trigger-rich skills (focused-fix/zero-hallucination/self-eval/ship-gate), edit-failure escalation, owner-denial \u2260 failure semantics, 6-class provider-error classification, context-overflow recovery (2287 tests)"
     },
     {
       "date": "2026-09-07",
-      "label": "R72 — the adaptive capability round (the owner's 'on the basis of the task' directive): deterministic task→skill hints (the advisory 'Task signal' line, golden byte-stable), 18 builtin skills (+6 crafts: tdd/api-design/frontend-craft/typescript-craft/security-review/refactoring), references/ depth for file skills (read_skill's reference param), per-directory AGENTS.md/CLAUDE.md conventions on read_file (2423 tests)"
+      "label": "R72 \u2014 the adaptive capability round (the owner's 'on the basis of the task' directive): deterministic task\u2192skill hints (the advisory 'Task signal' line, golden byte-stable), 18 builtin skills (+6 crafts: tdd/api-design/frontend-craft/typescript-craft/security-review/refactoring), references/ depth for file skills (read_skill's reference param), per-directory AGENTS.md/CLAUDE.md conventions on read_file (2423 tests)"
     },
     {
       "date": "2026-09-07",
-      "label": "R73 — the task modes round (the posture tier of the owner's directive): six builtin posture modes (plan/debug/build/review/explore/refactor) + custom modes (.acute/agents/*.md, shadowing, tool narrowing), the switch_mode tool + composer picker + /mode slash + the mode Task signal line, sessions.active_mode (migration 0027), the generalized system-reminder renderer, skills 18→20 (spec-planning, performance) (2558 tests)"
+      "label": "R73 \u2014 the task modes round (the posture tier of the owner's directive): six builtin posture modes (plan/debug/build/review/explore/refactor) + custom modes (.acute/agents/*.md, shadowing, tool narrowing), the switch_mode tool + composer picker + /mode slash + the mode Task signal line, sessions.active_mode (migration 0027), the generalized system-reminder renderer, skills 18\u219220 (spec-planning, performance) (2558 tests)"
     },
     {
       "date": "2026-09-07",
-      "label": "R74 — the updater-freeze round: the launcher now picks releases by MAX VERSION (root cause: GitHub lists never-published drafts ABOVE published releases, and five R63-R67 drafts froze the owner's installed app at 0.67.0 while 0.73.0 was live); 10 launcher regression tests wired into both CI gates; the five stale drafts published (2558 root tests + 10 launcher tests)"
+      "label": "R74 \u2014 the updater-freeze round: the launcher now picks releases by MAX VERSION (root cause: GitHub lists never-published drafts ABOVE published releases, and five R63-R67 drafts froze the owner's installed app at 0.67.0 while 0.73.0 was live); 10 launcher regression tests wired into both CI gates; the five stale drafts published (2558 root tests + 10 launcher tests)"
     },
     {
       "id": 35,
-      "title": "0.75.0 — reliability & enforcement",
+      "title": "0.75.0 \u2014 reliability & enforcement",
       "date": "2026-09-07",
-      "summary": "The owner's four verbatim asks shipped together: the transient-API retry ladder (immediate → 1.5m → 5m → 10m → 30m → stop+notify, visible status card), hard task-mode enforcement (plan/review/explore read-only at the toolset level, owner-pinned, debug command tier, delegation inheritance), hover-only mode descriptions + read-only badges, and the single-row composer toolbar with the actually-working 5-line textarea. The deepest find: SDK error PARTS were swallowed — real 429s could never classify nor ladder; the adapter now re-throws them (live-verified)."
+      "summary": "The owner's four verbatim asks shipped together: the transient-API retry ladder (immediate \u2192 1.5m \u2192 5m \u2192 10m \u2192 30m \u2192 stop+notify, visible status card), hard task-mode enforcement (plan/review/explore read-only at the toolset level, owner-pinned, debug command tier, delegation inheritance), hover-only mode descriptions + read-only badges, and the single-row composer toolbar with the actually-working 5-line textarea. The deepest find: SDK error PARTS were swallowed \u2014 real 429s could never classify nor ladder; the adapter now re-throws them (live-verified)."
     },
     {
       "id": 36,
-      "title": "R76 — the documentation round",
+      "title": "R76 \u2014 the documentation round",
       "date": "2026-09-07",
-      "summary": "Docs caught up with the code: the session history backfilled R68-R75 (8 entries, +147 lines), five AGENT-MEMORY lessons recorded (72-76), the two R75 ADRs written (0026 task-mode policy, 0027 retry-ladder), ARCHITECTURE/IMPLEMENTED-API/EXTENSIBILITY/DESIGN-SYSTEM/ROADMAP/SECURITY/HANDOFF corrected to the shipped truth, the docs index completed (5 unindexed runbooks), and the stamp-cohort rule documented where the next agent will find it (DOC-STANDARDS §8 + MAINTENANCE recipe g). Docs-only: 0.75.0 unchanged, no release."
+      "summary": "Docs caught up with the code: the session history backfilled R68-R75 (8 entries, +147 lines), five AGENT-MEMORY lessons recorded (72-76), the two R75 ADRs written (0026 task-mode policy, 0027 retry-ladder), ARCHITECTURE/IMPLEMENTED-API/EXTENSIBILITY/DESIGN-SYSTEM/ROADMAP/SECURITY/HANDOFF corrected to the shipped truth, the docs index completed (5 unindexed runbooks), and the stamp-cohort rule documented where the next agent will find it (DOC-STANDARDS \u00a78 + MAINTENANCE recipe g). Docs-only: 0.75.0 unchanged, no release."
     },
     {
       "id": 37,
-      "title": "R77 — the field-report round",
+      "title": "R77 \u2014 the field-report round",
       "date": "2026-09-07",
       "summary": "The 0.75.0 field report addressed end-to-end: the composer split left/right with the send action locked to its cluster, the model pill's Cpu icon, the redesigned retry card, the vanish-on-failure fix (freezeFailedTurn keeps the error card + the user's message), envelope-intact API errors + full-text error cards, revert-as-edit-and-resend (inclusive truncation + composer refill), and a live real-provider E2E battery including a genuine rate-limit storm that exercised the retry ladder live."
     },
     {
       "id": 38,
-      "title": "R78 — the honest-errors + queue round",
+      "title": "R78 \u2014 the honest-errors + queue round",
       "date": "2026-09-08",
-      "summary": "The owner’s four verbatim asks shipped together: the error chain robustified (RetryError unwrapped so classification reads the real status; a 403 region block no longer lies ‘authentication failed’; userMessage is the API’s REAL text — only a real rate limit ladders, every other failure shows the provider’s actual words on the live retry card too), the composer’s action group restructured into a never-wrapping bottom-right anchor (Continue/Send/Stop/queue-send can never render in a wrong position), the Settings → General retry config (three per-class auto-retry switches — a disabled class fails fast with the real text), and the message queue (send while the agent works — the message queues as an amber chip, auto-delivers after the current tool call with full context, continues the same stream at turn end, survives stops/crashes via the pre-flip). Verified: 2708 tests (agent-core 1742), the battery-r78 live battery 12/12 (real 429 ladder + a mock-provider request-body oracle), browser-verified on the real dev stack."
+      "summary": "The owner\u2019s four verbatim asks shipped together: the error chain robustified (RetryError unwrapped so classification reads the real status; a 403 region block no longer lies \u2018authentication failed\u2019; userMessage is the API\u2019s REAL text \u2014 only a real rate limit ladders, every other failure shows the provider\u2019s actual words on the live retry card too), the composer\u2019s action group restructured into a never-wrapping bottom-right anchor (Continue/Send/Stop/queue-send can never render in a wrong position), the Settings \u2192 General retry config (three per-class auto-retry switches \u2014 a disabled class fails fast with the real text), and the message queue (send while the agent works \u2014 the message queues as an amber chip, auto-delivers after the current tool call with full context, continues the same stream at turn end, survives stops/crashes via the pre-flip). Verified: 2708 tests (agent-core 1742), the battery-r78 live battery 12/12 (real 429 ladder + a mock-provider request-body oracle), browser-verified on the real dev stack."
     },
     {
       "id": 39,
-      "title": "R79 — the orchestrator round",
+      "title": "R79 \u2014 the orchestrator round",
       "date": "2026-09-08",
-      "summary": "The standing R73 deferral shipped — addressable, background, resumable sub-agent tasks (the last unshipped piece of the R71 sub-agent discipline): delegate_task gained task_id (the parent model’s own address, grammar-checked, duplicate-refused, capped at 10 outstanding background tasks), background:true (fire-and-forget with an immediate receipt while the child runs detached — it outlives the parent’s turn, streams to the Sub-agents panel, and its status rides the next turn’s system prompt as the per-turn BACKGROUND TASKS section that disappears once collected), and resume (waits while the task runs, returns the final report idempotently, retries a failed child from where it stopped; the delegation.collected event on the parent’s log is the one delivery marker). The owner sees the address as a mono task-id chip in the panel + the chat card; migration 0028 (sessions.delegate_task_id). Verified: 2741 tests (agent-core 1769 incl. 27 new), the battery-r79 live battery 10/10 with the request-body oracle proving the model SEES the reminder section and its disappearance after collection."
+      "summary": "The standing R73 deferral shipped \u2014 addressable, background, resumable sub-agent tasks (the last unshipped piece of the R71 sub-agent discipline): delegate_task gained task_id (the parent model\u2019s own address, grammar-checked, duplicate-refused, capped at 10 outstanding background tasks), background:true (fire-and-forget with an immediate receipt while the child runs detached \u2014 it outlives the parent\u2019s turn, streams to the Sub-agents panel, and its status rides the next turn\u2019s system prompt as the per-turn BACKGROUND TASKS section that disappears once collected), and resume (waits while the task runs, returns the final report idempotently, retries a failed child from where it stopped; the delegation.collected event on the parent\u2019s log is the one delivery marker). The owner sees the address as a mono task-id chip in the panel + the chat card; migration 0028 (sessions.delegate_task_id). Verified: 2741 tests (agent-core 1769 incl. 27 new), the battery-r79 live battery 10/10 with the request-body oracle proving the model SEES the reminder section and its disappearance after collection."
     },
     {
       "id": 40,
-      "title": "R80 — the reliability round",
+      "title": "R80 \u2014 the reliability round",
       "date": "2026-09-09",
-      "summary": "The owner's four-clause field report shipped as one round: the silent chat terminations fixed at three root causes (the SSE clean-close truncation guard — a provider dropping the stream mid-generation now throws the honest 'connection closed mid-response' error and the retry ladder engages; the context/request guard stops now persist real turn.errors with CONTEXT_LIMIT/REQUEST_LIMIT codes instead of ending ok:true; a route crash now persists and notifies instead of vanishing on reload), the raw error messages shown (every error-detail cap raised — 4000/600/2000 — with key scrubbing unchanged and the nvapi- prefix joined), the retry ladder made customizable (maxAttempts, per-rung waitMinutes, providerTimeoutSeconds — validated, resolved defensively per turn, edited from the Settings General card, the defaults byte-identical to the R75 behavior), and the NVIDIA NIM provider supported (seeded, key-wired through the env injection + dev key file, live-verified reachable + catalog + key auth). Verified 2772/2772 in 149 files + live on the real keys (a real OpenRouter streamed turn end-to-end, the retry PUT round-trips, the NVIDIA connection test)."
+      "summary": "The owner's four-clause field report shipped as one round: the silent chat terminations fixed at three root causes (the SSE clean-close truncation guard \u2014 a provider dropping the stream mid-generation now throws the honest 'connection closed mid-response' error and the retry ladder engages; the context/request guard stops now persist real turn.errors with CONTEXT_LIMIT/REQUEST_LIMIT codes instead of ending ok:true; a route crash now persists and notifies instead of vanishing on reload), the raw error messages shown (every error-detail cap raised \u2014 4000/600/2000 \u2014 with key scrubbing unchanged and the nvapi- prefix joined), the retry ladder made customizable (maxAttempts, per-rung waitMinutes, providerTimeoutSeconds \u2014 validated, resolved defensively per turn, edited from the Settings General card, the defaults byte-identical to the R75 behavior), and the NVIDIA NIM provider supported (seeded, key-wired through the env injection + dev key file, live-verified reachable + catalog + key auth). Verified 2772/2772 in 149 files + live on the real keys (a real OpenRouter streamed turn end-to-end, the retry PUT round-trips, the NVIDIA connection test)."
     },
     {
       "id": 41,
-      "title": "R81 — the unified operating modes",
+      "title": "R81 \u2014 the unified operating modes",
       "date": "2026-09-09",
       "summary": "ONE picker of THREE modes (Full Access / Ask / Plan) replaces the task-mode picker + access-level switcher (ADR-0029). Postures became agent self-selection via switch_mode; enforcement lives solely in the operating mode (PLAN grew to the 19-tool read-only set); 'editor' retired fail-closed (migration 0029 preserves every historical guarantee). TaskModePicker/`/mode` deleted from the UI; live battery + browser + VLM verified."
     },
     {
       "id": 42,
-      "title": "R82 — models & providers hardening",
+      "title": "R82 \u2014 models & providers hardening",
       "date": "2026-09-09",
-      "summary": "The owner's field report round 2: custom-provider model ROUTING fixed end-to-end (providerId rides the send wire, the vision relay, the context meter, queued messages, sub-agent children — a model picked under a custom gateway or NVIDIA serves there, with restart-surviving keys via the Rust note-file), the per-model TEST button (a real completion probe with http/auth/model/content checks + scrubbed preview/reason), tri-state capability columns (migration 0030: null=unknown, never the 0004 false-lie), the capabilities edit-dialog card, provider-scoped subagentModel {providerId, modelId} (NIM rows pickable), GET /models/configured, and the NVIDIA picker polish (dialog-local free-scope, zero-free auto-switch). Live battery 8/8 on the real keys (custom gateway routing through a mock oracle with its own key, real OpenRouter + NIM probes, hostile key-echo scrubbed)."
+      "summary": "The owner's field report round 2: custom-provider model ROUTING fixed end-to-end (providerId rides the send wire, the vision relay, the context meter, queued messages, sub-agent children \u2014 a model picked under a custom gateway or NVIDIA serves there, with restart-surviving keys via the Rust note-file), the per-model TEST button (a real completion probe with http/auth/model/content checks + scrubbed preview/reason), tri-state capability columns (migration 0030: null=unknown, never the 0004 false-lie), the capabilities edit-dialog card, provider-scoped subagentModel {providerId, modelId} (NIM rows pickable), GET /models/configured, and the NVIDIA picker polish (dialog-local free-scope, zero-free auto-switch). Live battery 8/8 on the real keys (custom gateway routing through a mock oracle with its own key, real OpenRouter + NIM probes, hostile key-echo scrubbed)."
     },
     {
       "id": 43,
-      "title": "R83 — honest token & context metering",
+      "title": "R83 \u2014 honest token & context metering",
       "date": "2026-09-10",
-      "summary": "The owner's 'highly misleading' round: ONE budget (resolveTurnBudget — window WITH source label, the owner's max_output_tokens finally honored, available = window − output − margin) drives the meter, the compaction trigger, and the context guard; the donut shows the provider's OWN number for the last request (actual block from the stats carriers) beside the labeled ~projected estimate, applies the newest compaction (the ring drops instead of lying high), renders the budget tick + window provenance; schema-measured tool tokens replace the 350/tool guess; the meter's prompt sections match the real turn's (skills/task-modes/active-mode/background/environment); migration 0031's provider_calls + origin make 'N turns · M provider calls' honest and the hidden compaction/debug calls billed; cached-null hit rates ('— not reported'), (unpriced) cost markers, the real POST /sessions/:id/compact (the 800K guard's phantom /compact finally exists), the model-relative guard with honest numbers. Live battery 5/5 on real keys (actual=61 tokens measured end-to-end)."
+      "summary": "The owner's 'highly misleading' round: ONE budget (resolveTurnBudget \u2014 window WITH source label, the owner's max_output_tokens finally honored, available = window \u2212 output \u2212 margin) drives the meter, the compaction trigger, and the context guard; the donut shows the provider's OWN number for the last request (actual block from the stats carriers) beside the labeled ~projected estimate, applies the newest compaction (the ring drops instead of lying high), renders the budget tick + window provenance; schema-measured tool tokens replace the 350/tool guess; the meter's prompt sections match the real turn's (skills/task-modes/active-mode/background/environment); migration 0031's provider_calls + origin make 'N turns \u00b7 M provider calls' honest and the hidden compaction/debug calls billed; cached-null hit rates ('\u2014 not reported'), (unpriced) cost markers, the real POST /sessions/:id/compact (the 800K guard's phantom /compact finally exists), the model-relative guard with honest numbers. Live battery 5/5 on real keys (actual=61 tokens measured end-to-end)."
     },
     {
       "id": 44,
-      "title": "R84 — the modularity round (Wave 2: the SCC break + the server.ts route split)",
+      "title": "R84 \u2014 the modularity round (Wave 2: the SCC break + the server.ts route split)",
       "date": "2026-09-10",
-      "summary": "Wave 2 of the R80.5 audit, behavior-identical and test-guarded: the 25-file agents↔tools SCC is DEAD (the delegation plugin's static orchestrator import — the root cause — replaced by the agents/sub-roles.ts leaf + the ToolDeps.orchestrator seam + a lazy fallback; a Tarjan check over the runtime import graph reports zero cycles), and server.ts shrank 5,719 → 2,439 lines (−57%) as 71 routes moved verbatim into 14 routes/<domain>.ts modules (sessions, agents, projects, models, providers, attachments, memory, skills, modes, ratings, usage, settings) on the proven registerBrowserRoutes pattern with buildServer as the assembler — each phase a separate green commit. The remaining domains (terminal, MCP, computer-use, diagnostics, approvals, the SSE route) are the documented next phases."
+      "summary": "Wave 2 of the R80.5 audit, behavior-identical and test-guarded: the 25-file agents\u2194tools SCC is DEAD (the delegation plugin's static orchestrator import \u2014 the root cause \u2014 replaced by the agents/sub-roles.ts leaf + the ToolDeps.orchestrator seam + a lazy fallback; a Tarjan check over the runtime import graph reports zero cycles), and server.ts shrank 5,719 \u2192 2,439 lines (\u221257%) as 71 routes moved verbatim into 14 routes/<domain>.ts modules (sessions, agents, projects, models, providers, attachments, memory, skills, modes, ratings, usage, settings) on the proven registerBrowserRoutes pattern with buildServer as the assembler \u2014 each phase a separate green commit. The remaining domains (terminal, MCP, computer-use, diagnostics, approvals, the SSE route) are the documented next phases."
     },
     {
       "id": 45,
-      "title": "R85 — the structure re-assessment",
+      "title": "R85 \u2014 the structure re-assessment",
       "date": "2026-09-10",
-      "summary": "The owner-directed post-R84 audit, docs-only: three parallel analysis sweeps re-verified at c38bc8b — R84's wins CONFIRMED (the SCC dead, server.ts 5,719→2,439 exact) with three overstatements corrected (one benign 2-cycle remains: registry↔plugins/mcp TOOL_NAME_RE since R61; 52 routes remain in server.ts, not ~31 — the notifications/jobs/checkpoints/dialogs/plugins tail was never on the plan; the SSE route is 476 lines); the turn-loop duplication measured (378 byte-identical lines; runtime.ts grew to 3,369; prepareTurn 447 lines/10 positional args); the frontend god files all grew since R80.5 (api 3,959 / stream-store 1,936 / ModelsProvidersTab 3,304; 559 lines of dead sessions/ code; zero extension seams); SQL leaks counted at 22 (approvals.ts ×11); every P0 doc drift fixed (MODULE-BOUNDARIES rewritten to the post-R84 reality, MAINTENANCE §e, HANDOFF, round-84.md backfilled, the board/index/TESTING/IMPLEMENTED-API/ROADMAP/EXTENSIBILITY synced, WORKLOG R76-R81 backfill, lessons #84-#85). v0.83.0 unchanged."
+      "summary": "The owner-directed post-R84 audit, docs-only: three parallel analysis sweeps re-verified at c38bc8b \u2014 R84's wins CONFIRMED (the SCC dead, server.ts 5,719\u21922,439 exact) with three overstatements corrected (one benign 2-cycle remains: registry\u2194plugins/mcp TOOL_NAME_RE since R61; 52 routes remain in server.ts, not ~31 \u2014 the notifications/jobs/checkpoints/dialogs/plugins tail was never on the plan; the SSE route is 476 lines); the turn-loop duplication measured (378 byte-identical lines; runtime.ts grew to 3,369; prepareTurn 447 lines/10 positional args); the frontend god files all grew since R80.5 (api 3,959 / stream-store 1,936 / ModelsProvidersTab 3,304; 559 lines of dead sessions/ code; zero extension seams); SQL leaks counted at 22 (approvals.ts \u00d711); every P0 doc drift fixed (MODULE-BOUNDARIES rewritten to the post-R84 reality, MAINTENANCE \u00a7e, HANDOFF, round-84.md backfilled, the board/index/TESTING/IMPLEMENTED-API/ROADMAP/EXTENSIBILITY synced, WORKLOG R76-R81 backfill, lessons #84-#85). v0.83.0 unchanged."
     },
     {
       "id": 46,
-      "title": "R86 — the verification + SSE-extraction round",
+      "title": "R86 \u2014 the verification + SSE-extraction round",
       "date": "2026-09-10",
-      "summary": "The owner's task-list session: (1) the R85 claims re-verified with three parallel sweeps — backend exact (52-route inventory, 22 SQL leaks, the 2-cycle, the 378-line duplication, ToolDeps missing runId), four frontend numbers corrected (api.ts 85 importers not 72; ModelsProvidersTab 60 hooks/3 dialogs; 14 stores; StreamTurnEvent 37 members), the dead sessions/ dir caught receiving an R83 edit, three narrow frontend seams the 'zero' claim missed. (2) THE SSE ROUTE EXTRACTED — routes/sse.ts (the final-phase domain of the R84 split): the 476-line streamed turn route moved verbatim (byte-identical round-trip verifier), server.ts 2,439→1,913, eleven single-consumer imports pruned, registration order preserved; full pipeline green (2,825 tests byte-identical to baseline, e2e 12/12 on the built dist, live boot smoke). v0.84.0. (3) Ops: six stale branches deleted (only main remains — the r61 branch's superseded cua-helper line documented with recoverable tips), the stuck v0.83.0 DRAFT release PUBLISHED (both assets verified), the DASHBOARD's stale plan section truth-synced."
+      "summary": "The owner's task-list session: (1) the R85 claims re-verified with three parallel sweeps \u2014 backend exact (52-route inventory, 22 SQL leaks, the 2-cycle, the 378-line duplication, ToolDeps missing runId), four frontend numbers corrected (api.ts 85 importers not 72; ModelsProvidersTab 60 hooks/3 dialogs; 14 stores; StreamTurnEvent 37 members), the dead sessions/ dir caught receiving an R83 edit, three narrow frontend seams the 'zero' claim missed. (2) THE SSE ROUTE EXTRACTED \u2014 routes/sse.ts (the final-phase domain of the R84 split): the 476-line streamed turn route moved verbatim (byte-identical round-trip verifier), server.ts 2,439\u21921,913, eleven single-consumer imports pruned, registration order preserved; full pipeline green (2,825 tests byte-identical to baseline, e2e 12/12 on the built dist, live boot smoke). v0.84.0. (3) Ops: six stale branches deleted (only main remains \u2014 the r61 branch's superseded cua-helper line documented with recoverable tips), the stuck v0.83.0 DRAFT release PUBLISHED (both assets verified), the DASHBOARD's stale plan section truth-synced."
     },
     {
       "id": 47,
-      "title": "R87 — the UX + capability round (About/reset, configure-before-add, ask_user, the embedded browser)",
+      "title": "R87 \u2014 the UX + capability round (About/reset, configure-before-add, ask_user, the embedded browser)",
       "date": "2026-09-11",
-      "summary": "The owner's improvement list, delivered as v0.85.0: (1) Settings → About — the version card with the update check + the application-wide RESET (POST /system/reset: live-turn abort, keyring clear, terminal dispose, table wipe + factory reseed, VACUUM, ~/.acute purge; the Tauri purge_provider_keys command clears Credential Manager first). (2) credentials.txt REMOVED from the launcher (the GitHub token is asked once + saved at .acute/github.pat or ACUTE_GITHUB_PAT; provider keys are saved in-app only). (3) ask_user end-to-end — the mid-task question card (option pills + custom answer, batched questions, 10-min timeout) with agent-question.requested/resolved session events + the resolve route; migration 0033. (4) The todo list VISIBLE in chat (TodoCard in the working stream, live via todo-updated frames). (5) Models & Providers redesigned: bordered model cards + capability chips (migration 0032: PDF input + text/image/video/audio outputs + sizeLabel; reasoning + tool use REMOVED from the dialog — the app detects them), configure-before-add (the picker opens the config dialog instead of adding directly), the animated self-dismissing test button, the NVIDIA phantom-add fixed (hasKey-aware existingIds). (6) The embedded browser: default viewport 1440×900, KEEP-ALIVE browser panels (no reload/glitch on tab switch, survives the new-tab menu with a deliberate pause hint), read_dom now returns per-element x/y/w/h positions, screenshots are panel-only (the full-display fallback is GONE). (7) The chat/shell batch: viewport-adaptive scrollbars, the chat min width halved + wide padding, the composer's graduated shrink (model name first), the provider-selector trajectory gating + frosted-glass backdrop, the sidebar rail expanding on project click."
+      "summary": "The owner's improvement list, delivered as v0.85.0: (1) Settings \u2192 About \u2014 the version card with the update check + the application-wide RESET (POST /system/reset: live-turn abort, keyring clear, terminal dispose, table wipe + factory reseed, VACUUM, ~/.acute purge; the Tauri purge_provider_keys command clears Credential Manager first). (2) credentials.txt REMOVED from the launcher (the GitHub token is asked once + saved at .acute/github.pat or ACUTE_GITHUB_PAT; provider keys are saved in-app only). (3) ask_user end-to-end \u2014 the mid-task question card (option pills + custom answer, batched questions, 10-min timeout) with agent-question.requested/resolved session events + the resolve route; migration 0033. (4) The todo list VISIBLE in chat (TodoCard in the working stream, live via todo-updated frames). (5) Models & Providers redesigned: bordered model cards + capability chips (migration 0032: PDF input + text/image/video/audio outputs + sizeLabel; reasoning + tool use REMOVED from the dialog \u2014 the app detects them), configure-before-add (the picker opens the config dialog instead of adding directly), the animated self-dismissing test button, the NVIDIA phantom-add fixed (hasKey-aware existingIds). (6) The embedded browser: default viewport 1440\u00d7900, KEEP-ALIVE browser panels (no reload/glitch on tab switch, survives the new-tab menu with a deliberate pause hint), read_dom now returns per-element x/y/w/h positions, screenshots are panel-only (the full-display fallback is GONE). (7) The chat/shell batch: viewport-adaptive scrollbars, the chat min width halved + wide padding, the composer's graduated shrink (model name first), the provider-selector trajectory gating + frosted-glass backdrop, the sidebar rail expanding on project click."
     },
     {
       "date": "2026-09-11",
-      "label": "R88 — the floating to-do list round: the owner's spec + manual edits, shipped as v0.86.0. The floating widget (top-right of the chat window; collapsed = only the task at hand; expand = the ten-row scroll box with done/processing/pending glyphs) + the manual editor (rename/status-cycle/reorder/delete/add; Save posts the owner's snapshot through POST /sessions/:id/todo with source:\"user\") + the CURRENT TODO LIST prompt section (the agent sees the latest snapshot — and the owner's edits, emphasized — on every turn)."
+      "label": "R88 \u2014 the floating to-do list round: the owner's spec + manual edits, shipped as v0.86.0. The floating widget (top-right of the chat window; collapsed = only the task at hand; expand = the ten-row scroll box with done/processing/pending glyphs) + the manual editor (rename/status-cycle/reorder/delete/add; Save posts the owner's snapshot through POST /sessions/:id/todo with source:\"user\") + the CURRENT TODO LIST prompt section (the agent sees the latest snapshot \u2014 and the owner's edits, emphasized \u2014 on every turn)."
     },
     {
       "date": "2026-09-11",
-      "label": "R89 — the owner's-verdict round: the full v0.86.0 walkthrough answered, shipped as v0.87.0. (A) The update check runs SERVER-SIDE with the launcher's saved PAT (the private-repo HTTP 404 fixed), the Releases button opens the OS browser, and the reset now clears the first-run gate (the app boots the SETUP WIZARD after 'Reset everything'). (B) Provider identity: the NAME is the uniqueness key, keyless preset rows are ADOPTED in place (the 'NVIDIA already exists' fresh-reset bug), same-type adds derive fresh ids (as many OpenRouters as needed), presets carry their API format (never asked), the chat picker lists only ADDED providers, and the last-used model becomes the next chats' default. (C) Models UI: clean human model names (Llama 3.3 70b Instruct), themed SVG capability chips, 1M/131K token formatting, the dedicated details strip (Context/Input/Output/Cache read), and the test result expanding its own section below the card. (D) Layout honesty: the dynamic sidebar cap (the chat reaches its floor at ANY window width), the logo-only model pill at minimum, padding tiers, overflow guards. (E) THE AGENT HANDS: a visible branded cursor traveling human bezier paths, real left/right/double clicks + drags at exact page coordinates, word-by-word typing at ~150 WPM with Shift+Enter newline semantics, smooth scrolling, the 1440×900 default viewport actually applying, and the GEOMETRIC overlay guard (the browser stays live when menus open away from it). (F) The TodoFloat frosted-glass blur. Full pipeline green: frontend 2,885 + agent-core 1,892 tests, e2e 12/12, license audit clean."
+      "label": "R89 \u2014 the owner's-verdict round: the full v0.86.0 walkthrough answered, shipped as v0.87.0. (A) The update check runs SERVER-SIDE with the launcher's saved PAT (the private-repo HTTP 404 fixed), the Releases button opens the OS browser, and the reset now clears the first-run gate (the app boots the SETUP WIZARD after 'Reset everything'). (B) Provider identity: the NAME is the uniqueness key, keyless preset rows are ADOPTED in place (the 'NVIDIA already exists' fresh-reset bug), same-type adds derive fresh ids (as many OpenRouters as needed), presets carry their API format (never asked), the chat picker lists only ADDED providers, and the last-used model becomes the next chats' default. (C) Models UI: clean human model names (Llama 3.3 70b Instruct), themed SVG capability chips, 1M/131K token formatting, the dedicated details strip (Context/Input/Output/Cache read), and the test result expanding its own section below the card. (D) Layout honesty: the dynamic sidebar cap (the chat reaches its floor at ANY window width), the logo-only model pill at minimum, padding tiers, overflow guards. (E) THE AGENT HANDS: a visible branded cursor traveling human bezier paths, real left/right/double clicks + drags at exact page coordinates, word-by-word typing at ~150 WPM with Shift+Enter newline semantics, smooth scrolling, the 1440\u00d7900 default viewport actually applying, and the GEOMETRIC overlay guard (the browser stays live when menus open away from it). (F) The TodoFloat frosted-glass blur. Full pipeline green: frontend 2,885 + agent-core 1,892 tests, e2e 12/12, license audit clean."
     },
     {
       "date": "2026-09-11",
-      "label": "R90 — the browser-native round: the owner's second walkthrough answered, shipped as v0.88.0. The MENU OVERLAY WINDOW (menus float on top of the LIVE browser — the headline verdict), the agent hands v2 (always-visible cursor, human path planner, real event trail, visible press pulse, tap→1s→type→~1s→Enter), the delete-provider honesty (inline 409 + the OS-key purge — the R82 TODO closed), the wizard's persistence (model row + last-used default + the seeded agent re-pointed), the model card (icon badges + the arrow + one merged section), the launcher PAT home-path fix (the update check works after acute.bat), and the floating-webview race fix. The full pipeline green: lint, both typechecks, 2,888 frontend + 1,894 agent-core tests, the 4-page build (menu-overlay.html rides as the 4th vite entry), 12/12 e2e, the license audit, 16/16 launcher python tests.",
+      "label": "R90 \u2014 the browser-native round: the owner's second walkthrough answered, shipped as v0.88.0. The MENU OVERLAY WINDOW (menus float on top of the LIVE browser \u2014 the headline verdict), the agent hands v2 (always-visible cursor, human path planner, real event trail, visible press pulse, tap\u21921s\u2192type\u2192~1s\u2192Enter), the delete-provider honesty (inline 409 + the OS-key purge \u2014 the R82 TODO closed), the wizard's persistence (model row + last-used default + the seeded agent re-pointed), the model card (icon badges + the arrow + one merged section), the launcher PAT home-path fix (the update check works after acute.bat), and the floating-webview race fix. The full pipeline green: lint, both typechecks, 2,888 frontend + 1,894 agent-core tests, the 4-page build (menu-overlay.html rides as the 4th vite entry), 12/12 e2e, the license audit, 16/16 launcher python tests.",
       "state": "done"
     },
     {
       "date": "2026-09-11",
-      "label": "R91 — the third-walkthrough round, shipped as v0.89.0. The IN-APP UPDATER (Update now downloads the sha256-verified installer in-app, launches it, and closes — the owner's headline ask), the OpenRouter delete unblock (the default agent's reference was the silent 409 — force now resets the referencing agents to the model-picker state), the browser blank-render deep fix (async menu-overlay window creation killing tauri's documented sync-command deadlock class + show re-asserts bounds + a 2s visibility watchdog that recreates or re-asserts the webview + honest 6s affordance timeouts), the model card's right-side identity (capability icons inline on the name; the details section conditional on what is actually configured — none/compact-chips/full-band), the CapChip on/off states, the queue-send gating (only with text), the minimized Continue, the TodoFloat column-relative cap + two-line wrap, and the token million tier (300M). Full pipeline green: lint, both typechecks, the 2,899-test root suite, 12/12 e2e, license audit, windows-target cargo check.",
+      "label": "R91 \u2014 the third-walkthrough round, shipped as v0.89.0. The IN-APP UPDATER (Update now downloads the sha256-verified installer in-app, launches it, and closes \u2014 the owner's headline ask), the OpenRouter delete unblock (the default agent's reference was the silent 409 \u2014 force now resets the referencing agents to the model-picker state), the browser blank-render deep fix (async menu-overlay window creation killing tauri's documented sync-command deadlock class + show re-asserts bounds + a 2s visibility watchdog that recreates or re-asserts the webview + honest 6s affordance timeouts), the model card's right-side identity (capability icons inline on the name; the details section conditional on what is actually configured \u2014 none/compact-chips/full-band), the CapChip on/off states, the queue-send gating (only with text), the minimized Continue, the TodoFloat column-relative cap + two-line wrap, and the token million tier (300M). Full pipeline green: lint, both typechecks, the 2,899-test root suite, 12/12 e2e, license audit, windows-target cargo check.",
       "state": "done"
     },
     {
       "date": "2026-09-11",
-      "label": "R92 — the multi-key pool + juggling, the browser-embedding finish, the generation dead end closed (v0.90.0)"
+      "label": "R92 \u2014 the multi-key pool + juggling, the browser-embedding finish, the generation dead end closed (v0.90.0)"
     },
     {
       "date": "2026-09-12",
-      "label": "R93 — the fifth-walkthrough round: the computer-use v2 (element map + learning + tree tools + placement + relocation + ghost verification), the browser agent's hands, the turn-loop reliability, and the settings-surface polish (v0.91.0)"
+      "label": "R93 \u2014 the fifth-walkthrough round: the computer-use v2 (element map + learning + tree tools + placement + relocation + ghost verification), the browser agent's hands, the turn-loop reliability, and the settings-surface polish (v0.91.0)"
     },
     {
       "date": "2026-09-13",
-      "label": "R95 — the sixth-walkthrough round: the Models & Providers overhaul, model-aware thinking + the loop guard, the native local-file browser, the chat robustness pass, the REAL-API live-fire. Shipped as v0.93.0."
+      "label": "R95 \u2014 the sixth-walkthrough round: the Models & Providers overhaul, model-aware thinking + the loop guard, the native local-file browser, the chat robustness pass, the REAL-API live-fire. Shipped as v0.93.0."
     },
     {
       "date": "2026-09-14",
-      "label": "Round 96 — the smarter-agent round (v0.94.0): live-fired over a 258-file project"
+      "label": "Round 96 \u2014 the smarter-agent round (v0.94.0): live-fired over a 258-file project"
     },
     {
       "date": "2026-09-14",
-      "label": "Round 97 — the context/freedom/states round (v0.95.0): Kilo-style context bar, thinking free by default, honest UI states"
+      "label": "Round 97 \u2014 the context/freedom/states round (v0.95.0): Kilo-style context bar, thinking free by default, honest UI states"
     },
     {
       "date": "2026-09-15",
-      "label": "R98 — the design-language + data round (v0.96.0)"
+      "label": "R98 \u2014 the design-language + data round (v0.96.0)"
     },
     {
       "date": "2026-09-15",
-      "label": "R99 — the research-driven UI redo round (v0.97.0): the self-contained browser, one-click silent updates, the agent's contract"
+      "label": "R99 \u2014 the research-driven UI redo round (v0.97.0): the self-contained browser, one-click silent updates, the agent's contract"
     },
     {
       "date": "2026-09-17",
-      "label": "R100 — the honest-browser + UI-overhaul + Linux-release round (v0.98.0): evergreen installer + de-branded UA, the enforced design language, deb+AppImage, the live-fire agent battery"
+      "label": "R100 \u2014 the honest-browser + UI-overhaul + Linux-release round (v0.98.0): evergreen installer + de-branded UA, the enforced design language, deb+AppImage, the live-fire agent battery"
     },
     {
       "date": "2026-09-17",
-      "label": "R101 — the twelfth-walkthrough round (v0.99.0): the calm update hand-off (no more 'environment crashed' flash + self-healing failed installs), the chat timeline rail, the composer focus fix, honest + resilient Mermaid, the minimized-rail label chips, and Linux ARM64 bundles"
+      "label": "R101 \u2014 the twelfth-walkthrough round (v0.99.0): the calm update hand-off (no more 'environment crashed' flash + self-healing failed installs), the chat timeline rail, the composer focus fix, honest + resilient Mermaid, the minimized-rail label chips, and Linux ARM64 bundles"
     },
     {
       "date": "2026-09-17",
-      "label": "R102 — the thirteenth-walkthrough round (v0.100.0): Linux keys that actually save (async + bounded + the disclosed key-file fallback), the settings sidebar restored to the left panel, the Mermaid viewer (zoom/pan/source), the roomy minimized rail, and the quiet composer"
+      "label": "R102 \u2014 the thirteenth-walkthrough round (v0.100.0): Linux keys that actually save (async + bounded + the disclosed key-file fallback), the settings sidebar restored to the left panel, the Mermaid viewer (zoom/pan/source), the roomy minimized rail, and the quiet composer"
     },
     {
       "date": "2026-09-18",
-      "label": "R104 — the fourteenth-walkthrough round (v0.101.0): the update hand-shake (Download → the staged row → Restart-and-update-now confirmation, Discard, the About-tab mount-resume) + the Linux AppImage update made real (the arch-matched asset pick + the atomic same-dir replace + the automatic relaunch — the v0.100.0 'Restarting into 0.100.0 → Connecting to Agent Core → still 0.99.0' arc answered at both roots)"
+      "label": "R104 \u2014 the fourteenth-walkthrough round (v0.101.0): the update hand-shake (Download \u2192 the staged row \u2192 Restart-and-update-now confirmation, Discard, the About-tab mount-resume) + the Linux AppImage update made real (the arch-matched asset pick + the atomic same-dir replace + the automatic relaunch \u2014 the v0.100.0 'Restarting into 0.100.0 \u2192 Connecting to Agent Core \u2192 still 0.99.0' arc answered at both roots)"
     },
     {
       "date": "2026-09-19",
-      "label": "R108 — the seventeenth-walkthrough round (v0.104.0): the companion actually runs (the embedded-bundle release build + the hard CI gate, arm64/universal splits, the stable signing key, the boot trail + on-device crash screen + logcat filters) and the Clay rework (glow-fades deleted, clay as shadow+form, chrome quieter)"
+      "label": "R108 \u2014 the seventeenth-walkthrough round (v0.104.0): the companion actually runs (the embedded-bundle release build + the hard CI gate, arm64/universal splits, the stable signing key, the boot trail + on-device crash screen + logcat filters) and the Clay rework (glow-fades deleted, clay as shadow+form, chrome quieter)"
     },
     {
       "date": "2026-09-19",
-      "label": "R109 — the eighteenth round (v0.105.0): the companion REBUILT in clay (the design system v2, the floating bar, the setup wizard, the connect flow with pinch-zoom scanning, the markdown transcript with live caret, the keyboard fix) + the live link (notifications stream, the always-visible status pill, the flaky-TLS reliability fix) + the phone configures the desktop (providers/models/agents/prompts/preferences + the usage dashboard) with the desktop-side device-token blocklist + ARM64-only APK"
+      "label": "R109 \u2014 the eighteenth round (v0.105.0): the companion REBUILT in clay (the design system v2, the floating bar, the setup wizard, the connect flow with pinch-zoom scanning, the markdown transcript with live caret, the keyboard fix) + the live link (notifications stream, the always-visible status pill, the flaky-TLS reliability fix) + the phone configures the desktop (providers/models/agents/prompts/preferences + the usage dashboard) with the desktop-side device-token blocklist + ARM64-only APK"
     },
     {
       "date": "2026-09-19",
-      "label": "R112 — the nineteenth round: remote access over the cloud relay (the one-time Cloudflare Worker at acute-relay.anikuta.workers.dev, the desktop connector's outbound tunnel, the phone's LAN-first/relay-last ladder) + the R110 #1 disconnect-loop root fixes on both sides of the wire + pairing-screen items #4/#5/#6 — suites 2525/4153/210 all green — v0.106.0 released"
+      "label": "R112 \u2014 the nineteenth round: remote access over the cloud relay (the one-time Cloudflare Worker at acute-relay.anikuta.workers.dev, the desktop connector's outbound tunnel, the phone's LAN-first/relay-last ladder) + the R110 #1 disconnect-loop root fixes on both sides of the wire + pairing-screen items #4/#5/#6 \u2014 suites 2525/4153/210 all green \u2014 v0.106.0 released"
     },
     {
       "date": "2026-09-20",
-      "label": "R113 — the twentieth round: live sync between every device (the events bus + GET /events/stream consumed by both clients — remote turns stream live through the same reducers, appearance + settings propagate) + the space-honest shells (the phone's Sessions tab merged into Projects, the desktop's page headers deleted, the dead sessions screen removed) + the mobile session replica (the composer control row, the rich transcript cards, the keyboard fix) + providers configured-first + the prompt discipline round — suites 2570/4255/332 all green — v0.107.0 released"
+      "label": "R113 \u2014 the twentieth round: live sync between every device (the events bus + GET /events/stream consumed by both clients \u2014 remote turns stream live through the same reducers, appearance + settings propagate) + the space-honest shells (the phone's Sessions tab merged into Projects, the desktop's page headers deleted, the dead sessions screen removed) + the mobile session replica (the composer control row, the rich transcript cards, the keyboard fix) + providers configured-first + the prompt discipline round \u2014 suites 2570/4255/332 all green \u2014 v0.107.0 released"
     },
     {
       "date": "2026-09-20",
-      "label": "R114 — the twenty-first round: the sync foundation (the meta frames + turn.started + the server-side selected model — mode/model/chat-prefs live sync + the instant cross-device busy state) + the honest phone shell (the systemic empty-sheet fix, chromeless roots + colder-white clay, the color-coded dashboard, the projects accordion, per-tool transcript cards with the streaming write preview) + the phone owns its inventory (custom providers, the key pool, saved-model CRUD) + vision always-on for marked models (\"off\" retired) — suites 2608/4315/431 all green — v0.108.0 released"
+      "label": "R114 \u2014 the twenty-first round: the sync foundation (the meta frames + turn.started + the server-side selected model \u2014 mode/model/chat-prefs live sync + the instant cross-device busy state) + the honest phone shell (the systemic empty-sheet fix, chromeless roots + colder-white clay, the color-coded dashboard, the projects accordion, per-tool transcript cards with the streaming write preview) + the phone owns its inventory (custom providers, the key pool, saved-model CRUD) + vision always-on for marked models (\"off\" retired) \u2014 suites 2608/4315/431 all green \u2014 v0.108.0 released"
     },
     {
       "date": "2026-09-20",
-      "label": "R115 — the twenty-second round: the design language round (docs/design-language/android/ — eleven modular files, the owner's verdicts made binding) + first-run minimal (one-liner descriptions, animated hero/granted/pairing moments, the squared scanner with photo-QR decode, smart-paste manual entry) + pairing grown up (the big/fullscreen QR + copy pairing text + word-pair machineLabel names + the PC following phone-created sessions) + the phone shell reborn (the Yoga accordion fix, letter avatars + smart paths, the WhatsApp chat anatomy with the kebab menu, the deterministic keyboard dock, the breathing approvals tab, the dashboard donut, the More hub) — suites 4337 root + 2618 agent-core + 500 mobile all green — v0.109.0 released via the R115-r re-issue (the first tag's Mobile APK run died at npm ci on an out-of-sync lockfile; restored from the v0.108.0 base + the four QR deps re-added, tag re-issued at 442b29c, PUBLISHED 7/7 with the APK content-checked)"
+      "label": "R115 \u2014 the twenty-second round: the design language round (docs/design-language/android/ \u2014 eleven modular files, the owner's verdicts made binding) + first-run minimal (one-liner descriptions, animated hero/granted/pairing moments, the squared scanner with photo-QR decode, smart-paste manual entry) + pairing grown up (the big/fullscreen QR + copy pairing text + word-pair machineLabel names + the PC following phone-created sessions) + the phone shell reborn (the Yoga accordion fix, letter avatars + smart paths, the WhatsApp chat anatomy with the kebab menu, the deterministic keyboard dock, the breathing approvals tab, the dashboard donut, the More hub) \u2014 suites 4337 root + 2618 agent-core + 500 mobile all green \u2014 v0.109.0 released via the R115-r re-issue (the first tag's Mobile APK run died at npm ci on an out-of-sync lockfile; restored from the v0.108.0 base + the four QR deps re-added, tag re-issued at 442b29c, PUBLISHED 7/7 with the APK content-checked)"
     },
     {
       "date": "2026-09-21",
-      "label": "R116 — the twenty-third round: the polish round (the owner's v0.109.0 walkthrough, 59 verdicts in 13 waves + the audit: the sheet/tab-bar/header chrome, the manual-pairing TLS bug dead both sides, the portrait monochrome scanner, the PC dialog's portaled fullscreen QR, the dynamic dashboard on /usage/detailed with the PC's model colors, the providers' full model form + 35s tests, the projects clay well, the kebab dropdown + pill composer + delivery ticks + compact tool cards) — mobile 25 suites 550/550, root 4337/4337 — v0.110.0 released"
+      "label": "R116 \u2014 the twenty-third round: the polish round (the owner's v0.109.0 walkthrough, 59 verdicts in 13 waves + the audit: the sheet/tab-bar/header chrome, the manual-pairing TLS bug dead both sides, the portrait monochrome scanner, the PC dialog's portaled fullscreen QR, the dynamic dashboard on /usage/detailed with the PC's model colors, the providers' full model form + 35s tests, the projects clay well, the kebab dropdown + pill composer + delivery ticks + compact tool cards) \u2014 mobile 25 suites 550/550, root 4337/4337 \u2014 v0.110.0 released"
     },
     {
       "date": "2026-09-22",
-      "label": "R117 — the twenty-fourth round: the system round (memory that remembers [workspace tier + policy live + auto-formation + session_recall + CLI binding], the prompt-engineering pass [round-tags stripped, caps calibrated, fences, the sub-agent carve-out, browser_control restructured], robust orchestration [auto-retry, guidance, structured envelopes, mobile parity], error hardening [crash handlers, the tool safety net, content caps], the honest PC transcript [failure visibility, ticks, hierarchy, memoization], and the Android design elevation [the contrast-verified token/primitive/presence/hero waves + CI-enforced WCAG pins]) — all suites green + the live-provider E2E proof — v0.111.0 next (the release round owns the version gate)"
+      "label": "R117 \u2014 the twenty-fourth round: the system round (memory that remembers [workspace tier + policy live + auto-formation + session_recall + CLI binding], the prompt-engineering pass [round-tags stripped, caps calibrated, fences, the sub-agent carve-out, browser_control restructured], robust orchestration [auto-retry, guidance, structured envelopes, mobile parity], error hardening [crash handlers, the tool safety net, content caps], the honest PC transcript [failure visibility, ticks, hierarchy, memoization], and the Android design elevation [the contrast-verified token/primitive/presence/hero waves + CI-enforced WCAG pins]) \u2014 all suites green + the live-provider E2E proof \u2014 v0.111.0 next (the release round owns the version gate)"
     },
     {
       "date": "2026-09-22",
-      "label": "R118 — the twenty-fifth round: the fit-and-finish round (the owner's v0.111.0 device report answered: the adaptive tab bar, the sheet system rebuilt, the in-place kebab, the delivery states on the message body, the vertical dashboard, the provider hero + folder creation + multi-host, the PC's manual-pairing ladder + QR toggle + restart marker) — mobile 38 suites 811/811, agent-core 145/2734, root 252/4491, review-passed — v0.112.0 released"
+      "label": "R118 \u2014 the twenty-fifth round: the fit-and-finish round (the owner's v0.111.0 device report answered: the adaptive tab bar, the sheet system rebuilt, the in-place kebab, the delivery states on the message body, the vertical dashboard, the provider hero + folder creation + multi-host, the PC's manual-pairing ladder + QR toggle + restart marker) \u2014 mobile 38 suites 811/811, agent-core 145/2734, root 252/4491, review-passed \u2014 v0.112.0 released"
     },
     {
       "date": "2026-09-22",
-      "label": "R119 — the twenty-sixth round: the session-center round (the owner's v0.112.0 device report: the single-tier composer, the provider-accordion model menu + animated level swaps, the queued message honest on both platforms [PC as-message + duplicate suppressed; mobile after-the-turn], the TurnBlock center [one visual turn per exchange], and the provider capability probe [tools accepted/called/rejected] + the raw providerError on mobile) — mobile 40 suites 870/870, agent-core 146/2742, root 253/4510, review-passed — v0.113.0 released"
+      "label": "R119 \u2014 the twenty-sixth round: the session-center round (the owner's v0.112.0 device report: the single-tier composer, the provider-accordion model menu + animated level swaps, the queued message honest on both platforms [PC as-message + duplicate suppressed; mobile after-the-turn], the TurnBlock center [one visual turn per exchange], and the provider capability probe [tools accepted/called/rejected] + the raw providerError on mobile) \u2014 mobile 40 suites 870/870, agent-core 146/2742, root 253/4510, review-passed \u2014 v0.113.0 released"
     },
     {
       "date": "2026-09-23",
-      "label": "R120 — the twenty-seventh round: the center redo + the honest harness (the owner's v0.113.0 device report: the PC message-timeline minimap replacing the dot rail, file edits/created files/streaming finally rendering in both centers, the one-line turn footer replacing the 8-9 duration blocks, the refresh-mid-turn live-state rehydrate off the backend turn registry [GET /sessions/:id/live + the mirror/detach/retire reconciler], the heading-ladder markdown fixes, the harness's turn-end law [a turn ends ONLY on a real final answer, a labeled abort, or a surfaced error — the midway silent stop dead] + the continue-context resume, the PC updater's dead-token anonymous retry + self-service PAT re-pairing, the Android providers/models overhaul [toast law, smart model fetch, reasoning ladder, save-before-add], the completed composer law [@-mentions, attachment viewers, the Task-list menu], and the live battery script) — mobile 43 suites 952/952, agent-core 148/2789, root 260/4591, review-passed, LIVE-BATTERY PROVEN on a real OpenRouter turn — v0.114.0 released"
+      "label": "R120 \u2014 the twenty-seventh round: the center redo + the honest harness (the owner's v0.113.0 device report: the PC message-timeline minimap replacing the dot rail, file edits/created files/streaming finally rendering in both centers, the one-line turn footer replacing the 8-9 duration blocks, the refresh-mid-turn live-state rehydrate off the backend turn registry [GET /sessions/:id/live + the mirror/detach/retire reconciler], the heading-ladder markdown fixes, the harness's turn-end law [a turn ends ONLY on a real final answer, a labeled abort, or a surfaced error \u2014 the midway silent stop dead] + the continue-context resume, the PC updater's dead-token anonymous retry + self-service PAT re-pairing, the Android providers/models overhaul [toast law, smart model fetch, reasoning ladder, save-before-add], the completed composer law [@-mentions, attachment viewers, the Task-list menu], and the live battery script) \u2014 mobile 43 suites 952/952, agent-core 148/2789, root 260/4591, review-passed, LIVE-BATTERY PROVEN on a real OpenRouter turn \u2014 v0.114.0 released"
     },
     {
       "date": "2026-09-24",
-      "label": "R124 — the twenty-eighth round: the Android in-app APK updater (the acute-installer module + the manifest plugin + the anonymous-first policy + the settings screen), the desktop quick-nav's four verdicts (width-dominant magnification, the scroll-owned highlight, the click-dismissed preview, the border-hugging rail + the padding floor), the Add-Model configure-first + the smart live-catalog pre-fill + the batch's visible fetch, the model-test error auto-dismiss, the mobile task-list confirmation + the plain queue prompt + the thinking affordance + the retry card's bottom edge, the mobile dashboard redesign + the sheet's drag-to-dismiss, the staged 1280×720 browser capture, and the ZCode knowledge base) — mobile 46 suites 1029/1029, agent-core 2846, root 267/4709, review-passed — v0.117.0 released"
+      "label": "R124 \u2014 the twenty-eighth round: the Android in-app APK updater (the acute-installer module + the manifest plugin + the anonymous-first policy + the settings screen), the desktop quick-nav's four verdicts (width-dominant magnification, the scroll-owned highlight, the click-dismissed preview, the border-hugging rail + the padding floor), the Add-Model configure-first + the smart live-catalog pre-fill + the batch's visible fetch, the model-test error auto-dismiss, the mobile task-list confirmation + the plain queue prompt + the thinking affordance + the retry card's bottom edge, the mobile dashboard redesign + the sheet's drag-to-dismiss, the staged 1280\u00d7720 browser capture, and the ZCode knowledge base) \u2014 mobile 46 suites 1029/1029, agent-core 2846, root 267/4709, review-passed \u2014 v0.117.0 released"
     },
     {
       "date": "2026-09-24",
-      "label": "R125 — the twenty-ninth round: the live-center truth pass — the duplicate live-write rows killed (the single-owner law: the panel threads the pending writes to EXACTLY ONE tail-owning section), the fold/live interlock's freshness-gated positional fallback, the de-blue pass (the live tool language speaks the theme accent), the occlusion-proof Windows capture (PrintWindow on the staged child webview + the honest source marker), the per-session composer drafts (desktop + mobile), the visible self-feedback ledger (the status route + the settings strip + the mid-turn checkpoint frames + the post-turn toast) + the mid-turn checkpoint writes, the mobile runaway auto-scroll fix (maintainVisibleContentPosition) + the versioned update row, and the first ZCode adoptions (provider-usage token anchoring + typed compaction decisions)) — mobile 48 suites 1049/1049, agent-core 2903, root 274/4805, review-passed — v0.118.0 released"
+      "label": "R125 \u2014 the twenty-ninth round: the live-center truth pass \u2014 the duplicate live-write rows killed (the single-owner law: the panel threads the pending writes to EXACTLY ONE tail-owning section), the fold/live interlock's freshness-gated positional fallback, the de-blue pass (the live tool language speaks the theme accent), the occlusion-proof Windows capture (PrintWindow on the staged child webview + the honest source marker), the per-session composer drafts (desktop + mobile), the visible self-feedback ledger (the status route + the settings strip + the mid-turn checkpoint frames + the post-turn toast) + the mid-turn checkpoint writes, the mobile runaway auto-scroll fix (maintainVisibleContentPosition) + the versioned update row, and the first ZCode adoptions (provider-usage token anchoring + typed compaction decisions)) \u2014 mobile 48 suites 1049/1049, agent-core 2903, root 274/4805, review-passed \u2014 v0.118.0 released"
     },
     {
       "date": "2026-09-25",
-      "label": "R126 — the thirtieth round: THE CLAY COMPANION REDESIGN — the complete PC UI on the Android app's design language (the clay foundation + the constitution docs written first + the redesigned navigation model + twelve review-gated sub-agent waves covering every screen: dashboard, usage, ProjectView, the ~950-line dead-layout retirement, AgentChatPanel, WorkingSection's de-blue, Composer, the right sidebar, the settings hub's fifteen tabs, the wizard, the coherence sweep) + the AI-AGENT-PLAYBOOK (the owner-directed behavior contract for every future agent) + the ~90-spelling drift paydown (hex 101→74, arbitrary 1635→1519, JS hovers 21→13)) — root 274 files/4840, review-passed — v0.119.0 released; rollback door backup/pre-redesign-r126"
+      "label": "R126 \u2014 the thirtieth round: THE CLAY COMPANION REDESIGN \u2014 the complete PC UI on the Android app's design language (the clay foundation + the constitution docs written first + the redesigned navigation model + twelve review-gated sub-agent waves covering every screen: dashboard, usage, ProjectView, the ~950-line dead-layout retirement, AgentChatPanel, WorkingSection's de-blue, Composer, the right sidebar, the settings hub's fifteen tabs, the wizard, the coherence sweep) + the AI-AGENT-PLAYBOOK (the owner-directed behavior contract for every future agent) + the ~90-spelling drift paydown (hex 101\u219274, arbitrary 1635\u21921519, JS hovers 21\u219213)) \u2014 root 274 files/4840, review-passed \u2014 v0.119.0 released; rollback door backup/pre-redesign-r126"
     }
   ],
   "quality": {
-    "ci": "Local gates at the R126 close: root tsc CLEAN + eslint CLEAN (whole project) + 274 files/4840 tests GREEN + design-audit CLEAN with the drift ratchet DOWN (hex 101→74, arbitrary values 1635→1519, heavy weights 16→12, JS hovers 21→13) + build green (mermaid chunk ok) + e2e 12/12 vs the built dist + license clean. HONEST LIMITS: no Windows/Android device in this sandbox — the streaming-state materials, the real-sidecar test bands, and the secondary OS windows are verified at pin level (the owner's device pass is the live confirmation); the live browser passes rode the dev server with the demo fixtures + route mocks where the sidecar was down.",
+    "ci": "Local gates at the R129 close: root tsc CLEAN + eslint CLEAN (whole project) + 296 files/5,205 tests GREEN (baseline R128 292/5,145 \u2014 the deltas: the scratchpad suite, the ctx1 replay-hygiene suite, the ctx2 steward-gates suite, the sf-accuracy suite, the re-pinned Sidebar/compaction/feedback pins) + agent-core tsc CLEAN + 168 files/3,090 + mobile tsc CLEAN + 48 suites/1,096 + design-audit CLEAN at baseline (R1 100/101, R2 1536/1635, R3 0/0, R4 15/16, R5 13/21) + build green (mermaid chunk ok) + e2e 12/12 + license CLEAN (299 deps) + docs:check 283/0/0 + version:check 7/7 at 0.122.0. HONEST LIMITS: no provider key in this sandbox \u2014 the context steward's live-model behavior (the 90% fire, the summary quality, the re-injection) is pin-proven at unit + integration level and rides the owner's device pass; the on-device Android rendering likewise; the group-hover rules ride @media (hover:hover) \u2014 probe-verified on desktop geometry.",
     "suites": [
       {
         "name": "frontend",
         "tests": 4709,
-        "detail": "267 files / 4709 passed at the R124 close (was 4676): MessageTimeline 14 (the four-verdict contract — width-dominant math, scroll ownership pure + wired, click-dismiss + wake, click-sets-active), ModelsProvidersTab 96 (configure-first + smart pre-fill + batch fetch visibility + the 12s fail auto-dismiss), agent-browser-capture 21 + BrowserPanel 57 + RightSidebar 15 + the bridge 10 (the staged capture), stream-store 69, ScreenshotRow 5."
+        "detail": "267 files / 4709 passed at the R124 close (was 4676): MessageTimeline 14 (the four-verdict contract \u2014 width-dominant math, scroll ownership pure + wired, click-dismiss + wake, click-sets-active), ModelsProvidersTab 96 (configure-first + smart pre-fill + batch fetch visibility + the 12s fail auto-dismiss), agent-browser-capture 21 + BrowserPanel 57 + RightSidebar 15 + the bridge 10 (the staged capture), stream-store 69, ScreenshotRow 5."
       },
       {
         "name": "agent-core",
         "tests": 2846,
-        "detail": "2903 tests at the R125 close (was 2846): r125-windows-capture 16 (the PrintWindow capsule's shape + the fallback markers), r124-browser-capture 13→19 (ownerPid threading + the source reply), feedback-status 10 + the checkpoint 3, the writer 13→18 + the routes 12→16 (the phase param, the status bookkeeping, GET /feedback/status), context-compaction 17→30 (providerUsageAnchor + the anchor-forces/vetoes pins + the typed decisions)."
+        "detail": "2903 tests at the R125 close (was 2846): r125-windows-capture 16 (the PrintWindow capsule's shape + the fallback markers), r124-browser-capture 13\u219219 (ownerPid threading + the source reply), feedback-status 10 + the checkpoint 3, the writer 13\u219218 + the routes 12\u219216 (the phase param, the status bookkeeping, GET /feedback/status), context-compaction 17\u219230 (providerUsageAnchor + the anchor-forces/vetoes pins + the typed decisions)."
       },
       {
         "name": "mobile",
@@ -406,12 +406,12 @@
     }
   ],
   "plan": {
-    "current": "R128 delivered: the reliability & trust pass — the external update supervisor, the side-placement tooltips + the fill/newest-end/stagger chart laws, the honest sidebar (toggle-only + confirmations + the General conversation), the single-icon chat cards + the living ledger row + the toolCallId ordering, the mobile toolActivity trap closed at the source, the ten agent-tool honesty fixes, the ZCode D3+D5 compaction adoption, the try-next-key model tests, and the evalJob browser-bridge fix",
+    "current": "R129 delivered: the context-steward round \u2014 the five-reference context research (opencode/cline/oh-my-pi/kilocode/zcode) implemented as the modular pipeline (supersede-stale-reads, old-attachment stripping, the 90% auto-compact gate, the anchored summary template + the deterministic Files appendix, the post-compact re-injection, the preflight output cap, the revert-context pin \u2014 docs/runbooks/CONTEXT-MANAGEMENT.md), the Scratchpad rework (bottom placement, per-session workspace folders, the delete-materiality law), the sidebar row anatomy (no arrows, separators, the hover text-shrink), the mobile separated-elements transcript (flat replies, thinking its own row, proper tool cards), the self-feedback accuracy set (the machine tool tally, the evidence/attribution/dedup laws), and the release-target selection (scripts/release/targets.json \u2014 v0.122.0 ships Windows + the APK, Linux skipped)",
     "upcoming": [
-      "The owner's device pass on v0.121.0 (the update supervisor's restart guarantee + the Windows toast + update-supervisor.log; the mobile tool cards with the one-tap recovery if his stored pref was hidden; the try-next-key walk; the ledger live row during a real turn)",
+      "The owner's device pass on v0.122.0 (the context steward on his free-tier models \u2014 the 90% auto-compact before the next request, superseded-read stubs, the compaction summary's fixed sections + Files appendix + the re-injected working-set pointers; the Scratchpad section at the bottom with per-session workspace folders; the flat mobile transcript with separated thinking + proper tool cards; the leaner release: Windows + APK, Linux skipped)",
       {
         "title": "The ZCode adoption queue (continued)",
-        "detail": "D4 post-compact Read-state re-injection; then the unified per-tool resultBudget + artifact spill (D6), the output-token continuation (D7), and cache_control breakpoints (D8) for Anthropic-format providers."
+        "detail": "D4 (post-compact re-injection) landed in R129; next: the unified per-tool resultBudget + artifact spill (D6), the output-token continuation (D7), and cache_control breakpoints (D8) for Anthropic-format providers."
       },
       {
         "title": "The standing queue",
@@ -419,14 +419,14 @@
       }
     ],
     "principles": [
-      "Local-first — all processing on-device",
-      "Additive architecture — no pillar ever forces a rewrite",
-      "Quality over speed — every round verified before push"
+      "Local-first \u2014 all processing on-device",
+      "Additive architecture \u2014 no pillar ever forces a rewrite",
+      "Quality over speed \u2014 every round verified before push"
     ]
   },
   "round": {
-    "current": "R128 LANDED — THE RELIABILITY & TRUST PASS on v0.120.0: the owner's device-pass feedback + the validated 18-entry self-feedback ledger as NINE review-gated waves: (F) the constitution amendments FIRST (COMPONENTS §6's side-placement tooltip law RETIRING the R127 center-on-bar law, the bar-fill law, the reinforced newest-end law, the ToolLine single-icon anatomy; SCREENS §2's law #2 REVERSED — the project row toggles only — + the deletes-confirm law #8 + the General-conversation law #9; MOTION §4's ledger processing row); (BATCH 1) W2 the chart laws (placeTooltipBeside + stretchDayBarGeometry + the useLayoutEffect data-identity newest-end + the 0.4s stagger cap everywhere), W3 the sidebar (row=toggle-only, overlay action clusters, the danger ConfirmDialog, the backend cascade + the 'deleted' frame, the boot-seeded delete-protected General project + the start-general action), W5 the chat cards (the single-icon anatomy, the toolCallId threading + callSeq fold order, the numbered batch command list, the turn-end ledger live row), W6 the mobile trap closed (the desktop Hidden rung retired + the one-tap recovery on BOTH surfaces, the pending-flush appearance sync, the interrupted-tool settling, writePath anywhere); (BATCH 2) W1 THE UPDATER OVERHAUL (the external update-supervisor.mjs — a separate process surviving app close: wait/guard/relaunch/notify/log, the Rust per-leg spawns with the '/S /R' fallback's unowned NSIS-hook leg retired, the update_installed notification belt), W7b ten validated agent-tool fixes (the absolute-path rebase, no-matches≠failure, the blocklist matched-pattern naming + the loopback carve-out, the win32 node -e temp-files, the edit_file line diagnostics, the nul log-redirect fix, the memory Jaccard dedup, the search hints, the 2>nul warnings), W8 the ZCode D3+D5 compaction adoption (round-aligned selection, the stale-anchor invalidation, the rapid-refill circuit breaker), W4 the try-next-key model tests; (BATCH 3) W7a the browser tools (THE evalJob script-shape fix — every browser_control click was dead on every page — the describe:false raw screenshots + the un-minimize restore-retry, the get_state live reconcile, the viewport-intersecting read_dom). ALL GATES GREEN: root 292/5,145 + agent-core 164/3,035 + mobile 1,082 + eslint + design-audit + build + e2e 12/12 + license + docs:check 275/0/0; LIVE-VERIFIED on a real sidecar (the side tooltips measured 8px-beside both directions, the 42px fill cap, the exact newest-end landings, the 0.348s stagger cap, the sidebar toggle-only + confirm + General pinned, the numbered batch rows, the 3-svg file rows, zero console errors) with screenshots in shots/r128/. The rollback door: backup/pre-r128-improvements (b4eb932).",
-    "next": "R128+: (a) the owner's device pass on v0.120.0 — the mobile reconnect ladder + the pref recovery + the agent's batched behavior are the pin-level-only contracts awaiting live confirmation; (b) the mobile stale list (the mobile file-type palette, the thinking-well timed close, the status-chip class legs); (c) the ZCode queue (D3 invalidateRuntimeTokenUsage — the post-compaction stale-anchor window W4 inherited, D5 the rapid-refill breaker, D4 post-compact re-injection); (d) the standing queue (the menu-timer hover ratchet, the release-flow speed round, multi-PC from the phone, the StablePrefix prompt-cache split)."
+    "current": "R129 LANDED \u2014 THE CONTEXT-STEWARD ROUND on v0.121.0: the owner's second-improvement directive as SEVEN waves on the F foundation (the five fresh context-management research reports + the constitution amendments + the plan): (S) the sidebar + Scratchpad rework \u2014 the chevron glyph RETIRED entirely (the owner's second ask), project separators, the hover actions switched from overlay to RESERVED-WIDTH (the text SHRINKS: probe-verified 28px buttons with the name box 200\u2192100px), one ghost-button grammar, the Scratchpad at the very BOTTOM (renamed from General, per-session workspace folders via migration 0043 + the effective-root threading through prepareTurn + the meter, deleting a scratchpad session removes its folder \u2014 live-verified in the browser), normal deletes records-only with honest dialogs; (M) the mobile transcript's SEPARATED ELEMENTS \u2014 the TurnBlock container retired: the rail a plain line, thinking its own collapsible row, tool cards as proper padded clay cards (open by default), the reply FLAT on the background (no bubble) \u2014 the association ladder + queued law + user bubble + data model all preserved; (CTX-1+CTX-2) THE CONTEXT STEWARD \u2014 supersede-stale-reads (omp+cline's top verdict), old-attachment stripping, the actionable truncation marker, the 90% AUTO-COMPACT gate (AUTO_COMPACT_RATIO \u2014 awaited in the turn loop, 'without performing any of the next tasks'), the anchored five-section summary template + the deterministic Files appendix, the post-compact re-injection (ZCode D4, reinjectedPaths on the event), clampOutputTokens at both call sites, the revert-context pin end-to-end \u2014 the pipeline documented in docs/runbooks/CONTEXT-MANAGEMENT.md (S1-S6, every constant, the honest SKIP table); (GHA) the release-target selection \u2014 scripts/release/targets.json read by both release workflows (v0.122.0: windows+android, linux skipped; the publisher's contract trims the Linux assets); (SF) the feedback reporter's accuracy set \u2014 the machine-counted TOOL OUTCOMES preamble, the PREVIOUSLY-REPORTED dedup window, the EVIDENCE (CONFIRMED/SUSPECTED) + ATTRIBUTION + DEDUP laws. ALL GATES GREEN: root tsc + 296 files/5,205 tests + agent-core 168/3,090 + mobile 48/1,096 + eslint 0 + design-audit at baseline + build + e2e 12/12 + license CLEAN + docs:check 283/0/0 + version:check 7/7 at 0.122.0. LIVE-VERIFIED on a real sidecar (the Scratchpad section last with its kicker + New chat, zero chevrons, the hover reveal + shrink measured, the row-click expand with the URL unchanged, the dialog copies, the folder removal on confirm, the per-session workspace at create, zero console errors) with screenshots in shots/r129/. The rollback door: backup/pre-r129-improvements (521ce82).",
+    "next": "R130+: (a) the owner's device pass on v0.122.0 \u2014 the 90% gate's live refill behavior on his free-tier models, the Scratchpad on both surfaces, the mobile separated transcript on-device, the ledger's accuracy set on real turns; (b) the standing context queue \u2014 the prompt-cache breakpoint discipline (C9: the volatile system-prompt sections need a prompts.ts restructuring round; cachedInputTokens already reads, so the win is measurable), the artifact-spill revisit if a tool family needs full-body recall; (c) the standing queue (the menu-timer hover ratchet, multi-PC from the phone, the StablePrefix split)."
   },
-  "ci": "GREEN — v0.119.0 PUBLISHED (release 396435995, latest, end-state verified: 7/7 assets — Windows x64-setup, the two AppImages, the two debs, the android-arm64 APK, the launcher kit; all five workflows green on the R126 commit 402e1df: CI 36112145951, Rust Checks 36112146038, Mobile CI 36112145977, Release + Mobile APK on the tag)."
+  "ci": "GREEN \u2014 v0.119.0 PUBLISHED (release 396435995, latest, end-state verified: 7/7 assets \u2014 Windows x64-setup, the two AppImages, the two debs, the android-arm64 APK, the launcher kit; all five workflows green on the R126 commit 402e1df: CI 36112145951, Rust Checks 36112146038, Mobile CI 36112145977, Release + Mobile APK on the tag)."
 }
