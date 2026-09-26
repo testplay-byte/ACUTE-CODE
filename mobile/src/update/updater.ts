@@ -248,6 +248,13 @@ export async function cancelAppUpdate(deps: UpdateDeps = {}): Promise<void> {
   await (deps.installer ?? installerFloor).cancelDownload();
 }
 
+/** R130-D — discard a downloaded update (the owner's "delete it from there"
+ * affordance once the APK has landed): deletes the cached file; a missing
+ * file still resolves (discarded is discarded). */
+export async function deleteDownloadedUpdate(path: string, deps: UpdateDeps = {}): Promise<void> {
+  await (deps.installer ?? installerFloor).deleteDownloadedApk({ path });
+}
+
 /** Hand the cached APK to the OS installer (the system's own confirm step
  * is the confirmation an APK install deserves). */
 export async function installAppUpdate(path: string, deps: UpdateDeps = {}): Promise<void> {

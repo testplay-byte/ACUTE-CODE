@@ -21,7 +21,7 @@ import java.io.IOException
  * "an update functionality for the Android application too… download the
  * latest version and be able to install the APK").
  *
- * FIVE exported functions, one purpose — the whole APK update lifecycle on
+ * FIVE+ONE exported functions, one purpose — the whole APK update lifecycle on
  * the phone, native so that the big file never crosses the JS bridge:
  *
  *   downloadApk({url, headers?, fileName}) → Promise<{path, size, bytes}>
@@ -35,6 +35,11 @@ import java.io.IOException
  *   cancelDownload()
  *       Cancels the in-flight download (the promise rejects with code
  *       "canceled"; the partial file is deleted).
+ *   deleteDownloadedApk({path}) → Promise<Boolean> (R130-D)
+ *       Discards one cached update file — the owner's "delete it from
+ *       there" affordance after a download lands. The path is validated
+ *       against the module's own updates dir; a missing file still
+ *       resolves TRUE (discarded is discarded).
  *   installApk({path}) → Promise<void>
  *       Fires the system package installer: the cached APK is handed to
  *       Android through a FileProvider content:// URI (the only sanctioned
@@ -287,6 +292,34 @@ class AcuteInstallerModule : Module() {
         true
       }
       promise.resolve(allowed)
+    }
+
+    // ── deleteDownloadedApk({path}) — discard a cached update (R130-D: the
+    // owner's "the user will also be given an option to cancel it from there
+    // or delete it from there") — deletes the one cached file; a missing
+    // file still resolves TRUE (discarded is discarded). The path is
+    // validated to live UNDER the module's own updates dir — a caller can
+    // never aim this at an arbitrary file. ──
+    AsyncFunction("deleteDownloadedApk") { options: Map<String, Any?>, promise: Promise ->
+      val path = options["path"] as? String
+      if (path.isNullOrBlank()) {
+        promise.reject("bad-argument", "deleteDownloadedApk needs a path", null)
+        return@AsyncFunction
+      }
+      val target = File(path)
+      val root = updatesDir.canonicalFile
+      if (!target.canonicalFile.startsWith(root)) {
+        promise.reject("bad-path", "the path is outside the updates cache", null)
+        return@AsyncFunction
+      }
+      try {
+        if (target.exists()) {
+          target.delete()
+        }
+        promise.resolve(true)
+      } catch (e: Exception) {
+        promise.reject("delete-failed", e.message ?: "could not delete the cached APK", e)
+      }
     }
 
     // ── openInstallPermissionSettings() — the one-tap grant path ─────────

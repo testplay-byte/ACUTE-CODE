@@ -7,6 +7,9 @@
  *   downloadApk(options) → Promise<{path, size}> — streaming download to the
  *       app's private cache, live "progress" events on the module
  *   cancelDownload() → Promise<boolean> — the honest stop button
+ *   deleteDownloadedApk({path}) → Promise<boolean> — discard a cached update
+ *       (R130-D, the owner's "delete it from there" ask; the path is
+ *       validated on the native side against the module's own updates dir)
  *   installApk({path}) → Promise<void> — hands the cached APK to the OS
  *       package installer via a FileProvider content URI
  *   canRequestInstalls() → Promise<boolean> — the "Install unknown apps"
@@ -49,6 +52,7 @@ type AcuteInstallerEventsMap = {
 declare class AcuteInstallerNativeModule extends NativeModule<AcuteInstallerEventsMap> {
   downloadApk(options: NativeDownloadOptions): Promise<NativeDownloadResult>;
   cancelDownload(): Promise<boolean>;
+  deleteDownloadedApk(options: { path: string }): Promise<boolean>;
   installApk(options: { path: string }): Promise<void>;
   canRequestInstalls(): Promise<boolean>;
   openInstallPermissionSettings(): Promise<boolean>;

@@ -34,6 +34,10 @@ export interface GithubFetch {
 export interface InstallerFloor {
   downloadApk(options: NativeDownloadOptions): Promise<NativeDownloadResult>;
   cancelDownload(): Promise<boolean>;
+  /** R130-D — discard one cached update file (the owner's "delete it from
+   *  there" affordance; the native side validates the path against the
+   *  module's own updates dir). */
+  deleteDownloadedApk(options: { path: string }): Promise<boolean>;
   installApk(options: { path: string }): Promise<void>;
   canRequestInstalls(): Promise<boolean>;
   openInstallPermissionSettings(): Promise<boolean>;
@@ -69,6 +73,7 @@ export const githubFetch: GithubFetch = {
 export const installerFloor: InstallerFloor = {
   downloadApk: (options) => AcuteInstaller.downloadApk(options),
   cancelDownload: () => AcuteInstaller.cancelDownload(),
+  deleteDownloadedApk: (options) => AcuteInstaller.deleteDownloadedApk(options),
   installApk: (options) => AcuteInstaller.installApk(options),
   canRequestInstalls: () => AcuteInstaller.canRequestInstalls(),
   openInstallPermissionSettings: () => AcuteInstaller.openInstallPermissionSettings(),

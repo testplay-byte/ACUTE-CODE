@@ -34,7 +34,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import Constants from "expo-constants";
-import { ChevronRight, Monitor, Settings2 } from "lucide-react-native";
+import { ChevronRight, Monitor, RefreshCw, Settings2 } from "lucide-react-native";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import {
   ClayCard,
@@ -56,6 +56,7 @@ import { useLink } from "@/link/use-link";
 import { useEventsEpoch } from "@/features/events";
 import { fetchProjects } from "@/features/config";
 import { fetchSessions } from "@/features/sessions";
+import { getCachedCheck } from "@/update/updater";
 import { mobLog, mobWarn } from "@/lib/log";
 
 /** The version the about card shows — the BUILD's own app.json version
@@ -87,6 +88,19 @@ export default function MoreScreen() {
   // or unpaired load hides the card entirely instead. ──
   const [stats, setStats] = useState<HubStats | null>(null);
   const [statsFailed, setStatsFailed] = useState(false);
+
+  // ── R130-D1 — the Update row's caption: the 24h auto-check's cached
+  //     answer when one exists ("v0.123.0 available · tap to update"),
+  //     else the plain check line (the R125-D law, moved with the row from
+  //     the settings hub). ──
+  const [updateCaption, setUpdateCaption] = useState("check for the latest APK");
+  useEffect(() => {
+    void getCachedCheck().then((cached) => {
+      if (cached?.kind === "available") {
+        setUpdateCaption(`v${cached.version} available · tap to update`);
+      }
+    });
+  }, []);
 
   // ── the live leg (home's pattern): a debounced session-frame batch moves
   // the sessions epoch — the running count follows it while this hub is
@@ -253,6 +267,29 @@ export default function MoreScreen() {
           <View style={styles.settingsText}>
             <TypeBodyStrong numberOfLines={1}>Settings</TypeBodyStrong>
             <TypeCaption numberOfLines={1}>Appearance, providers, agents</TypeCaption>
+          </View>
+          <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
+        </View>
+      </PressableCard>
+
+      {/* ── R130-D1 — THE UPDATE ENTRY, directly below Settings (the owner:
+          "in the More section, it should directly below the Settings option
+          give the Update option rather than going inside the Settings
+          option because those settings and these settings of the application
+          are different"). Phone-own like Appearance — never needs the host.
+          The caption leads with the CURRENT BUILD version (R125-D's
+          discoverability law) + the cached check's one-line answer. ── */}
+      <PressableCard
+        onPress={() => router.push("/settings/update")}
+        enterIndex={3}
+        accessibilityLabel={`Update — v${APP_VERSION}`}
+        testID="more-update"
+      >
+        <View style={styles.settingsInner}>
+          <ClayIconChip icon={RefreshCw} iconSize={22} size={44} />
+          <View style={styles.settingsText}>
+            <TypeBodyStrong numberOfLines={1}>Update</TypeBodyStrong>
+            <TypeCaption numberOfLines={1}>{`v${APP_VERSION} · ${updateCaption}`}</TypeCaption>
           </View>
           <ChevronRight size={18} color={tokens.textTertiary} strokeWidth={2.2} />
         </View>

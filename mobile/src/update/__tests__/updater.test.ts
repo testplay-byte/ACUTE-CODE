@@ -18,8 +18,8 @@
 
 import { beforeEach, describe, expect, it, jest } from "@jest/globals";
 
-import { checkForAppUpdate } from "../updater";
-import type { GithubFetch, GithubHttpAnswer } from "../installer-floor";
+import { checkForAppUpdate, deleteDownloadedUpdate } from "../updater";
+import type { GithubFetch, GithubHttpAnswer, InstallerFloor } from "../installer-floor";
 import { getSavedGithubToken, saveGithubToken } from "../updater";
 import * as SecureStore from "expo-secure-store";
 
@@ -39,6 +39,7 @@ jest.mock("../installer-floor", () => ({
       throw new Error("the real installer floor is mocked out of the jest suite");
     },
     cancelDownload: async () => false,
+    deleteDownloadedApk: async () => true,
     installApk: async () => undefined,
     canRequestInstalls: async () => true,
     openInstallPermissionSettings: async () => true,
@@ -175,6 +176,33 @@ describe("checkForAppUpdate (anonymous-first policy)", () => {
     const check = await checkForAppUpdate({ fetch });
     expect(check.kind).toBe("error");
     if (check.kind === "error") expect(check.message).toBe("airplane mode");
+  });
+});
+
+describe("deleteDownloadedUpdate (R130-D — the discard affordance)", () => {
+  it("hands the cached APK's path to the floor's deleteDownloadedApk — the screen's Delete button's whole job", async () => {
+    const calls: Array<{ path: string }> = [];
+    const floor: Pick<InstallerFloor, "deleteDownloadedApk"> = {
+      deleteDownloadedApk: async (options) => {
+        calls.push(options);
+        return true;
+      },
+    };
+    await deleteDownloadedUpdate("/cache/updates/app.apk", {
+      installer: floor as InstallerFloor,
+    });
+    expect(calls).toEqual([{ path: "/cache/updates/app.apk" }]);
+  });
+
+  it("a floor failure propagates (the screen's catch owns the toast)", async () => {
+    const floor: Pick<InstallerFloor, "deleteDownloadedApk"> = {
+      deleteDownloadedApk: async () => {
+        throw new Error("delete-failed");
+      },
+    };
+    await expect(
+      deleteDownloadedUpdate("/cache/updates/app.apk", { installer: floor as InstallerFloor }),
+    ).rejects.toThrow("delete-failed");
   });
 });
 
