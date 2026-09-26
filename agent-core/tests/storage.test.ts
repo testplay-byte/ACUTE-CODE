@@ -232,6 +232,11 @@ describe("openDatabase", () => {
       // session_recall appended to template/default allowlists carrying
       // memory_recall (the episodic companion rule).
       { version: 42, name: "0042_memory_scopes.sql" },
+      // ROUND-129 (R129-S, SCREENS.md §2 law #9 — the Scratchpad): the
+      // per-session workspace root — sessions.root_path (NULL = the project
+      // root is the workspace, the pre-R129 behavior; set only for
+      // Scratchpad sessions to <dataDir>/scratchpad/<sessionId>/).
+      { version: 43, name: "0043_session_root_path.sql" },
     ]);
     expect(appliedSecond).toEqual(appliedFirst);
   });

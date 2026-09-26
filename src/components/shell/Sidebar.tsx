@@ -8,13 +8,11 @@ import { Search } from "lucide-react";
 import {
   ArrowLeft,
   BarChart3,
-  ChevronDown,
   CircleAlert,
   FolderOpen,
   LayoutDashboard,
   LoaderCircle,
   MessageSquare,
-  MessageSquarePlus,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
@@ -41,8 +39,8 @@ import { useProjectChatStore } from "../../lib/project-chat-store";
 // danger ConfirmDialog — the R95-A styled replacement, imported (the one
 // spelling rule; the pre-R128 sidebar deleted with NO ask at all).
 import { ConfirmDialog } from "../settings/ConfirmDialog";
-// R128-W3 (SCREENS.md §2 law #9): the honest-degradation toast leg of the
-// General conversation's start button (older sidecar, no seeded row).
+// R129-S (SCREENS §2 law #9 — REWRITTEN from R128's General conversation):
+// the Scratchpad section's start button (older sidecar, no seeded row).
 import { pushLocalToast } from "../../hooks/use-notifications";
 // R99-C: the app-wide "an update is pending" signal — drives the accent dot
 // on the sidebar's Settings entries (the store persists across restarts and
@@ -67,24 +65,19 @@ async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): 
 
 const EXPANDED_KEY = "acute-code.sidebar.expandedProjects";
 
-/** R128-W3 (SCREENS §2 law #9 — the General conversation): the id of the
- * app's internal workspace project. The BACKEND owns the row (the boot seed
- * in agent-core storage/general-project.ts, delete-protected at
- * DELETE /projects/:id); the sidebar only pins it first in the list, hides
- * its delete affordance, and offers the header's start-a-general-chat
- * button. The spelling lives once here so it can never drift from the row
- * the sidecar seeds. */
+/** R129-S (SCREENS §2 law #9 — REWRITTEN from R128's General conversation):
+ * the id of the app's internal workspace project — the SCRATCHPAD. The
+ * BACKEND owns the row (the boot seed in agent-core
+ * storage/general-project.ts, delete-protected at DELETE /projects/:id,
+ * renamed "General" → "Scratchpad" this round); the sidebar renders it in
+ * its OWN separated section pinned at the very BOTTOM of the projects
+ * list (never mixed into the project rows, never pinned first — the R128
+ * pinGeneralFirst is RETIRED), hides its delete affordance, and carries
+ * the section's own "New chat" affordance on the SCRATCHPAD kicker row.
+ * The spelling lives once here so it can never drift from the row the
+ * sidecar seeds. */
 const GENERAL_PROJECT_ID = "general";
-const GENERAL_PROJECT_NAME = "General";
-
-/** R128-W3: the projects list renders General pinned FIRST, then the
- * backend's order (created_at DESC) untouched — a stable sort, so every
- * other row keeps exactly the position it had. */
-function pinGeneralFirst(list: Project[]): Project[] {
-  return [...list].sort((a, b) =>
-    a.id === GENERAL_PROJECT_ID ? -1 : b.id === GENERAL_PROJECT_ID ? 1 : 0,
-  );
-}
+const GENERAL_PROJECT_NAME = "Scratchpad";
 
 function readExpanded(): string[] {
   try { return JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]") as string[]; } catch { return []; }
@@ -759,9 +752,11 @@ function MinimizedRail({
   const { pathname } = useLocation();
   const projectsQuery = useProjects();
   const sessionsQuery = useSessions();
-  // R128-W3 (SCREENS §2 law #9): General pinned FIRST — the rail's tiles
-  // read in the same order the expanded panel's rows do.
-  const projects = pinGeneralFirst(projectsQuery.data ?? []);
+  // R129-S (SCREENS §2 law #9): the rail's tiles read in the same order the
+  // expanded panel's rows do — the backend's order (created_at DESC) puts
+  // the seeded Scratchpad row last (it is the oldest row); the expanded
+  // panel renders it in its own bottom section (see ProjectSection).
+  const projects = projectsQuery.data ?? [];
   const sessions = sessionsQuery.data ?? [];
   // ROUND-42 parity: a project with any running session shows the live dot.
   const runningSessions = useActiveStreams((s) => s.active);
@@ -1118,9 +1113,16 @@ function ProjectSection({
   const { pathname, search } = useLocation();
   const projectsQuery = useProjects();
   const sessionsQuery = useSessions();
-  // R128-W3 (SCREENS §2 law #9): General pinned FIRST, then the backend's
-  // order untouched.
-  const projects = pinGeneralFirst(projectsQuery.data ?? []);
+  // R129-S (SCREENS §2 law #9, REWRITTEN — the Scratchpad at the very
+  // BOTTOM): the list SPLITS — normal projects render in the project rows;
+  // the Scratchpad row (stable id "general") renders in its OWN separated
+  // section below (never mixed in, never pinned first — pinGeneralFirst is
+  // RETIRED). The backend's order (created_at DESC) already places the
+  // seeded row last (it is the oldest row); the split makes the placement
+  // structural, not accidental.
+  const allProjects = projectsQuery.data ?? [];
+  const projects = allProjects.filter((p) => p.id !== GENERAL_PROJECT_ID);
+  const scratchpad = allProjects.find((p) => p.id === GENERAL_PROJECT_ID);
   const sessions = sessionsQuery.data ?? [];
   const [showAddDialog, setShowAddDialog] = useState(false);
 
@@ -1154,7 +1156,7 @@ function ProjectSection({
   // INSTANTLY (owner: "I have to refresh the whole page" — the old raw-fetch
   // button never invalidated the sessions query).
   const createSession = useCreateSession();
-  // R128-W3: returns whether the session landed (the General button's
+  // R129-S: returns whether the session landed (the Scratchpad button's
   // honest-degradation leg needs to know — the row buttons ignore it).
   const createSessionFor = async (projectId: string, projectName: string): Promise<boolean> => {
     const agentId = agentsForNewSessions();
@@ -1176,22 +1178,131 @@ function ProjectSection({
   const agentsQueryForSessions = useAgents(false);
   const agentsForNewSessions = () => (agentsQueryForSessions.data ?? [])[0]?.id ?? null;
 
-  // R128-W3 (SCREENS §2 law #9): the header's start-a-general-conversation
-  // button — the ONE navigation trigger this wave adds. The General row is
-  // pinned first in the list; when it is missing (an older sidecar without
-  // the boot seed) the button still tries the normal createSession path
-  // against the "general" id, and degrades to a quiet toast when the
-  // backend refuses — the frontend NEVER auto-creates the project row.
-  const startGeneralConversation = async () => {
-    const general = projects.find((p) => p.id === GENERAL_PROJECT_ID);
-    if (general !== undefined) {
-      await createSessionFor(general.id, general.name);
+  // R129-S (SCREENS §2 law #9): the Scratchpad section's own start-a-chat
+  // button — the ONE navigation trigger the section carries (on its kicker
+  // row). When the row is missing (an older sidecar without the boot seed)
+  // the button still tries the normal createSession path against the
+  // "general" id, and degrades to a quiet toast when the backend refuses —
+  // the frontend NEVER auto-creates the project row.
+  const startScratchpadConversation = async () => {
+    if (scratchpad !== undefined) {
+      await createSessionFor(scratchpad.id, scratchpad.name);
       return;
     }
     const created = await createSessionFor(GENERAL_PROJECT_ID, GENERAL_PROJECT_NAME);
     if (!created) {
-      pushLocalToast("General workspace unavailable", undefined, "task_failed");
+      pushLocalToast("Scratchpad unavailable", undefined, "task_failed");
     }
+  };
+
+  // R129-S (SCREENS §2 laws #2 + #9): ONE row+well renderer shared by the
+  // normal projects map AND the Scratchpad section's row — the same
+  // ProjectRow/SessionRow grammar everywhere; the ONLY caller difference is
+  // the project delete affordance (law #9: the Scratchpad project is
+  // delete-protected — onDeleteRequest undefined).
+  const renderProjectTree = (
+    project: Project,
+    opts: { onDeleteRequest?: () => void },
+  ) => {
+    const isExpanded = expandedProjects.includes(project.id);
+    const isActive = activeProjectId === project.id;
+    const projSessions = projectSessions(project.id);
+    return (
+      <div>
+        {/* Project row — R128-W3 (SCREENS.md §2 law #2, REWRITTEN —
+            the R128 owner directive): the row body EXPANDS/COLLAPSES
+            its sessions, NOTHING else ("clicking on any of the
+            projects should not automatically switch the view to that
+            specific project — it should only expand or collapse the
+            sessions of it"). R129-S (law #2, REWRITTEN again): the
+            chevron GLYPH is retired ENTIRELY (the owner: "I was shown
+            the arrows on the left sides of each one of the projects,
+            which was not good. I told you to remove the arrows") — the
+            expand state reads from the session well beneath + the row's
+            open treatment. The + button starts a new session directly
+            (owner round-33). ROUND-42: the running animation lives HERE
+            when collapsed. */}
+        <ProjectRow
+          project={project}
+          active={isActive}
+          expanded={isExpanded}
+          running={runningProjects.has(project.id)}
+          onToggle={() => onToggleProject(project.id)}
+          onNewSession={() => void createSessionFor(project.id, project.name)}
+          onDeleteRequest={opts.onDeleteRequest}
+        />
+        {/* Sessions underneath */}
+        <AnimatePresence initial={false}>
+          {isExpanded && (
+            <motion.div
+              // R126 (MOTION §4, the disclosure grammar): expand rides
+              // the DISCLOSURE spring (one soft settle, {180, 24} —
+              // imported, never hand-rolled); collapse is a TIMING
+              // (200ms) so closing never bounces (the mobile R118-C
+              // law). The opacity fade rides both legs.
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0, transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] } }}
+              transition={DISCLOSURE_SPRING}
+              className="overflow-hidden"
+            >
+              {/* R126 (the Clay Companion redesign, mobile session-list
+                  law): the sessions render in ONE RECESSED WELL — the
+                  tree rail + per-row bordered cards (the R43 spelling)
+                  retire in favor of bg-well + hairline dividers between
+                  rows (the differentiation the owner's R43 verdict
+                  asked for, one spelling calmer). The well nests under
+                  the project row's tile column; rows are flat, the
+                  ACTIVE row pops with the accent tint + the 2px
+                  accentDeep bar. */}
+              <div
+                data-session-well
+                className="ml-[13px] mr-1 my-1 rounded-lg border bg-well py-1"
+                style={{ borderColor: styles.clayRim }}
+              >
+                {projSessions.slice(0, 8).map((session, i) => (
+                  <Fragment key={session.id}>
+                    {i > 0 && (
+                      <div
+                        aria-hidden
+                        className="mx-2 border-t"
+                        style={{ borderColor: styles.borderSubtle }}
+                      />
+                    )}
+                    <SessionRow
+                      session={session}
+                      projectId={project.id}
+                      active={session.id === activeSessionId}
+                      // R128-W3 (SCREENS.md §2 law #8): the delete
+                      // button ARMS the section's confirm dialog — the
+                      // mutation itself runs only on its confirm.
+                      onDeleteRequest={() =>
+                        setPendingDelete({
+                          kind: "session",
+                          id: session.id,
+                          projectId: project.id,
+                          title: session.title ?? "Untitled",
+                        })
+                      }
+                    />
+                  </Fragment>
+                ))}
+                {projSessions.length > 8 && (
+                  <button
+                    onClick={() => navigate(`/project/${project.id}`)}
+                    className="block w-full px-2 py-1 text-left text-[10px] tabular-nums transition-colors hover:bg-hover"
+                    style={{ color: styles.textTertiary }}
+                    aria-label={`Show all ${projSessions.length} sessions of ${project.name}`}
+                  >
+                    +{projSessions.length - 8} more
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
   };
 
   // R128-W3 (SCREENS §2 law #8): the confirm leg — ONLY the dialog's
@@ -1223,15 +1334,18 @@ function ProjectSection({
       {/* R100-F: the header rides THE one kicker (ui/Kicker) + the
           meta-mono count chip (10px floor, 500) + a 28px Add button on the
           accent-soft leg (the ROUND-42 black-cap + scale hover is retired).
-          R128-W3 (SCREENS §2 law #9): a SECOND small button sits beside the
-          Add — the start-a-general-conversation affordance (conversations
-          that need no folder). */}
+          R129-S (SCREENS §2 law #9, REWRITTEN): the header carries ONLY the
+          Add now — the Scratchpad's own "New chat" affordance moved onto the
+          SCRATCHPAD kicker row at the section's bottom (its section, its
+          action). */}
       <div className="flex items-center justify-between px-4 pb-2">
         <div className="flex items-center gap-1.5 min-w-0">
           <Kicker>Projects</Kicker>
           {projects.length > 0 ? (
             // R126: the count chip = the neutral badge tone (TOKENS §11 —
             // the well fill + the clay rim hairline + the secondary ink).
+            // R129-S: it counts the NORMAL projects only (the Scratchpad is
+            // its own section with its own identity).
             <span
               className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-full tabular-nums border"
               style={{ color: styles.textSecondary, background: styles.surfaceWell, borderColor: styles.clayRim }}
@@ -1241,18 +1355,6 @@ function ProjectSection({
           ) : null}
         </div>
         <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => void startGeneralConversation()}
-            aria-label="Start a general conversation"
-            title="Start a general conversation — no folder needed"
-            data-testid="start-general-conversation"
-            // R128-W3: the same ClayIconChip recipe as the Add button beside
-            // it (28px target, accent tint + deep glyph, hover deepens the
-            // tint) — one spelling, two affordances.
-            className="w-7 h-7 grid place-items-center rounded-lg bg-accent-tint text-accent-deep transition-colors hover:bg-accent-faded"
-          >
-            <MessageSquarePlus size={14} strokeWidth={2.5} />
-          </button>
           <button
             onClick={() => setShowAddDialog(true)}
             title="Add project"
@@ -1329,119 +1431,32 @@ function ProjectSection({
           </p>
         )}
 
-        {projects.map((project) => {
-          const isExpanded = expandedProjects.includes(project.id);
-          const isActive = activeProjectId === project.id;
-          const projSessions = projectSessions(project.id);
-          const isGeneral = project.id === GENERAL_PROJECT_ID;
-
-          return (
-            <div key={project.id}>
-              {/* Project row — R128-W3 (SCREENS.md §2 law #2, REWRITTEN —
-                  the R128 owner directive): the row body EXPANDS/COLLAPSES
-                  its sessions, NOTHING else ("clicking on any of the
-                  projects should not automatically switch the view to that
-                  specific project — it should only expand or collapse the
-                  sessions of it"). The dedicated chevron BUTTON is retired
-                  (a presentation glyph keeps the state readable); entering
-                  a conversation is a SESSION row's job. The + button starts
-                  a new session directly (owner round-33). ROUND-42: the
-                  running animation lives HERE when collapsed. */}
-              <ProjectRow
-                project={project}
-                active={isActive}
-                expanded={isExpanded}
-                running={runningProjects.has(project.id)}
-                onToggle={() => onToggleProject(project.id)}
-                onNewSession={() => void createSessionFor(project.id, project.name)}
-                // R128-W3 (law #9): the General project row carries NO
-                // delete affordance — the backend refuses its deletion
-                // (409 general_protected) and the UI never offers it.
-                onDeleteRequest={
-                  isGeneral
-                    ? undefined
-                    : () =>
-                        setPendingDelete({
-                          kind: "project",
-                          id: project.id,
-                          name: project.name,
-                          sessionCount: projSessions.length,
-                        })
-                }
+        {projects.map((project, i) => (
+          <Fragment key={project.id}>
+            {/* R129-S (SCREENS §2 law #2, REWRITTEN — the owner: "Add some
+                separators between them so that the projects are separate and
+                they look much more cleaner"): a hairline divider between
+                consecutive PROJECT rows (the session well's own divider
+                idiom — mx-2 border-t on the subtle hairline) plus my-1 of
+                breathing room per side; the first row carries none. */}
+            {i > 0 && (
+              <div
+                aria-hidden
+                className="mx-2 my-1 border-t"
+                style={{ borderColor: styles.borderSubtle }}
               />
-              {/* Sessions underneath */}
-              <AnimatePresence initial={false}>
-                {isExpanded && (
-                  <motion.div
-                    // R126 (MOTION §4, the disclosure grammar): expand rides
-                    // the DISCLOSURE spring (one soft settle, {180, 24} —
-                    // imported, never hand-rolled); collapse is a TIMING
-                    // (200ms) so closing never bounces (the mobile R118-C
-                    // law). The opacity fade rides both legs.
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0, transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] } }}
-                    transition={DISCLOSURE_SPRING}
-                    className="overflow-hidden"
-                  >
-                    {/* R126 (the Clay Companion redesign, mobile session-list
-                        law): the sessions render in ONE RECESSED WELL — the
-                        tree rail + per-row bordered cards (the R43 spelling)
-                        retire in favor of bg-well + hairline dividers between
-                        rows (the differentiation the owner's R43 verdict
-                        asked for, one spelling calmer). The well nests under
-                        the project row's tile column; rows are flat, the
-                        ACTIVE row pops with the accent tint + the 2px
-                        accentDeep bar. */}
-                    <div
-                      data-session-well
-                      className="ml-[13px] mr-1 my-1 rounded-lg border bg-well py-1"
-                      style={{ borderColor: styles.clayRim }}
-                    >
-                      {projSessions.slice(0, 8).map((session, i) => (
-                        <Fragment key={session.id}>
-                          {i > 0 && (
-                            <div
-                              aria-hidden
-                              className="mx-2 border-t"
-                              style={{ borderColor: styles.borderSubtle }}
-                            />
-                          )}
-                          <SessionRow
-                            session={session}
-                            projectId={project.id}
-                            active={session.id === activeSessionId}
-                            // R128-W3 (SCREENS.md §2 law #8): the delete
-                            // button ARMS the section's confirm dialog — the
-                            // mutation itself runs only on its confirm.
-                            onDeleteRequest={() =>
-                              setPendingDelete({
-                                kind: "session",
-                                id: session.id,
-                                projectId: project.id,
-                                title: session.title ?? "Untitled",
-                              })
-                            }
-                          />
-                        </Fragment>
-                      ))}
-                      {projSessions.length > 8 && (
-                        <button
-                          onClick={() => navigate(`/project/${project.id}`)}
-                          className="block w-full px-2 py-1 text-left text-[10px] tabular-nums transition-colors hover:bg-hover"
-                          style={{ color: styles.textTertiary }}
-                          aria-label={`Show all ${projSessions.length} sessions of ${project.name}`}
-                        >
-                          +{projSessions.length - 8} more
-                        </button>
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          );
-        })}
+            )}
+            {renderProjectTree(project, {
+              onDeleteRequest: () =>
+                setPendingDelete({
+                  kind: "project",
+                  id: project.id,
+                  name: project.name,
+                  sessionCount: projectSessions(project.id).length,
+                }),
+            })}
+          </Fragment>
+        ))}
 
         {/* R97-I part 2 — the TRUE empty state: only when the list has
             SETTLED (not pending, not failed) is "no projects" a fact.
@@ -1460,6 +1475,48 @@ function ProjectSection({
             <span>Add your first project</span>
           </button>
         )}
+
+        {/* R129-S (SCREENS §2 law #9, REWRITTEN — the Scratchpad at the very
+            BOTTOM): the separated section for conversations that need no
+            folder picker — a 20px spacer (pt-5: the list container's
+            space-y owns margin-top, so the spacer rides padding) + a
+            full-width hairline + its own SCRATCHPAD kicker row carrying the
+            section's OWN "New chat" affordance + the Scratchpad project row
+            with its session well (the same ProjectRow/SessionRow grammar as
+            every normal project — only the delete affordance differs: NONE,
+            the backend refuses its deletion). The section renders even with
+            ZERO normal projects (the empty state above never replaces it). */}
+        {!projectsQuery.isPending && (
+          <div data-scratchpad-section className="pt-5">
+            <div aria-hidden className="border-t" style={{ borderColor: styles.borderSubtle }} />
+            {/* The kicker row mirrors the Projects header's grammar (THE one
+                Kicker + the action at the right); px-1.5 aligns the label
+                with the header's px-4 once the list container's px-2.5 is
+                counted. The New chat button is the ONE quiet ghost spelling
+                (law #2's button grammar — the R128 header's accent-tint
+                square retired with the move to this section). */}
+            <div className="flex items-center justify-between px-1.5 pt-2 pb-1">
+              <Kicker>Scratchpad</Kicker>
+              <button
+                onClick={() => void startScratchpadConversation()}
+                aria-label="Start a scratchpad conversation"
+                title="Start a scratchpad conversation — no folder to pick"
+                data-testid="start-general-conversation"
+                className="w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover"
+                style={{ color: styles.textTertiary }}
+              >
+                <Plus size={14} strokeWidth={2.5} />
+              </button>
+            </div>
+            {scratchpad !== undefined &&
+              renderProjectTree(scratchpad, {
+                // Law #9: the Scratchpad project row carries NO delete
+                // affordance — the backend refuses its deletion (409
+                // general_protected) and the UI never offers it.
+                onDeleteRequest: undefined,
+              })}
+          </div>
+        )}
       </div>
 
       {showAddDialog && (
@@ -1470,17 +1527,25 @@ function ProjectSection({
           section's ONE danger dialog. The cancel button takes focus on open
           (the R95-A contract — a stray Enter never deletes), ESC +
           outside-click dismiss, and ONLY the confirm button reaches the
-          mutations. */}
+          mutations.
+          R129-S (SCREENS §2 law #8 — the DELETE-MATERIALITY law): the copy
+          enumerates exactly what dies. A SCRATCHPAD session's workspace
+          FOLDER is removed with its records (the only file-touching delete
+          in the app); every normal session/project delete removes APP
+          RECORDS ONLY and the dialog SAYS so — the project's folder and
+          files on disk are NOT touched. */}
       {pendingDelete !== null && (
         <ConfirmDialog
           danger
           title={pendingDelete.kind === "session" ? "Delete session?" : "Delete project?"}
           message={
             pendingDelete.kind === "session"
-              ? `Delete "${pendingDelete.title}"? This permanently removes the session's messages, tool history, and usage rows.`
+              ? pendingDelete.projectId === GENERAL_PROJECT_ID
+                ? `Delete "${pendingDelete.title}"? This permanently removes the conversation AND its scratchpad workspace folder.`
+                : `Delete "${pendingDelete.title}"? This removes the conversation's messages and tool history from ACUTE. The project's files on disk are NOT touched.`
               : `Delete "${pendingDelete.name}" and its ${pendingDelete.sessionCount} ${
                   pendingDelete.sessionCount === 1 ? "session" : "sessions"
-                }? Their messages and tool history will be permanently removed.`
+                }? This removes them from ACUTE — the project's folder and files on disk are NOT touched.`
           }
           confirmLabel="Delete"
           onConfirm={confirmPendingDelete}
@@ -1505,11 +1570,12 @@ function ProjectRow({
   /** R128-W3 (SCREENS.md §2 law #2, REWRITTEN): the WHOLE row body is the
    * tree toggle (click + Enter/Space) — nothing else. The dedicated
    * chevron button is retired; entering a conversation is a session
-   * row's job. */
+   * row's job. R129-S (law #2, REWRITTEN again): the chevron GLYPH is
+   * gone entirely — no arrows anywhere on the row. */
   onToggle: () => void;
   onNewSession: () => void;
   /** R128-W3 (SCREENS.md §2 law #8): arms the section's danger confirm.
-  * Absent for the General project (law #9 — no delete affordance). */
+  * Absent for the Scratchpad project (law #9 — no delete affordance). */
   onDeleteRequest?: () => void;
 }) {
   const styles = useThemeStyles();
@@ -1522,10 +1588,13 @@ function ProjectRow({
       // (TOKENS §6); the border drops 1.5→1px.
       // R126: the row was a NAVIGATION row (body opened the chat, chevron
       // toggled). R128-W3 (SCREENS.md §2 law #2, REWRITTEN — the owner's
-      // directive): the WHOLE row is the TREE TOGGLE now — the dedicated
-      // chevron BUTTON is retired (the glyph below is a presentation mark),
-      // and NO navigation fires from the row. Entering a conversation is a
-      // session row's job.
+      // directive): the WHOLE row is the TREE TOGGLE now, and NO navigation
+      // fires from the row. Entering a conversation is a session row's job.
+      // R129-S (law #2, REWRITTEN — the owner's second directive): the
+      // chevron glyph is RETIRED ENTIRELY ("I was shown the arrows on the
+      // left sides of each one of the projects, which was not good. I told
+      // you to remove the arrows") — the expand state reads from the
+      // session well beneath + aria-expanded; NO arrow anywhere.
       // R128-W3 (law #2, the height law): project rows sit a notch TALLER
       // than session rows (h-[30px] → h-[34px]) — the project is the
       // heavier object.
@@ -1550,18 +1619,6 @@ function ProjectRow({
       }}
       aria-label={`${expanded ? "Collapse" : "Expand"} ${project.name} sessions${running ? " (working)" : ""}`}
     >
-      {/* R128-W3: the disclosure glyph — PRESENTATION ONLY (aria-hidden, no
-          click handler): the whole row is the toggle, so the chevron merely
-          keeps the expand state readable, rotating with it. */}
-      <span
-        aria-hidden
-        className="w-6 shrink-0 grid place-items-center"
-        style={{ color: styles.textTertiary }}
-      >
-        <span className="grid place-items-center transition-transform duration-200" style={{ transform: expanded ? "rotate(0deg)" : "rotate(-90deg)" }}>
-          <ChevronDown size={12} />
-        </span>
-      </span>
       {/* R100-F: the flat tile (see ProjectTile) — the ROUND-42 gradient
           decoration is retired. */}
       <ProjectTile color={project.color} name={project.name} />
@@ -1572,9 +1629,62 @@ function ProjectRow({
           {project.name}
         </span>
       </div>
+      {/* R129-S (SCREENS.md §2 law #2, REWRITTEN — the hover-SHRINK law,
+          reversing R128's overlay): the actions live in a RESERVED-WIDTH
+          flex cluster INSIDE the row — each button is rendered at ALL times
+          but rests at w-0 + opacity-0 (ZERO reserved width: the name renders
+          FULLY at rest), growing to w-7 on group-hover AND
+          group-focus-within (transition-all animates the width in) while
+          the name's own truncation TIGHTENS to make room — the text SHRINKS,
+          the buttons sit BESIDE it; they never OVERLAY it (the owner: "the
+          text should shrink… so that there is enough space for… the new
+          session button and the delete button"). pointer-events gates the
+          mouse only — the buttons stay focusable (keyboard parity: focusing
+          the row reveals the same widths). */}
+      <div className="mr-0.5 shrink-0 flex items-center gap-0.5">
+        {/* ROUND-33 (owner): the "+ new session" button lives ON the project
+            row itself. R129-S (law #2's button grammar): ONE quiet ghost
+            spelling for BOTH buttons — the R128 accent-tint square is
+            RETIRED (same size, same hover, same corner; the icons differ). */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onNewSession(); }}
+          aria-label={`Start new session in ${project.name}`}
+          title="New session"
+          className={cn(
+            "h-7 grid place-items-center rounded-lg overflow-hidden transition-all duration-150 hover:bg-hover",
+            "w-0 opacity-0 pointer-events-none",
+            "group-hover:w-7 group-hover:opacity-100 group-hover:pointer-events-auto",
+            "group-focus-within:w-7 group-focus-within:opacity-100 group-focus-within:pointer-events-auto",
+          )}
+          style={{ color: styles.textTertiary }}
+        >
+          <Plus size={14} strokeWidth={2.5} />
+        </button>
+        {/* R128-W3 (SCREENS §2 law #8): the delete arms the section's danger
+            confirm — never an immediate delete. Absent entirely for the
+            Scratchpad project (law #9). R129-S: the same ghost grammar as
+            the new-session button (one spelling). */}
+        {onDeleteRequest !== undefined && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onDeleteRequest(); }}
+            aria-label={`Delete ${project.name}`}
+            title={`Delete ${project.name}`}
+            className={cn(
+              "h-7 grid place-items-center rounded-lg overflow-hidden transition-all duration-150 hover:bg-hover",
+              "w-0 opacity-0 pointer-events-none",
+              "group-hover:w-7 group-hover:opacity-100 group-hover:pointer-events-auto",
+              "group-focus-within:w-7 group-focus-within:opacity-100 group-focus-within:pointer-events-auto",
+            )}
+            style={{ color: styles.textTertiary }}
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
+      </div>
       {/* ROUND-42: live-work animation on the project row — the clear "this
           project is making changes right now" signal when the sessions are
-          collapsed (or while scanning the list). */}
+          collapsed (or while scanning the list). In-flow AFTER the action
+          cluster: it is status, not an action — visible at rest. */}
       {running ? (
         <span
           className="shrink-0 mr-0.5 ac-pixel-stream"
@@ -1586,42 +1696,6 @@ function ProjectRow({
           <span /><span /><span /><span />
         </span>
       ) : null}
-      {/* R128-W3 (SCREENS.md §2 law #2, the full-names law): the hover
-          actions live in an ABSOLUTE overlay cluster at the row's right
-          edge — they reserve NO layout width while hidden, so the name
-          renders FULLY whenever the cluster is not revealed (truncate stays
-          the last resort only). The cluster rides the row's own hover
-          background (bg-hover + rounded corners) so the name text beneath
-          it stays readable; it reveals on group-hover AND group-focus-within
-          (keyboard parity — the buttons stay focusable, pointer-events is
-          mouse-only). */}
-      <div className="absolute right-1 top-1/2 -translate-y-1/2 z-20 flex items-center gap-0.5 rounded-lg bg-hover pl-1.5 pr-0.5 opacity-0 transition-opacity duration-150 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
-        {/* ROUND-33 (owner): the "+ new session" button lives ON the project
-            row itself; no chevron, no session count. R100-F: a ≥28px
-            target, rounded-lg (no JS state, no scale fidget). */}
-        <button
-          onClick={(e) => { e.stopPropagation(); onNewSession(); }}
-          aria-label={`Start new session in ${project.name}`}
-          title="New session"
-          className="w-7 h-7 grid place-items-center rounded-lg bg-accent-tint text-accent-deep"
-        >
-          <Plus size={14} strokeWidth={2.5} />
-        </button>
-        {/* R128-W3 (SCREENS §2 law #8): the delete arms the section's danger
-            confirm — never an immediate delete. Absent entirely for the
-            General project (law #9). */}
-        {onDeleteRequest !== undefined && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onDeleteRequest(); }}
-            aria-label={`Delete ${project.name}`}
-            title={`Delete ${project.name}`}
-            className="w-7 h-7 grid place-items-center rounded-lg transition-colors hover:bg-hover"
-            style={{ color: styles.textTertiary }}
-          >
-            <Trash2 size={12} />
-          </button>
-        )}
-      </div>
     </div>
   );
 }
@@ -1800,33 +1874,46 @@ function SessionRow({
         )}
         <span className="truncate">{session.title ?? "Untitled"}</span>
       </button>
-      {/* R128-W3 (SCREENS §2 law #2, the full-names law — the same overlay
-          cluster grammar the project row uses): rename + delete sit in an
-          ABSOLUTE cluster at the row's right edge, reserving NO layout
-          width while hidden, so the session title renders FULLY at rest
-          (truncate stays the last resort). The cluster rides the row's
-          hover background so the title beneath stays readable; it reveals
-          on group-hover AND group-focus-within (keyboard parity). The
-          running pixel-stream below stays in-flow — the live signal must
-          be visible at rest, and the cluster covers it only while hovered. */}
-      <div className="absolute right-0.5 top-1/2 -translate-y-1/2 z-10 flex items-center gap-0.5 rounded-lg bg-hover pl-1 pr-0.5 opacity-0 transition-opacity duration-150 pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
-        {/* Rename (round-33). */}
+      {/* R129-S (SCREENS.md §2 law #2, REWRITTEN — the hover-SHRINK law, the
+          same reserved-width grammar the project row now uses): rename +
+          delete sit in a RESERVED-WIDTH flex cluster INSIDE the row — each
+          button renders at ALL times but rests at w-0 + opacity-0 (the
+          title renders FULLY at rest), growing to w-6 on group-hover AND
+          group-focus-within while the title's truncation TIGHTENS to make
+          room (the owner: "the text should shrink… so that there is enough
+          space for the edit button for the sessions and delete buttons for
+          the sessions"). No overlay, no covering background; the running
+          pixel-stream below stays in-flow and visible at rest. */}
+      <div className="mr-0.5 shrink-0 flex items-center gap-0.5">
+        {/* Rename (round-33). R129-S: the ghost grammar (one spelling for
+            both buttons — identical to the project row's, one size down). */}
         <button
           onClick={(e) => { e.stopPropagation(); setDraft(session.title ?? ""); setEditing(true); }}
           aria-label={`Rename session ${session.title ?? "Untitled"}`}
           title="Rename session"
-          className="w-6 h-6 grid place-items-center rounded-lg transition-colors hover:bg-hover"
+          className={cn(
+            "h-6 grid place-items-center rounded-lg overflow-hidden transition-all duration-150 hover:bg-hover",
+            "w-0 opacity-0 pointer-events-none",
+            "group-hover:w-6 group-hover:opacity-100 group-hover:pointer-events-auto",
+            "group-focus-within:w-6 group-focus-within:opacity-100 group-focus-within:pointer-events-auto",
+          )}
           style={{ color: styles.textTertiary }}
         >
           <Pencil size={12} />
         </button>
         {/* R128-W3 (SCREENS §2 law #8): delete ARMS the section's danger
-            confirm — the mutation runs only on its confirm. */}
+            confirm — the mutation runs only on its confirm. R129-S: the
+            same ghost grammar (one spelling). */}
         <button
           onClick={(e) => { e.stopPropagation(); onDeleteRequest(); }}
           aria-label={`Delete session ${session.title ?? "Untitled"}`}
           title="Delete session"
-          className="w-6 h-6 grid place-items-center rounded-lg transition-colors hover:bg-hover"
+          className={cn(
+            "h-6 grid place-items-center rounded-lg overflow-hidden transition-all duration-150 hover:bg-hover",
+            "w-0 opacity-0 pointer-events-none",
+            "group-hover:w-6 group-hover:opacity-100 group-hover:pointer-events-auto",
+            "group-focus-within:w-6 group-focus-within:opacity-100 group-focus-within:pointer-events-auto",
+          )}
           style={{ color: styles.textTertiary }}
         >
           <Trash2 size={12} />

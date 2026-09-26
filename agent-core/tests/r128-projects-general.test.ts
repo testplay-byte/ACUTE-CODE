@@ -1,17 +1,22 @@
 /**
  * ROUND-128 (R128-W3, SCREENS.md §2 laws #8 + #9) — the projects-sidebar
- * backend suite:
+ * backend suite, RE-PINNED ROUND-129 (R129-S — the Scratchpad rename: the
+ * same row, the same protection, the new name + root):
  *
- *   1. THE GENERAL CONVERSATION (law #9): ensureGeneralProject seeds the
- *      app's internal workspace project (id "general", root
- *      <dataDir>/general) — creating the folder, idempotently, and
- *      re-pointing the row when the data dir moves; DELETE /projects/general
- *      is 409 general_protected and the row survives.
+ *   1. THE SCRATCHPAD SEED (law #9, R129-S): ensureGeneralProject seeds the
+ *      app's internal workspace project (stable id "general", NAME
+ *      "Scratchpad", root <dataDir>/scratchpad) — creating the folder,
+ *      idempotently, re-pointing the row when the data dir moves, and
+ *      MIGRATING a row still carrying the pre-R129 default name "General"
+ *      (an owner-rename to anything else is respected); DELETE
+ *      /projects/general is 409 general_protected and the row survives.
  *   2. THE DELETE CASCADE + EVENT (law #8's backend half): deleting a
  *      project removes its sessions AND every dependent row
  *      (session_events / usage_events / approvals / file_snapshots — plus
  *      the codebase_index FK cascade), returns the honest counts, and
  *      publishes the {type:"project", kind:"deleted"} events-bus frame.
+ *      R129-S verified: deleteProject is RECORDS-ONLY (no fs import in
+ *      storage/projects.ts — the files-on-disk-untouched half of law #8).
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -69,11 +74,14 @@ function authInject(options: {
   });
 }
 
-describe("R128-W3 (SCREENS §2 law #9): the General conversation seed", () => {
+describe("R129-S (SCREENS §2 law #9): the Scratchpad seed (the R128 General row, renamed)", () => {
   it("ensureGeneralProject creates the internal folder and the project row", () => {
     ensureGeneralProject(db, dataDir);
 
-    expect(existsSync(join(dataDir, "general"))).toBe(true);
+    // R129-S: the seed root is <dataDir>/scratchpad now (the legacy
+    // <dataDir>/general dir is never CREATED nor deleted by the new seed).
+    expect(existsSync(join(dataDir, "scratchpad"))).toBe(true);
+    expect(existsSync(join(dataDir, "general"))).toBe(false);
     const rows = db
       .prepare("SELECT id, name, root_path, color FROM projects")
       .all() as { id: string; name: string; root_path: string; color: string }[];
@@ -81,7 +89,7 @@ describe("R128-W3 (SCREENS §2 law #9): the General conversation seed", () => {
     expect(rows[0]).toEqual({
       id: GENERAL_PROJECT_ID,
       name: GENERAL_PROJECT_NAME,
-      root_path: join(dataDir, "general"),
+      root_path: join(dataDir, "scratchpad"),
       color: GENERAL_PROJECT_COLOR,
     });
   });
@@ -104,22 +112,62 @@ describe("R128-W3 (SCREENS §2 law #9): the General conversation seed", () => {
 
   it("re-points root_path when the data dir moves, and leaves a healthy row alone", () => {
     ensureGeneralProject(db, dataDir);
-    const movedDir = mkdtempSync(join(tmpdir(), "acute-r128-moved-"));
+    const movedDir = mkdtempSync(join(tmpdir(), "acute-r129-moved-"));
     try {
       ensureGeneralProject(db, movedDir);
       const row = db
         .prepare("SELECT root_path FROM projects WHERE id = ?")
         .get(GENERAL_PROJECT_ID) as { root_path: string };
-      expect(row.root_path).toBe(join(movedDir, "general"));
-      expect(existsSync(join(movedDir, "general"))).toBe(true);
+      expect(row.root_path).toBe(join(movedDir, "scratchpad"));
+      expect(existsSync(join(movedDir, "scratchpad"))).toBe(true);
     } finally {
       rmSync(movedDir, { recursive: true, force: true });
     }
   });
 
+  // R129-S: the boot-time RENAME MIGRATION — a row still carrying the
+  // pre-R129 default name "General" migrates to "Scratchpad" + the new
+  // root in ONE write; an owner-rename to something else is respected
+  // verbatim (only the untouched default migrates).
+  it("migrates a pre-R129 default row: name → Scratchpad AND root → the scratchpad dir", () => {
+    db.prepare(
+      `INSERT INTO projects (id, name, root_path, color, created_at)
+       VALUES (?, 'General', ?, '#64748B', '2026-08-19T00:00:00Z')`,
+    ).run(GENERAL_PROJECT_ID, join(dataDir, "general"));
+
+    ensureGeneralProject(db, dataDir);
+
+    const row = db
+      .prepare("SELECT name, root_path FROM projects WHERE id = ?")
+      .get(GENERAL_PROJECT_ID) as { name: string; root_path: string };
+    expect(row.name).toBe("Scratchpad");
+    expect(row.root_path).toBe(join(dataDir, "scratchpad"));
+    // Idempotent: a second boot re-migrates nothing (the name check fails).
+    ensureGeneralProject(db, dataDir);
+    const again = db
+      .prepare("SELECT name, root_path FROM projects WHERE id = ?")
+      .get(GENERAL_PROJECT_ID) as { name: string; root_path: string };
+    expect(again).toEqual(row);
+  });
+
+  it("respects an owner-rename: a row named by the owner keeps its name (only the root follows the boot)", () => {
+    db.prepare(
+      `INSERT INTO projects (id, name, root_path, color, created_at)
+       VALUES (?, 'My Sandbox', ?, '#64748B', '2026-08-19T00:00:00Z')`,
+    ).run(GENERAL_PROJECT_ID, join(dataDir, "general"));
+
+    ensureGeneralProject(db, dataDir);
+
+    const row = db
+      .prepare("SELECT name, root_path FROM projects WHERE id = ?")
+      .get(GENERAL_PROJECT_ID) as { name: string; root_path: string };
+    expect(row.name).toBe("My Sandbox");
+    expect(row.root_path).toBe(join(dataDir, "scratchpad"));
+  });
+
   it("DELETE /projects/general → 409 general_protected; the row survives and no event fires", async () => {
     ensureGeneralProject(db, dataDir);
-    // A General session exists — the protection must guard real data.
+    // A Scratchpad session exists — the protection must guard real data.
     createSession(db, {
       agentId: "agt_scribe",
       mode: "single",
@@ -137,8 +185,9 @@ describe("R128-W3 (SCREENS §2 law #9): the General conversation seed", () => {
       expect(response.statusCode).toBe(409);
       const body = response.json();
       expect(body.error.code).toBe("general_protected");
+      // R129-S (the rename): the message names the row by its R129 name.
       expect(body.error.message).toBe(
-        "The General project is the app's internal workspace — it cannot be deleted",
+        "The Scratchpad project is the app's internal workspace — it cannot be deleted",
       );
     } finally {
       unsubscribe();

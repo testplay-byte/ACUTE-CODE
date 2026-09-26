@@ -265,6 +265,13 @@ export interface Session {
    * (PATCH /sessions/:id {model}; prepareTurn resolves override → this →
    * agent). Optional so fixture sessions keep compiling. */
   selectedModel?: SessionSelectedModel | null;
+  /** ROUND-129 (R129-e): the session's OWN workspace root (migration 0043)
+   * — set only for Scratchpad sessions (<dataDir>/scratchpad/<id>/, each
+   * conversation its own folder); null/absent = the project root is the
+   * workspace (every normal session + the fixtures — the pre-R129
+   * behavior). prepareTurn threads it as the effective root; deleting the
+   * session removes the folder with the record (Scratchpad only). */
+  rootPath?: string | null;
 }
 
 /** ROUND-114 (R114-e): the server-side selected-model pair — the exact wire

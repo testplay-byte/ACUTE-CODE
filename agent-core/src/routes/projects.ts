@@ -101,15 +101,17 @@ export function registerProjectRoutes(scope: FastifyInstance, ctx: RouteContext)
 
   scope.delete("/projects/:id", async (request, reply) => {
     const { id } = request.params as Record<string, string>;
-    // R128-W3 (SCREENS §2 law #9): the General project is the app's internal
-    // workspace — delete-PROTECTED here (and in the storage layer as the
-    // belt-and-braces leg). The 409 carries a dedicated code so honest
+    // R128-W3 (SCREENS §2 law #9): the Scratchpad project is the app's
+    // internal workspace — delete-PROTECTED here (and in the storage layer
+    // as the belt-and-braces leg). The 409 carries a dedicated code so honest
     // clients can name exactly what happened.
+    // R129-S (the rename): the message names the row by its R129 name —
+    // "Scratchpad" (SCREENS §2 law #9: it "will not be called general").
     if (id === GENERAL_PROJECT_ID) {
       return reply.code(409).send(
         errorBody(
           "general_protected",
-          "The General project is the app's internal workspace — it cannot be deleted",
+          "The Scratchpad project is the app's internal workspace — it cannot be deleted",
         ),
       );
     }

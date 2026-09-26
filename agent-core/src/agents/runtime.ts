@@ -1675,6 +1675,23 @@ async function prepareTurn(
       },
     };
   }
+  // R129-S (SCREENS.md §2 law #9 — the Scratchpad): the per-session
+  // workspace override + the turn's EFFECTIVE ROOT. session.rootPath is
+  // set ONLY for Scratchpad sessions (migration 0043 — each conversation
+  // gets its own folder under <dataDir>/scratchpad/<sessionId>/); every
+  // normal session reads null and the project's root_path stays the
+  // workspace exactly as before. Everything root-dependent below resolves
+  // against effectiveRoot — the tools (buildProjectTools), the prompt
+  // environment, the task modes, the skills, the custom rules, and the
+  // system prompt's "PROJECT: … at <root>" line (the model must believe
+  // its workspace is the SESSION's folder) — while the memory/index SCOPE
+  // deliberately stays project-scoped (projectScope: project.id below):
+  // the Scratchpad's project memory is app-level knowledge, the FILE
+  // workspace is per-session; the auto-index + the prompt's indexSummary
+  // are SKIPPED for a scratchpad session (its files are not the project
+  // root's files — the index would lie).
+  const sessionRoot = session.rootPath ?? null;
+  const effectiveRoot = sessionRoot ?? project?.rootPath ?? undefined;
   // ROUND-98 (R98-F3): AUTO-INDEX — the cheapest honest hook for the index's
   // background freshness keeper (the owner: "Look into indexing… essential
   // for larger projects with a lot of files, folders, subfolders"). ONE SQL
@@ -1688,7 +1705,11 @@ async function prepareTurn(
   // prepareTurn runs for EVERY turn (sync + streamed + sub-agent children)
   // — the staleness gate is what makes this "first turn + every 10 minutes"
   // rather than "every turn".
-  if (project !== undefined) {
+  // R129-S: a SCRATCHPAD session's files are not the project root's files
+  // — indexing the project root would describe a workspace the model
+  // never sees, so the auto-index (and the prompt's indexSummary below)
+  // is skipped whenever the session carries its own root.
+  if (project !== undefined && sessionRoot === null) {
     maybeAutoIndexProject(db, project.id, project.rootPath);
   }
   // Tools: the project set, intersected with the agent's allowlist when one
@@ -1843,7 +1864,7 @@ async function prepareTurn(
   // `tools` list NARROWS the allowlist (a custom mode can only narrow, never
   // widen — the permission-mode rule, applied one step later). Builtins
   // declare no tools → no narrowing, byte-identical toolset.
-  const modeResolution = resolveEffectiveModes(project !== undefined ? project.rootPath : undefined);
+  const modeResolution = resolveEffectiveModes(effectiveRoot);
   // ROUND-73 (R73-b): the session's ACTIVE mode — session.activeMode
   // (PATCH /sessions/:id or switch_mode) resolved through the same list. A
   // mode that no longer resolves (its .acute/agents file was removed) is
@@ -1871,14 +1892,17 @@ async function prepareTurn(
   // frontmatter `tools` narrowing above survives (opt-in, custom-file only,
   // narrow-only — the extension surface documented in EXTENSIBILITY.md).
   const tools =
-    project !== undefined
-      ? await buildProjectTools(project.rootPath, allowListWithTaskMode, toolDeps)
+    project !== undefined && effectiveRoot !== undefined
+      ? await buildProjectTools(effectiveRoot, allowListWithTaskMode, toolDeps)
       : undefined;
   // ROUND-70 (R70-c, D1): the turn's REAL environment — OS/shell/date/git,
   // computed here (per turn, never cached across turns, never blocking:
   // the git probe degrades to honest fallback strings). Projectless
   // sessions run agent.systemPrompt — no environment to ground.
-  const environment = project !== undefined ? await buildPromptEnvironment(project.rootPath) : undefined;
+  const environment =
+    project !== undefined && effectiveRoot !== undefined
+      ? await buildPromptEnvironment(effectiveRoot)
+      : undefined;
   // ROUND-40: the system prompt's toolNames must reflect the EXACT tool set the
   // model will actually receive. The old code rebuilt tools from
   // `agent.allowedTools` here — for a child that lied in two ways: (a) it
@@ -1900,7 +1924,12 @@ async function prepareTurn(
   // disagree. Unpinned entries keep the exact pre-R98 {name, description}
   // shape (the fields are conditionally spread, never set to undefined).
   const effectiveSkills = resolveEffectiveSkills(db, {
-    ...(project !== undefined ? { projectRoot: project.rootPath, projectScope: project.id } : {}),
+    // R129-S: projectRoot rides the EFFECTIVE ROOT (the Scratchpad
+    // session's own folder); projectScope stays the PROJECT id — the
+    // deliberate split (see the sessionRoot block above): file-based
+    // skills load from the workspace the model sees, while the memory /
+    // skill-scope surfaces stay app-project-scoped.
+    ...(effectiveRoot !== undefined ? { projectRoot: effectiveRoot, projectScope: project?.id } : {}),
     ...(agent.skills.length > 0 ? { agentSkills: agent.skills } : {}),
   }).map((skill) => ({
     name: skill.name,
@@ -1941,9 +1970,12 @@ async function prepareTurn(
   const system = project
     ? buildProjectSystemPrompt({
         projectName: project.name,
-        rootPath: project.rootPath,
+        // R129-S: the effective root — for a Scratchpad session the prompt's
+        // "PROJECT: … at <root>" + working-directory lines name the SESSION's
+        // folder (the model must believe its workspace is that folder).
+        rootPath: effectiveRoot ?? project.rootPath,
         toolNames: tools ? Object.keys(tools) : [],
-        customRules: readCustomRules(project.rootPath),
+        customRules: readCustomRules(effectiveRoot ?? project.rootPath),
         // ROUND-70 (R70-c, D1): OS/shell/date/git grounding.
         environment,
         // Round-28 WS-F: inject the agent's maxTurns budget into the AGENTIC
@@ -1956,7 +1988,13 @@ async function prepareTurn(
         // Round-28 WS-G: inject the codebase index summary (if the project
         // has been indexed) so the agent has codebase awareness without
         // needing list_dir + read_file every turn.
-        indexSummary: session.projectId !== null ? getIndexSummary(db, session.projectId) ?? undefined : undefined,
+        // R129-S: SKIPPED for a scratchpad session (sessionRoot !== null) —
+        // the project index describes the project root, not the session's
+        // own workspace folder; it would lie.
+        indexSummary:
+          sessionRoot === null && session.projectId !== null
+            ? getIndexSummary(db, session.projectId) ?? undefined
+            : undefined,
         // ROUND-44 (R44-a) → ROUND-49 → ROUND-117 (R117-b): inject the newest
         // project memories so the agent starts its turn knowing the project's
         // durable knowledge — but ONLY in MAIN sessions while the memory
