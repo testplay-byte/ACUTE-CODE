@@ -633,18 +633,22 @@ export function ModelSelector({
             R87-A1 (owner: "The first thing which should be shrunk in its
             width (meaning the name of the model, the model sector)"): the
             label NEVER hides — it SHRINKS FIRST, in graduated @container
-            tiers (240 → 170px below 520 → 90px below 420), animated via
-            max-width so the model name stays identifiable (truncated) while
-            the mode/thinking pills still show their full labels. The icon
-            stays visible at every width.
+            tiers (240 → 170px below 520 → 100px below 480 → 80px below
+            420), animated via max-width so the model name stays
+            identifiable (truncated) while the mode/thinking pills still
+            show their full labels. The icon stays visible at every width.
             R89-D2 (owner: "the full model name was not showing, the half
             model name was showing instead of being shrunk down to the only
             logo"): below 350px the label collapses to NOTHING — the pill
             becomes LOGO-ONLY, never a half-cut name; the title tooltip
             still carries the full label.
-            R130: the trailing ChevronDown glyph is RETIRED (the owner's
-            arrows directive), and past the tiers the label now ellipsizes
-            CONTINUOUSLY with the wrapper's flex shrink — the sponge. */}
+            R130 (the live battery's finding): the 480px step is NEW — the
+            old ladder (520→170, 420→90) left a window around a ~470px box
+            where the row overflowed by ~18px and WRAPPED at a comfortable
+            width (the exact owner complaint); the denser ladder keeps the
+            single line there, and the trailing ChevronDown is RETIRED (the
+            owner's arrows directive), with the label ellipsizing
+            CONTINUOUSLY past the tiers as the row's flex sponge. */}
         <Cpu
           size={12}
           className="shrink-0 text-accent"
@@ -652,7 +656,7 @@ export function ModelSelector({
           data-model-icon
         />
         <span
-          className="min-w-0 max-w-[240px] @max-[520px]:max-w-[170px] @max-[420px]:max-w-[90px] @max-[350px]:max-w-0 @max-[350px]:opacity-0 @max-[350px]:-ml-1 truncate transition-all duration-200"
+          className="min-w-0 max-w-[240px] @max-[520px]:max-w-[170px] @max-[480px]:max-w-[100px] @max-[420px]:max-w-[80px] @max-[350px]:max-w-0 @max-[350px]:opacity-0 @max-[350px]:-ml-1 truncate transition-all duration-200"
           data-model-label
         >
           {buttonLabel}

@@ -662,13 +662,18 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     expect(icon).toBeTruthy();
     expect(icon.tagName.toLowerCase()).toBe("svg");
     // R87-A1: the label NEVER hides — it narrows first (240 → 170px below a
-    // 520px @container → 90px below 420), animated via max-width, so the
-    // model name stays identifiable while the other pills still show full
-    // labels. The icon carries no tier classes at any width.
+    // 520px @container → 100px below 480 → 80px below 420), animated via
+    // max-width, so the model name stays identifiable while the other pills
+    // still show full labels. The icon carries no tier classes at any width.
+    // R130 (the live battery's finding): the 480px step is NEW — the old
+    // ladder left a ~470px-box window where the row wrapped at a
+    // comfortable width (the owner's exact complaint); the denser ladder
+    // keeps the single line there.
     const label = modelBtn.querySelector("[data-model-label]") as HTMLElement;
     expect(label.className).toContain("max-w-[240px]");
     expect(label.className).toContain("@max-[520px]:max-w-[170px]");
-    expect(label.className).toContain("@max-[420px]:max-w-[90px]");
+    expect(label.className).toContain("@max-[480px]:max-w-[100px]");
+    expect(label.className).toContain("@max-[420px]:max-w-[80px]");
     expect(label.className).toContain("transition-all");
     // R89-D2: the LOGO-ONLY tier — below 350px the label collapses fully
     // (icon only — R130 retired the trailing chevron), never a half-cut
