@@ -19,6 +19,9 @@ import { describe, expect, it, jest } from "@jest/globals";
 jest.mock("react-native-reanimated", () => ({
   __esModule: true,
   default: { createAnimatedComponent: () => () => null, View: () => null },
+  // R129-M — hardening: any module-scope Easing construction (the
+  // disclosure/transcript COLLAPSE_EASING idiom) survives this mock too.
+  Easing: { out: (e: unknown) => e, quad: { quad: true } },
   runOnJS: (fn: unknown) => fn,
   useAnimatedStyle: (fn: () => unknown) => fn(),
   useReducedMotion: () => true,

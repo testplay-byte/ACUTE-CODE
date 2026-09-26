@@ -19,6 +19,11 @@ import { describe, expect, it, jest } from "@jest/globals";
 jest.mock("react-native-reanimated", () => ({
   __esModule: true,
   default: { createAnimatedComponent: () => () => null, View: () => null },
+  // R129-M — transcript.tsx builds its DisclosureClip easing at MODULE scope
+  // (disclosure.tsx's own COLLAPSE_EASING idiom), so this mock needs the
+  // Easing member or the import itself dies (header-dropdown.test.ts's own
+  // pattern).
+  Easing: { out: (e: unknown) => e, quad: { quad: true } },
   interpolateColor: (v: number, _range: number[], colors: string[]) => colors[v > 0 ? 1 : 0],
   runOnJS: (fn: unknown) => fn,
   useAnimatedStyle: (fn: () => unknown) => fn(),

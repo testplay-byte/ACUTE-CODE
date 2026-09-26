@@ -126,6 +126,34 @@
  * (Globe icon; browser/search/fetch rows read their own action/query/url
  * targets — see features/turn-block.ts's R123 note). The toolActivity pref
  * and the well's Reveal entrance stay exactly as they were.
+ *
+ * ROUND-129 (R129-M — the separated-elements rework, per the owner's
+ * v0.121.0 device verdict: the R119 TurnBlock "combines everything together
+ * in a single session… not managed properly", the tool cards "look way too
+ * cramped together", the thinking "is combined with the tool cards", and
+ * "the implementation of bubbles for the reply is most definitely not a
+ * great option. You should not utilize bubbles for the reply, but just
+ * directly writing the text… like how most of the other modern ones handle
+ * it. It would give us much more space."): the ONE clay container dies AS A
+ * CONTAINER (chat.md §Transcript R129 — the amendment). A turn's elements
+ * render as SIBLINGS with real spacing, never inside one shared card:
+ *   · the RAIL survives as a PLAIN tertiary line above the cards (the
+ *     R120-CM hints law unchanged) — no container, no expand of its own,
+ *     no chevron, never a control;
+ *   · the THINKING ROW is its own collapsible element between the rail and
+ *     the cards (label + chevron, the house disclosure motion, the retired
+ *     ThinkingBlock's dim mono voice behind the expand);
+ *   · the TOOL CARDS are proper cards — one clay card per call (the house
+ *     12px card padding, r12, the card surface + hairline clayRim, 8px
+ *     gaps between cards), the retired rows' content logic preserved, body
+ *     OPEN by default (R123-W-m's law survives), each independently
+ *     collapsible;
+ *   · the REPLY is FLAT — the meta line + the MarkdownText directly on the
+ *     screen background, full width, the shared LiveCaret while streaming.
+ * The well, its rows, and `wellDefaultOpen` are RETIRED; `turnElementsPlan`
+ * (pure, exported) is the render contract jest pins. The data model, the
+ * grouping, the queued law, the user bubble, and every standalone card are
+ * untouched.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -133,6 +161,7 @@ import { ActivityIndicator, Image, Pressable, StyleSheet, Text, TextInput, View 
 import { useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import Animated, {
+  Easing,
   interpolateColor,
   useAnimatedStyle,
   useReducedMotion,
@@ -143,9 +172,9 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { BookOpenText, Check, ChevronDown, ChevronUp, CircleX, Copy, FileCode2, Globe, ImageIcon, RefreshCw, Square, SquareTerminal, Wrench } from "lucide-react-native";
-import { useTheme, useChatPrefs } from "@/design/theme";
+import { useTheme, useChatPrefs, type ToolActivity } from "@/design/theme";
 import { decisionHaptic, selectionHaptic, warningHaptic } from "@/design/haptics";
-import { Badge, Hairline, LiveCaret, Skeleton, TypeBody, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
+import { Badge, LiveCaret, Skeleton, TypeBody, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
 import { MarkdownText } from "@/components/markdown-text";
 import { ImageViewer } from "@/components/image-viewer";
 import { getLinkManager } from "@/link/runtime";
@@ -170,6 +199,7 @@ import {
   activitySummary,
   groupDisplayRows,
   orderDisplayItems,
+  thinkingRowLabel,
   toolRowTitle,
   turnActivityFacts,
   turnBlockA11yLabel,
@@ -182,6 +212,9 @@ import {
   type TurnGroup,
 } from "@/features/turn-block";
 import {
+  DISCLOSURE_COLLAPSE_MS,
+  DISCLOSURE_FADE_MS,
+  DISCLOSURE_SPRING,
   ENTRANCE_DELTA,
   SPRING,
 } from "@/design/motion";
@@ -216,6 +249,12 @@ export type AttachmentImageResolver = (a: AttachmentView) => Promise<string | nu
 
 /** chat.md — the image radius: r12 on thumbnails + screenshot tiles. */
 const RADIUS_IMAGE = 12;
+/** chat.md §Transcript R129 — the TOOL CARD's radius: r12, the amendment's
+ *  own literal. The tokens ladder's `card` radius is r20, so this stays a
+ *  LOCAL chat geometry constant in RADIUS_IMAGE's own class (flagged in the
+ *  round's caveats — the amendment's "RADIUS_CARD r12" names a value the
+ *  token does not carry). */
+const RADIUS_TOOL_CARD = 12;
 /** chat.md — the WhatsApp tail hint: the user bubble's bottom-right corner. */
 const RADIUS_BUBBLE_TAIL = 16;
 /** One leg of the placeholder's calm ~1.2s breathe + the dots' pulse. */
@@ -474,6 +513,74 @@ function Reveal({ open, children }: { open: boolean; children: React.ReactNode }
   }));
   if (!open) return null;
   return <Animated.View style={animated}>{children}</Animated.View>;
+}
+
+// ── R129-M — the house DISCLOSURE motion as a measured clip ─────────────────
+//
+// disclosure.tsx's own grammar, read + reused as its constants + its measured
+// clip technique (the brief's "read MOTION/the disclosure component's own
+// grammar … if reusable"): expand rides DISCLOSURE_SPRING {180, 24} — one
+// soft settle, the bounce the owner likes as a whisper; collapse is
+// withTiming 200ms ease-out on the height with the 150ms content fade — a
+// timing curve cannot overshoot, so closing NEVER bounces (R118-C §2.7);
+// reduced motion snaps. The one extension the live transcript needs over the
+// shared Disclosure primitive: an OPEN clip RE-SPRINGS when its measured
+// content CHANGES, so a streaming body (the live thinking stream, a running
+// tool's growing tail) never clamps behind a stale measured height.
+
+/** The collapse's timing curve — ease-out, zero overshoot by construction
+ *  (disclosure.tsx's own COLLAPSE_EASING). */
+const COLLAPSE_EASING = Easing.out(Easing.quad);
+
+function DisclosureClip({ open, children }: { open: boolean; children: React.ReactNode }) {
+  const reduced = useReducedMotion();
+  const height = useSharedValue(0);
+  const opacity = useSharedValue(0);
+  const measured = useSharedValue(0);
+  useEffect(() => {
+    if (reduced) {
+      height.value = open ? measured.value : 0;
+      opacity.value = open ? 1 : 0;
+      return;
+    }
+    if (open) {
+      // §2.7 — the expand: the disclosure spring (one soft settle).
+      height.value = withSpring(measured.value, DISCLOSURE_SPRING);
+      opacity.value = withSpring(1, DISCLOSURE_SPRING);
+    } else {
+      // §2.7 — the collapse: timing cannot overshoot; the content fades
+      // slightly ahead of the height.
+      height.value = withTiming(0, { duration: DISCLOSURE_COLLAPSE_MS, easing: COLLAPSE_EASING });
+      opacity.value = withTiming(0, { duration: DISCLOSURE_FADE_MS });
+    }
+  }, [open, reduced, height, opacity, measured]);
+  const clip = useAnimatedStyle(() => ({
+    height: Math.max(0, height.value),
+    opacity: Math.max(0, opacity.value),
+  }));
+  return (
+    <Animated.View style={[styles.disclosureClip, clip]} pointerEvents={open ? "auto" : "none"}>
+      {/* The measurement child: absolutely positioned so a collapsed clip
+          height can never clamp its own layout (disclosure.tsx's own Yoga
+          fix — the projects-accordion deadlock, avoided by construction).
+          The re-measure rides the spring while OPEN (the live stream's
+          growth), never a snap — except under reduced motion. */}
+      <View
+        style={styles.disclosureMeasure}
+        onLayout={(event) => {
+          const h = event.nativeEvent.layout.height;
+          if (h <= 0) return;
+          const changed = h !== measured.value;
+          measured.value = h;
+          if (open && changed) {
+            height.value = reduced ? h : withSpring(h, DISCLOSURE_SPRING);
+          }
+        }}
+      >
+        {children}
+      </View>
+    </Animated.View>
+  );
 }
 
 // ── user (the WhatsApp-shaped bubble — chat.md §Transcript) ─────────────────
@@ -864,47 +971,182 @@ function UserImageThumb({
   );
 }
 
-// ── THE TURN BLOCK (R119-A — one visual turn per exchange) ──────────────────
+// ── THE TURN — SEPARATED ELEMENTS (R129-M, per chat.md §Transcript R129) ───
 //
-// The §N verdict's answer: a turn's assistant/thinking/tool items render as
-// ONE clay container —
-//   · the ACTIVITY RAIL, the collapsible head row above the text: collapsed
-//     it carries the ONE summary line ("Thought for 8s · 3 actions ▾", the
-//     pure `activitySummary`); live it carries the breathing "Thinking…"
-//     word (the retired placeholder's own dots + model micro-mono) or the
-//     RUNNING TOOL's verb ("Reading src/a.ts…") — one line, never the
-//     thinking card AND a tool card stacked;
-//   · the ACTIVITY WELL the rail summarizes: the recessed surfaceWell
-//     container (the usage-cards' own recipe: surfaceWell + hairline clayRim +
-//     RADIUS_INPUT) carrying the thinking text (the retired ThinkingBlock's
-//     mono-dim voice, its 20-line settled cap + Show all) over the R118
-//     strong-Hairline divider, then the TOOL ROWS — one compact row per
-//     call (icon + verb + target + status), the retired cards' content
-//     logic as each row's expandable body;
-//   · the REPLY as the block's body below the rail (the retired
-//     AssistantBlock's grammar: the meta line above the first content
-//     chunk, the MarkdownText, the shared LiveCaret while streaming).
-// The toolActivity pref applies INSIDE (hidden: no tool rows, the rail only
-// while thinking text exists — the clean document; compact: one-line rows,
-// no expansion; detailed: the full anatomy). R123-W-m: the well's open
-// state is DEFAULT-OPEN for every turn that renders tool rows (the owner's
-// "no tool calls were shown to me" — the R119 settle-collapse hid them);
-// see `wellDefaultOpen` below. The Reveal entrance stays.
+// The owner's v0.121.0 device verdict on the R119-A container — it "combines
+// everything together", the tool cards are "way too cramped", the thinking
+// "is combined with the tool cards", and the reply read as a bubble — retires
+// the ONE-clay-container law AS A CONTAINER. A turn's elements render as
+// SIBLINGS with real spacing, never inside one shared clay card:
+//   · THE RAIL — the plain tertiary glance line ABOVE the cards ("Thought
+//     for 8s · 3 actions · src/a.ts, npm test" — the R120-CM hints law
+//     unchanged: toolHint/toolHintList, ORDER-PRESERVING dedup, the
+//     TOOL_HINT_MAX 3 cap, the honest "+N more" tail): NO container, NO
+//     expand of its own, NO chevron, never a control. Live states unchanged
+//     (the breathing "Thinking…" with the retired placeholder's own dots +
+//     model micro-mono / the RUNNING tool's verb / "Writing…" — ONE line);
+//     breathing only while the turn WORKS (once text streams, the shared
+//     LiveCaret owns the motion — never two breathing things for one
+//     state). A turn with no activity at all renders no rail.
+//   · THE THINKING ROW — its own collapsible element between the rail and
+//     the tool cards (never inside a shared well with tool rows): the label
+//     ("Thinking…" live / "Thought for 8s" settled — the pure
+//     `thinkingRowLabel` grammar) + chevron; behind the expand, the dim mono
+//     thinking text in the retired ThinkingBlock's own voice (20-line
+//     settled cap + "Show all"; live thinking never clamps, live-open), the
+//     house DISCLOSURE motion (expand springs, collapse times —
+//     DisclosureClip above). A turn with no thinking renders no row.
+//   · THE TOOL CARDS — one clay CARD per tool call (NOT one row in a shared
+//     well): the house CARD padding (spacing.md = 12px all sides — the
+//     density pref's compact rung halves the vertical per its pinned
+//     contract), r12, the card surface (tokens.card — never surfaceWell), a
+//     hairline clayRim, 8px vertical gaps between cards (the turn column's
+//     own beat). The retired rows' content logic is PRESERVED: the head line
+//     (icon + verb + target — `toolRowTitle`), the quiet status chip
+//     (running = warning; failed = danger + the card's quiet danger wash;
+//     interrupted = neutral; success = nothing — the result rides the
+//     head/result lines), and the body — OPEN by default (R123-W-m's law
+//     survives: the owner must SEE the work), independently collapsible by a
+//     head tap (the house disclosure motion); compact pins the card to its
+//     one line (no expansion); hidden renders no cards at all.
+//   · THE REPLY — FLAT: the meta line (model · time) above the first
+//     content chunk, then the MarkdownText directly on the screen
+//     background, full width, the shared LiveCaret while streaming — no
+//     card, no container, NO bubble ("just directly writing the text… like
+//     how most of the other modern ones handle it").
+// The turn's outer View carries NO surface — the plain column's only job is
+// the sibling spacing. `turnElementsPlan` (pure, exported below) is the
+// render contract: which elements exist, in what order, with which geometry —
+// the component renders the plan verbatim, jest pins it (the
+// userBubbleBodyPlan precedent: the function IS the ordering contract).
+
+/** The plan's RAIL element (the plain glance line). */
+export type RailElement = {
+  element: "rail";
+  summary: string;
+  live: boolean;
+  /** Breathing only while the turn WORKS — once text streams, the shared
+   *  LiveCaret owns the motion (never two breathing things for one state). */
+  breathes: boolean;
+  /** chat.md R129 — the rail is a PLAIN LINE: never a control, never a
+   *  chevron, no expand of its own. */
+  isControl: false;
+  hasChevron: false;
+};
+
+/** The plan's THINKING ROW element (its own collapsible row). */
+export type ThinkingElement = {
+  element: "thinking";
+  text: string;
+  label: string;
+  live: boolean;
+  /** live-open (the stream IS the activity); settled starts collapsed
+   *  behind the label (the R124 verdict on the thinking wall stands). */
+  defaultOpen: boolean;
+};
+
+/** The plan's TOOL CARD element (one clay card per call). */
+export type ToolCardElement = {
+  element: "tool-card";
+  key: string;
+  /** detailed = the tap-to-collapse anatomy; compact = no expansion. */
+  expandable: boolean;
+  /** R123-W-m surviving in the separated grammar: OPEN by default — the
+   *  owner must SEE the work (compact renders no body at all). */
+  bodyOpen: boolean;
+};
+
+/** The plan's REPLY element (FLAT — no card, no container, NO bubble). */
+export type ReplyElement = {
+  element: "reply";
+  /** FLAT: no surface rides the reply's wrapper, ever. */
+  surface: null;
+};
+
+/** One element of the turn's separated layout. */
+export type TurnElementDescriptor =
+  | RailElement
+  | ThinkingElement
+  | ToolCardElement
+  | ReplyElement;
+
+/** R129-M — the turn's SEPARATED-ELEMENTS plan (the pure render contract). */
+export interface TurnElementsPlan {
+  /** The turn container carries NO surface (no clay card, no well, no
+   *  bubble) — the elements render directly on the screen background. */
+  containerSurface: null;
+  /** The turn's ordered sibling elements (rail → thinking → cards → reply;
+   *  only the elements the turn actually has — a thinking-less turn renders
+   *  no thinking element, a hidden-tools turn renders no cards). */
+  elements: TurnElementDescriptor[];
+  /** One clay card per tool call — the house CARD padding (spacing.md = 12,
+   *  the comfortable literal; the density pref's compact rung halves the
+   *  vertical at the component, per its pinned contract). */
+  toolCardPadding: number;
+  /** chat.md R129 — the tool card's radius (r12). */
+  toolCardRadius: number;
+  /** The 8px vertical gaps between cards (spacing.sm). */
+  toolCardGap: number;
+}
 
 /**
- * R123-W-m — the ACTIVITY WELL's default open state (pure, exported for the
- * tests): OPEN for every turn whose well renders TOOL ROWS — the owner's
- * report made the law ("No tool calls were shown to me… No file writes were
- * shown to me": the R119 auto-collapse retired every row behind the
- * one-line rail the moment a turn settled, and the owner's 7 reference
- * screenshots show tool rows as first-class VISIBLE stream elements). Live
- * turns keep today's open behavior; a turn with NO tool rows (the pref's
- * hidden rung, or a thinking-only turn) keeps the R119 default — collapsed
- * until the user taps. A user's manual tap still wins for the block's
- * lifetime (the component's userTouched discipline).
+ * Build the turn's separated-elements plan off the group + the toolActivity
+ * pref (pure — the component renders this verbatim, the tests pin it):
+ * presence follows the SAME pure predicates the renderers use (the rail
+ * from `activitySummary`, the thinking row from `turnThinkingText`, the
+ * cards from the pref's visibility, the reply from `turnReplyText`), and
+ * the pref shapes them exactly the way chat.md R129 rules: hidden = no
+ * tool cards + the rail only while thinking text exists (the clean
+ * document — the summary never teases a count the cards will not show);
+ * compact = one-line cards, no expansion; detailed = the full anatomy with
+ * the body OPEN by default.
  */
-export function wellDefaultOpen(live: boolean, toolRowCount: number): boolean {
-  return live || toolRowCount > 0;
+export function turnElementsPlan(group: TurnGroup, activity: ToolActivity): TurnElementsPlan {
+  const visibility = toolActivityVisibility(activity);
+  const facts = turnActivityFacts(group, activity);
+  const summary = activitySummary(facts);
+  const thinkingText = turnThinkingText(group.items);
+  const elements: TurnElementDescriptor[] = [];
+  if (summary !== null) {
+    elements.push({
+      element: "rail",
+      summary,
+      live: group.live,
+      breathes: group.live && !facts.writing,
+      isControl: false,
+      hasChevron: false,
+    });
+  }
+  if (thinkingText !== null) {
+    elements.push({
+      element: "thinking",
+      text: thinkingText,
+      label: thinkingRowLabel(group.live, facts.thoughtMs),
+      live: group.live,
+      defaultOpen: group.live,
+    });
+  }
+  if (!visibility.hidden) {
+    for (const item of group.items) {
+      if (item.kind !== "tool") continue;
+      elements.push({
+        element: "tool-card",
+        key: item.key,
+        expandable: visibility.expandable,
+        bodyOpen: visibility.expandable,
+      });
+    }
+  }
+  if (turnReplyText(group.items) !== "") {
+    elements.push({ element: "reply", surface: null });
+  }
+  return {
+    containerSurface: null,
+    elements,
+    toolCardPadding: spacing.md,
+    toolCardRadius: RADIUS_TOOL_CARD,
+    toolCardGap: spacing.sm,
+  };
 }
 
 // ── R128-W6 — the settled tool row's status word (pure, pinned) ────────────
@@ -1011,28 +1253,35 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
   const reduced = useReducedMotion();
   const visibility = toolActivityVisibility(prefs.toolActivity);
   // R114-d — the prefs: body text scales (mono/micro lines never do — they
-  // are the calibration marks); density shrinks the block's vertical
+  // are the calibration marks); density shrinks the tool cards' vertical
   // padding; timestamps gate the meta clock.
   const scale = textSizeScale(prefs.chatTextSize);
 
   // ── the members (the group's items, split by role) ──────────────────────
-  const thinkingText = turnThinkingText(group.items);
   const toolItems = group.items.filter((item): item is ToolItem => item.kind === "tool");
   const assistantItems = group.items.filter(
     (item): item is TranscriptItem & { kind: "assistant" } => item.kind === "assistant",
   );
 
+  // ── R129-M — the SEPARATED-ELEMENTS plan (pure, exported above): the
+  // render contract — which elements exist, in what order, with which
+  // geometry. The component renders the plan verbatim (presence comes from
+  // the plan's elements; the content below fills each element in). ────────
+  const plan = turnElementsPlan(group, prefs.toolActivity);
+  const railEl = plan.elements.find((el): el is RailElement => el.element === "rail") ?? null;
+  const thinkingEl =
+    plan.elements.find((el): el is ThinkingElement => el.element === "thinking") ?? null;
+  const toolCardEls = plan.elements.filter(
+    (el): el is ToolCardElement => el.element === "tool-card",
+  );
+  const replyEl = plan.elements.find((el): el is ReplyElement => el.element === "reply") ?? null;
+
   // ── the rail's facts + ONE summary line (pure — features/turn-block.ts) ──
   const facts = turnActivityFacts(group, prefs.toolActivity);
   const summary = activitySummary(facts);
-  const showToolRows = !visibility.hidden;
-  const wellHasContent = thinkingText !== null || (showToolRows && toolItems.length > 0);
-  // R123-W-m — the tool-row count the well actually renders (pref-applied:
-  // 0 under `hidden` — the clean document keeps the collapsed default).
-  const toolRowCount = showToolRows ? toolItems.length : 0;
 
   // ── R127-W8 — the tools-hidden hint's claim (see the block above): this
-  // block joins the mount generation, and the first qualifying render
+  // turn joins the mount generation, and the first qualifying render
   // claims the one-liner. Local hintGone mirrors the module-level dismissal
   // so the line vanishes on the tap itself, not on the next re-render. ──
   const [hintOwner] = useState(() => ({}) as object);
@@ -1041,9 +1290,11 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
     mountToolsHiddenHintBlock();
     return () => releaseToolsHiddenHintBlock();
   }, []);
-  const showToolsHiddenHint = !hintGone && acquireToolsHiddenHint(hintOwner, visibility.hidden, toolItems.length);
+  const showToolsHiddenHint =
+    !hintGone && acquireToolsHiddenHint(hintOwner, visibility.hidden, toolItems.length);
 
-  // ── the body (the retired AssistantBlock's grammar, over the segments) ──
+  // ── the reply's body (the retired AssistantBlock's grammar, now FLAT —
+  // the segments render directly on the screen background, full width) ────
   const textSegments = assistantItems.filter((seg) => {
     const live = seg.live && seg.chunks !== null ? seg.chunks.join("") : "";
     return live !== "" || (!seg.live && seg.content !== "");
@@ -1054,32 +1305,24 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
   const firstContentTs = textSegments[0]?.ts ?? null;
   const clock = timestampsVisible(prefs.timestampsMode) ? messageClock(firstContentTs) : null;
 
-  // ── the well's open state — R123-W-m: THE ROWS STAY VISIBLE. The R119
-  // settle-collapse (live → open, settle → collapse) hid every tool row
-  // behind the one-line rail the moment a turn settled — the owner's "no
-  // tool calls were shown to me… No file writes were shown to me". The
-  // default is now OPEN for every turn whose well renders tool rows
-  // (`wellDefaultOpen`, pure + pinned); live turns keep today's open
-  // behavior; a thinking-ONLY well keeps the R119 settle-collapse (the §N
-  // verdict on the thinking wall stands); a user's tap always wins for the
-  // block's lifetime (userTouched). The rail stays the summary + collapse
-  // control — a reader who wants the clean document taps once.
-  const [open, setOpen] = useState(wellDefaultOpen(group.live, toolRowCount));
-  const userTouched = useRef(false);
+  // ── R129-M — the THINKING ROW's open state (the retired well's own
+  // discipline, ported to the separated row): LIVE → open (live thinking
+  // never clamps and never collapses — the stream IS the activity); SETTLED
+  // → collapsed behind the label (the R124 verdict on the thinking wall
+  // stands); an IN-PLACE settle (the live flag flips while the group's keys
+  // persist — the terminal frame lands before the rehydrate remount)
+  // collapses a thinking-ONLY turn's row exactly the way the retired well
+  // collapsed; the user's manual tap always wins for the row's lifetime.
+  const [thinkingOpen, setThinkingOpen] = useState(group.live);
+  const thinkingUserTouched = useRef(false);
   const prevLive = useRef(group.live);
   useEffect(() => {
-    if (!userTouched.current) {
-      if (group.live) setOpen(true);
-      // A turn with tool rows stays open THROUGH the settle; only a
-      // tool-less well (thinking-only) keeps the R119 collapse-on-settle.
-      else if (prevLive.current !== group.live && toolRowCount === 0) setOpen(false);
+    if (!thinkingUserTouched.current) {
+      if (group.live) setThinkingOpen(true);
+      else if (prevLive.current !== group.live && toolCardEls.length === 0) setThinkingOpen(false);
     }
     prevLive.current = group.live;
-  }, [group.live, toolRowCount]);
-  const toggleWell = (): void => {
-    userTouched.current = true;
-    setOpen((value) => !value);
-  };
+  }, [group.live, toolCardEls.length]);
 
   // ── the live rail's breath — the retired placeholder's own 0.85↔1 ~1.2s
   // cycle, calm, only while the turn WORKS (once text streams, the shared
@@ -1129,52 +1372,33 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
       {summary}
     </TypeCaption>
   );
-  const railChevron = open ? (
-    <ChevronUp size={15} color={tokens.textTertiary} strokeWidth={2} />
-  ) : (
-    <ChevronDown size={15} color={tokens.textTertiary} strokeWidth={2} />
-  );
-  // The rail is a CONTROL only while the well has something to show; the
-  // pending state (dots, no content yet) is a state line, never a dead button.
+
+  // ── R129-M — THE RAIL is a PLAIN LINE: the turn's ONE glance line renders
+  // ABOVE the cards as a plain tertiary row — NO container of its own, NO
+  // expand, NO chevron, never a Pressable (the retired rail's control
+  // grammar died with the well; the line just states the glance, and the
+  // a11y story rides the turn's one container label).
   const rail =
     summary !== null ? (
-      wellHasContent ? (
-        <Pressable
-          accessibilityLabel={open ? "Hide the turn's activity" : "Show the turn's activity"}
-          accessibilityRole="button"
-          accessibilityState={{ expanded: open }}
-          onPress={toggleWell}
-          style={styles.turnRail}
-        >
-          <Animated.View style={[styles.turnRailRow, railBreath]}>{railInner}</Animated.View>
-          {railChevron}
-        </Pressable>
-      ) : (
-        <View style={styles.turnRail}>
-          <Animated.View style={[styles.turnRailRow, railBreath]}>{railInner}</Animated.View>
-        </View>
-      )
+      <View style={styles.turnRail} testID="transcript-turn-rail">
+        <Animated.View style={[styles.turnRailRow, railBreath]}>{railInner}</Animated.View>
+      </View>
     ) : null;
 
   return (
     <View
       accessibilityLabel={turnBlockA11yLabel({ ...facts, replyText: turnReplyText(group.items) })}
-      style={[
-        styles.turnBlock,
-        {
-          backgroundColor: tokens.card,
-          borderTopColor: tokens.clayTopEdge,
-          borderColor: tokens.borderSubtle,
-          boxShadow: tokens.clayShadowSm,
-          paddingVertical: densityVerticalPadding(prefs.chatDensity),
-        },
-      ]}
+      // R129-M — the turn container carries NO surface (no clay card, no
+      // well, no bubble): the plain column's only job is the siblings' real
+      // spacing (the house 8dp beat — the tool cards' own 8px gaps
+      // included).
+      style={styles.turnBlock}
       testID="transcript-turn-block"
     >
-      {rail}
+      {railEl !== null && rail}
       {/* R127-W8 — the retired Hidden rung's observable state: ONE quiet
-          dismissible line per session screen mount (see the hint block
-          above). The whole line is the fix — tap → detailed. */}
+          dismissible line under the rail (see the hint block above). The
+          whole line is the fix — tap → detailed. */}
       {showToolsHiddenHint && (
         <ToolsHiddenHint
           onShow={() => {
@@ -1189,57 +1413,69 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
           }}
         />
       )}
-      {wellHasContent && (
-        <Reveal open={open}>
-          <View
-            style={[styles.turnWell, { backgroundColor: tokens.surfaceWell, borderColor: tokens.clayRim }]}
-          >
-            {thinkingText !== null && (
-              <WellThinking text={thinkingText} live={group.live} thoughtMs={facts.thoughtMs} />
-            )}
-            {thinkingText !== null && showToolRows && toolItems.length > 0 && <Hairline strong />}
-            {showToolRows &&
-              toolItems.map((item) => (
-                <ToolRow key={item.key} item={item} expandable={visibility.expandable} />
-              ))}
-          </View>
-        </Reveal>
+      {thinkingEl !== null && (
+        <ThinkingRow
+          label={thinkingEl.label}
+          live={thinkingEl.live}
+          onToggle={() => {
+            thinkingUserTouched.current = true;
+            setThinkingOpen((value) => !value);
+          }}
+          open={thinkingOpen}
+          text={thinkingEl.text}
+        />
       )}
-      {hasContent && (group.model !== null || clock !== null) && (
-        <TypeMono
-          numberOfLines={1}
-          style={{ color: tokens.textTertiary, fontSize: 10.5 }}
-          testID="transcript-assistant-meta"
-        >
-          {[group.model, clock].filter((part) => part !== null).join(" · ")}
-        </TypeMono>
-      )}
-      {textSegments.map((seg, index) => {
-        const liveText = seg.live && seg.chunks !== null ? seg.chunks.join("") : "";
-        // R123-W-m — the rhythm law: consecutive segments of one turn are
-        // SEPARATE utterances (the owner: "there was no separation with the
-        // elements… it was looking off"), so every segment after the first
-        // carries the extra gap — the block's own 8dp beat on top of the
-        // turnBlock gap, double the markdown paragraph's internal rhythm,
-        // never one wall of text.
-        const segmentGap = index > 0 ? styles.assistantSegmentGap : undefined;
-        if (liveText !== "") {
-          const isLast = index === textSegments.length - 1;
-          return (
-            <View key={seg.key} style={[styles.assistantLive, segmentGap]}>
-              <MarkdownText content={liveText} textScale={scale} />
-              {/* R118-B — the shared LiveCaret (the private recipe's exact
-                  extraction; reuse, never re-roll). */}
-              {isLast && <LiveCaret color={tokens.accent} label="the agent is still writing" />}
-            </View>
-          );
-        }
-        return seg.content !== "" ? (
-          <View key={seg.key} style={segmentGap}>
-            <MarkdownText content={seg.content} textScale={scale} />
-          </View>
-        ) : null;
+      {/* THE TOOL CARDS — one clay card per call, 8px vertical gaps between
+          cards (the turn column's own beat; the plan carries the geometry
+          the styles speak). */}
+      {toolCardEls.map((el) => {
+        const item = toolItems.find((tool) => tool.key === el.key);
+        return item === undefined ? null : (
+          <ToolCard key={el.key} item={item} expandable={el.expandable} />
+        );
       })}
+      {/* THE REPLY — FLAT: the meta line above the first content chunk, then
+          the markdown directly on the screen background (the retired
+          AssistantBlock's grammar minus any container). */}
+      {replyEl !== null && (
+        <>
+          {hasContent && (group.model !== null || clock !== null) && (
+            <TypeMono
+              numberOfLines={1}
+              style={{ color: tokens.textTertiary, fontSize: 10.5 }}
+              testID="transcript-assistant-meta"
+            >
+              {[group.model, clock].filter((part) => part !== null).join(" · ")}
+            </TypeMono>
+          )}
+          {textSegments.map((seg, index) => {
+            const liveText = seg.live && seg.chunks !== null ? seg.chunks.join("") : "";
+            // R123-W-m — the rhythm law: consecutive segments of one turn are
+            // SEPARATE utterances (the owner: "there was no separation with the
+            // elements… it was looking off"), so every segment after the first
+            // carries the extra gap — the turn column's own 8dp beat on top of
+            // the container gap, double the markdown paragraph's internal
+            // rhythm, never one wall of text.
+            const segmentGap = index > 0 ? styles.assistantSegmentGap : undefined;
+            if (liveText !== "") {
+              const isLast = index === textSegments.length - 1;
+              return (
+                <View key={seg.key} style={[styles.assistantLive, segmentGap]}>
+                  <MarkdownText content={liveText} textScale={scale} />
+                  {/* R118-B — the shared LiveCaret (the private recipe's exact
+                      extraction; reuse, never re-roll). */}
+                  {isLast && <LiveCaret color={tokens.accent} label="the agent is still writing" />}
+                </View>
+              );
+            }
+            return seg.content !== "" ? (
+              <View key={seg.key} style={segmentGap}>
+                <MarkdownText content={seg.content} textScale={scale} />
+              </View>
+            ) : null;
+          })}
+        </>
+      )}
     </View>
   );
 }
@@ -1286,54 +1522,53 @@ function ToolsHiddenHint({ onShow, onDismiss }: { onShow: () => void; onDismiss:
 }
 
 /**
- * The well's thinking text — the retired ThinkingBlock's own body, moved
- * inside (R116-m's settled cap 20 + the "Show all" affordance at the cap;
- * live thinking never clamps — it IS the stream).
- *
- * ROUND-124 (the owner: "The thoughts is still given a dedicated block of
- * itself. It is not that well cleanly managed"): a SETTLED turn's thinking
- * no longer renders as its own standing dim block — it collapses behind a
- * ONE-LINE affordance ("Thought for 8s ▾", the same duration word the rail
- * summarizes with) that expands to the dim text on tap. LIVE thinking
- * still streams in place (it is the stream — collapsing the live moment
- * would hide the very activity the owner asked to see). The well's tool
- * rows stay first-class visible underneath (the R123 law).
+ * R129-M — THE THINKING ROW: its own collapsible element between the rail
+ * and the tool cards (never inside a shared well with tool rows — the
+ * owner's "the thoughts or thinking is not shown properly as it should. It
+ * is combined with the tool cards" verdict). The label ("Thinking…" live /
+ * "Thought for 8s" settled — the pure `thinkingRowLabel` grammar) +
+ * chevron; behind the expand, the dim mono thinking text in the retired
+ * ThinkingBlock/WellThinking's own voice (the 20-line settled cap + "Show
+ * all"; live thinking never clamps, live-open — the stream IS the activity,
+ * so the live head carries no toggle and the live body rides unclipped).
+ * The settled collapse/expand rides the house DISCLOSURE motion
+ * (DisclosureClip — expand springs, collapse times; the R124 settle-collapse
+ * law lives in the parent's open-state discipline).
  */
-function WellThinking({
+function ThinkingRow({
   text,
+  label,
   live,
-  thoughtMs,
+  open,
+  onToggle,
 }: {
   text: string;
+  label: string;
   live: boolean;
-  thoughtMs: number | null;
+  /** The parent owns the state (the R124 settle discipline + the user's
+   *  tap always winning live there). */
+  open: boolean;
+  onToggle: () => void;
 }) {
   const { tokens } = useTheme();
   const [showAll, setShowAll] = useState(false);
-  // R124 — the settled collapse: expanded = false at rest; live never
-  // collapses (the stream is the activity itself).
-  const [expanded, setExpanded] = useState(live);
   const overCap = !live && text.split("\n").length > THINKING_SETTLED_CAP;
-  const seconds = thoughtMs !== null ? Math.max(1, Math.round(thoughtMs / 1000)) : null;
-  const affordance = seconds !== null ? `Thought for ${seconds}s` : "Thought process";
-  if (!live && !expanded) {
-    return (
-      <Pressable
-        accessibilityLabel={`${affordance} — show the agent's thinking`}
-        accessibilityRole="button"
-        accessibilityState={{ expanded: false }}
-        onPress={() => setExpanded(true)}
-        style={styles.thinkingAffordance}
-        testID="thinking-affordance"
-      >
-        <TypeMono style={{ color: tokens.textTertiary, flex: 1 }} numberOfLines={1}>
-          {affordance}
-        </TypeMono>
-        <ChevronDown size={13} color={tokens.textTertiary} strokeWidth={2} />
-      </Pressable>
-    );
-  }
-  return (
+  const chevron = open ? (
+    <ChevronUp size={13} color={tokens.textTertiary} strokeWidth={2} />
+  ) : (
+    <ChevronDown size={13} color={tokens.textTertiary} strokeWidth={2} />
+  );
+  const labelText = (
+    <TypeMono style={{ color: tokens.textTertiary, flex: 1 }} numberOfLines={1}>
+      {label}
+    </TypeMono>
+  );
+  // The dim mono body — the retired ThinkingBlock's own voice: live never
+  // clamps (it IS the stream); settled clamps at the 20-line cap until the
+  // "Show all" affordance takes over. The label row IS the collapse control
+  // now — the retired in-body "Hide" row is redundant under the label +
+  // chevron grammar.
+  const body = (
     <View style={{ gap: spacing.xs }}>
       <TypeMono
         style={{ color: tokens.textTertiary }}
@@ -1341,35 +1576,50 @@ function WellThinking({
       >
         {text}
       </TypeMono>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
-        {overCap && (
-          <Pressable
-            accessibilityLabel={showAll ? "Show less of the agent's thinking" : "Show all of the agent's thinking"}
-            accessibilityRole="button"
-            onPress={() => setShowAll((value) => !value)}
-            style={styles.thinkingShowAll}
-            testID="thinking-show-all"
-          >
-            <TypeMicro style={{ color: tokens.accent }} numberOfLines={1}>
-              {showAll ? "Show less" : "Show all"}
-            </TypeMicro>
-          </Pressable>
-        )}
-        {!live && (
-          <Pressable
-            accessibilityLabel="Hide the agent's thinking"
-            accessibilityRole="button"
-            accessibilityState={{ expanded: true }}
-            onPress={() => setExpanded(false)}
-            style={styles.thinkingShowAll}
-            testID="thinking-collapse"
-          >
-            <TypeMicro style={{ color: tokens.textTertiary }} numberOfLines={1}>
-              Hide
-            </TypeMicro>
-          </Pressable>
-        )}
+      {overCap && (
+        <Pressable
+          accessibilityLabel={showAll ? "Show less of the agent's thinking" : "Show all of the agent's thinking"}
+          accessibilityRole="button"
+          onPress={() => setShowAll((value) => !value)}
+          style={styles.thinkingShowAll}
+          testID="thinking-show-all"
+        >
+          <TypeMicro style={{ color: tokens.accent }} numberOfLines={1}>
+            {showAll ? "Show less" : "Show all"}
+          </TypeMicro>
+        </Pressable>
+      )}
+    </View>
+  );
+  if (live) {
+    // LIVE — never clamps, live-open, no toggle (the R124 law: collapsing
+    // the live moment would hide the very activity the owner asked to see).
+    // The head is a plain state line; the chevron shows the open state.
+    return (
+      <View style={{ gap: spacing.xs }} testID="thinking-row">
+        <View style={styles.thinkingRow}>
+          {labelText}
+          {chevron}
+        </View>
+        {body}
       </View>
+    );
+  }
+  // SETTLED — the collapsible control: the label row toggles the body
+  // behind the house disclosure motion.
+  return (
+    <View testID="thinking-row">
+      <Pressable
+        accessibilityLabel={`${label} — show the agent's thinking`}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        onPress={onToggle}
+        style={styles.thinkingRow}
+      >
+        {labelText}
+        {chevron}
+      </Pressable>
+      <DisclosureClip open={open}>{body}</DisclosureClip>
     </View>
   );
 }
@@ -1435,29 +1685,37 @@ function PulseDot({ color, size }: { color: string; size: number }) {
   );
 }
 
-// ── the tool rows (R119-A — the retired cards' content logic, moved INSIDE
-// the TurnBlock's well) ──────────────────────────────────────────────────────
+// ── the tool cards (R129-M — one clay CARD per call; the retired rows'
+// content logic PRESERVED) ──────────────────────────────────────────────────
 //
-// ONE compact row per call: icon + verb + target + status (the head row the
-// cards always led with), the retired card families' content riding below —
-// the write family's streaming tail + "Wrote {file}" + +A/−B diff chips, the
-// terminal family's streamed output tail + exit summary, the read family's
-// quiet one-liner, the generic fallback's humanized verb + target. Tapping a
-// row expands its detail (args dump + output tail + output summary) while
-// toolActivity=detailed; compact pins every row to its one line; hidden never
-// renders the rows at all (the block's rail collapses with them).
+// THE TOOL CARD: the house card treatment around the retired row's content —
+// 12px card padding (spacing.md; the density pref's compact rung halves the
+// vertical, its pinned contract), r12 (chat.md R129), the CARD surface
+// (tokens.card — never surfaceWell) with a hairline clayRim + the small clay
+// shadow, 8px gaps between cards (the turn column's beat). The anatomy: the
+// HEAD line (icon + verb + target — `toolRowTitle`; the write family's +A/−B
+// diff chips inline; the quiet status chip) + the BODY, OPEN by default
+// (R123-W-m's law survives — the owner must SEE the work): the write
+// family's streaming tail + "Wrote {file}" + output summary, the terminal
+// family's streamed output tail + exit summary, the read family's quiet
+// one-liner, the generic fallback's args + output. Tap the head toggles the
+// body (the house disclosure motion); compact pins the card to its head
+// line — one-line cards, no expansion; hidden never renders cards at all.
 //
 // The failed call's tell stays the R116-m grammar: the inline danger chip on
-// the head row + the row's quiet danger wash (visible at a glance inside the
-// well); running = the small warning chip; success = NOTHING. R128-W6: an
-// INTERRUPTED settle (the turn's terminal frame landed before the result —
-// sessions.ts settles the stuck running cards) reads NEUTRAL — the quiet
-// "interrupted" chip, no danger wash; the rehydrate swap remains the truth.
+// the head line + the card's quiet danger wash; running = the small warning
+// chip; success = NOTHING. R128-W6: an INTERRUPTED settle (the turn's
+// terminal frame landed before the result — sessions.ts settles the stuck
+// running cards) reads NEUTRAL — the quiet "interrupted" chip, no danger
+// wash; the rehydrate swap remains the truth.
 
-function ToolRow({ item, expandable }: { item: ToolItem; expandable: boolean }) {
+function ToolCard({ item, expandable }: { item: ToolItem; expandable: boolean }) {
   const { tokens } = useTheme();
-  const [expanded, setExpanded] = useState(false);
-  const showDetails = expandable && expanded;
+  const prefs = useChatPrefs();
+  // R123-W-m surviving in the separated grammar: the card's body renders
+  // OPEN by default (the owner must SEE the work); a user's head tap wins
+  // for the card's lifetime.
+  const [open, setOpen] = useState(true);
   // R128-W6 — an INTERRUPTED settle (the turn ended before the result frame)
   // is neutral, not a failure: no danger wash, the quiet "interrupted" chip.
   const failed = item.ok === false && item.interrupted !== true;
@@ -1465,7 +1723,7 @@ function ToolRow({ item, expandable }: { item: ToolItem; expandable: boolean }) 
   const isWrite = WRITE_TOOLS.has(item.toolName);
   const isTerminal = TERMINAL_TOOLS.has(item.toolName);
   const isRead = READ_TOOLS.has(item.toolName);
-  // R123-W-m — the WEB families join the row grammar: the web pair
+  // R123-W-m — the WEB families join the card grammar: the web pair
   // (web_search/web_fetch) and the embedded browser (browser_control) are
   // tools the agent ACTUALLY runs, and the generic Wrench + raw key:value
   // dump was the shapeless rendering behind the owner's "no tool calls
@@ -1480,7 +1738,7 @@ function ToolRow({ item, expandable }: { item: ToolItem; expandable: boolean }) 
   // retired cards: the write family keeps its "Writing {file}… · {n} chars"
   // streaming verb and "Wrote {file}" settle; every other family carries the
   // CompactToolRow's own one-line law, "verb · target". R120-CM: the string
-  // lives in the PURE `toolRowTitle` (features/turn-block.ts) — the row's
+  // lives in the PURE `toolRowTitle` (features/turn-block.ts) — the card's
   // grammar is jest-pinned there, the component stays a renderer.
   const preview = extractWritePreview(item.inputRaw ?? "");
   const streaming = running && isWrite && item.inputRaw !== null;
@@ -1516,58 +1774,67 @@ function ToolRow({ item, expandable }: { item: ToolItem; expandable: boolean }) 
   return (
     <View
       style={[
-        styles.turnToolRow,
-        // The failed row's quiet danger wash (donts #37's card-wide tint,
-        // translated to the row inside the well).
-        failed ? { backgroundColor: mixHex(tokens.surfaceWell, tokens.danger, 0.08) } : null,
+        styles.toolCallCard,
+        {
+          // R129-M — the CARD surface (never surfaceWell) + the failed
+          // call's quiet danger wash (donts #37's card-wide tint, translated
+          // from the retired row to the card) + the hairline clayRim + the
+          // small clay shadow (the chat cards' own weight).
+          backgroundColor: failed ? mixHex(tokens.card, tokens.danger, 0.08) : tokens.card,
+          borderColor: tokens.clayRim,
+          boxShadow: tokens.clayShadowSm,
+          paddingVertical: densityVerticalPadding(prefs.chatDensity),
+        },
       ]}
+      testID="transcript-tool-card"
     >
       <ToolHeadRow
         item={item}
         icon={icon}
         title={title}
-        expanded={showDetails}
+        expanded={expandable && open}
         expandable={expandable}
-        onToggle={expandable ? () => setExpanded((v) => !v) : undefined}
+        onToggle={expandable ? () => setOpen((v) => !v) : undefined}
         after={diff !== null ? <WriteDiffChips added={diff.added} removed={diff.removed} /> : undefined}
       />
-      {writeTail !== null && (
-        <TypeMono
-          style={[
-            styles.terminalBlock,
-            {
-              color: tokens.textTertiary,
-              backgroundColor: tokens.monoBg,
-              borderColor: tokens.borderSubtle,
-            },
-          ]}
-          numberOfLines={3}
-        >
-          {writeTail}
-        </TypeMono>
-      )}
-      {terminalTail !== null && (
-        <TypeMono
-          style={[
-            styles.terminalBlock,
-            {
-              color: tokens.textTertiary,
-              backgroundColor: tokens.monoBg,
-              borderColor: tokens.borderSubtle,
-            },
-          ]}
-          numberOfLines={showDetails ? undefined : 3}
-        >
-          {terminalTail}
-        </TypeMono>
-      )}
-      {!running && !isRead && item.outputSummary !== null && item.outputSummary !== "" && (
-        <TypeMono style={{ color: tokens.textTertiary }} numberOfLines={showDetails ? undefined : 1}>
-          {item.outputSummary}
-        </TypeMono>
-      )}
-      {showDetails && (
-        <Reveal open>
+      {/* The BODY — the retired rows' content logic (the old main lines +
+          the old expanded details), OPEN by default behind the house
+          disclosure motion; compact renders no body at all (one-line
+          cards, no expansion). */}
+      {expandable && (
+        <DisclosureClip open={open}>
+          {writeTail !== null && (
+            <TypeMono
+              style={[
+                styles.terminalBlock,
+                {
+                  color: tokens.textTertiary,
+                  backgroundColor: tokens.monoBg,
+                  borderColor: tokens.borderSubtle,
+                },
+              ]}
+              numberOfLines={3}
+            >
+              {writeTail}
+            </TypeMono>
+          )}
+          {terminalTail !== null && (
+            <TypeMono
+              style={[
+                styles.terminalBlock,
+                {
+                  color: tokens.textTertiary,
+                  backgroundColor: tokens.monoBg,
+                  borderColor: tokens.borderSubtle,
+                },
+              ]}
+            >
+              {terminalTail}
+            </TypeMono>
+          )}
+          {!running && !isRead && item.outputSummary !== null && item.outputSummary !== "" && (
+            <TypeMono style={{ color: tokens.textTertiary }}>{item.outputSummary}</TypeMono>
+          )}
           {!isTerminal && item.argsSummary !== "" && (
             <TypeMono style={{ color: tokens.textSecondary }} numberOfLines={6}>
               {item.argsSummary}
@@ -1583,7 +1850,7 @@ function ToolRow({ item, expandable }: { item: ToolItem; expandable: boolean }) 
               {item.outputSummary}
             </TypeMono>
           )}
-        </Reveal>
+        </DisclosureClip>
       )}
     </View>
   );
@@ -2793,25 +3060,21 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     paddingHorizontal: spacing.md,
   },
-  /** R119-A — THE TURN BLOCK: one clay container per assistant turn (the
-   *  existing card grammar, subtle — the retired document's weight):
-   *  RADIUS_INPUT, card fill, hairline borderSubtle + clayTopEdge, the
-   *  small clay shadow, density-aware vertical padding. */
+  /** R129-M — THE TURN: a plain column of SEPARATED elements (chat.md
+   *  §Transcript R129 — the R119-A clay container is retired): NO surface,
+   *  NO border, NO radius, NO padding — the rail line, the thinking row,
+   *  the tool cards, and the flat reply render as siblings at the house 8dp
+   *  beat (the cards' own 8px gaps included). */
   turnBlock: {
-    borderRadius: RADIUS_INPUT,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    padding: spacing.md,
     gap: spacing.sm,
   },
-  /** The block's ACTIVITY RAIL — the collapsible head row (minHeight 32,
-   *  the toolHead's own quiet target height; the chevron rides outside the
-   *  breathing word so it never pulses). */
+  /** R129-M — the RAIL: the turn's ONE glance line, a PLAIN tertiary row
+   *  above the cards — no container, no control, no chevron (the control
+   *  era died with the well; the breathing wrapper rides inside). */
   turnRail: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    minHeight: 32,
   },
   /** The rail's breathing content wrapper (the retired placeholder's own
    *  0.85↔1 cycle rides here; steady at opacity 1 once text streams). */
@@ -2829,13 +3092,29 @@ const styles = StyleSheet.create({
     gap: 5,
     flex: 1,
   },
-  /** The recessed ACTIVITY WELL — the usage-cards' own recipe (surfaceWell
-   *  fill + hairline clayRim + RADIUS_INPUT), tight rows (gap xs). */
-  turnWell: {
-    borderRadius: RADIUS_INPUT,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: spacing.sm,
+  /** R129-M — the THINKING ROW's label row (the retired affordance's own
+   *  grammar: the duration word + the chevron, the 44px touch-target law
+   *  on the one interactive row). */
+  thinkingRow: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
     gap: spacing.xs,
+  },
+  /** R129-M — the house DISCLOSURE clip's collapsed pose (disclosure.tsx's
+   *  own grammar — the animated height/opacity ride on top). */
+  disclosureClip: {
+    overflow: "hidden",
+    height: 0,
+  },
+  /** The clip's measurement child: absolutely positioned so a collapsed
+   *  clip height can never clamp its own layout (disclosure.tsx's own Yoga
+   *  fix — the projects-accordion deadlock, avoided by construction). */
+  disclosureMeasure: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
   },
   /** R127-W8 — the tools-hidden hint row: one quiet line under the rail (the
    *  rail's own 32 touch height; the press target takes the flex, the ✕ rides
@@ -2853,12 +3132,17 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
     borderRadius: RADIUS_PILL,
   },
-  /** One tool row inside the well (a failed call's quiet danger wash rides
-   *  inline; the rows are flush lines, never nested cards). */
-  turnToolRow: {
-    gap: spacing.xs,
-    borderRadius: 10,
-    paddingHorizontal: spacing.sm,
+  /** R129-M — THE TOOL CARD: one clay card per call — the house CARD
+   *  padding (spacing.md = 12px all sides; the density pref's compact rung
+   *  halves the VERTICAL at the call site, its pinned contract), r12
+   *  (chat.md R129), the card fill + hairline clayRim + the small clay
+   *  shadow at the call site. The 8px gaps BETWEEN cards ride the turn
+   *  column's own beat (the plan's toolCardGap). */
+  toolCallCard: {
+    borderRadius: RADIUS_TOOL_CARD,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: spacing.md,
+    gap: spacing.sm,
   },
   assistantLive: {
     flexDirection: "row",
@@ -2936,21 +3220,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
   },
-  /** R116-m → R119-A — the well's thinking text's "Show all" affordance (at
-   * the settled cap): the 44px touch-target law on the one interactive row. */
+  /** R116-m → R129-M — the thinking row's "Show all" affordance (at the
+   * settled cap): the 44px touch-target law on the one interactive row. */
   thinkingShowAll: {
     minHeight: 44,
     justifyContent: "center",
     alignSelf: "flex-start",
-  },
-  /** R124 — the settled thinking's ONE-LINE affordance row (the collapsed
-   *  state): the duration word + the chevron, a full-width quiet tap
-   *  target inside the well. */
-  thinkingAffordance: {
-    minHeight: 44,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
   },
   miniLink: {
     minHeight: 44,

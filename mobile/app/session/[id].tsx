@@ -165,8 +165,9 @@
  * consecutive assistant/thinking/tool items become ONE TurnBlock; every
  * interactive/terminal kind stays its own row). The synthetic thinking
  * marker survives (thinkingPlaceholderVisible's honesty rules unchanged)
- * but renders as the TurnBlock's own breathing rail state, not a card; the
- * toolActivity pref applies INSIDE the block (see transcript.tsx).
+ * but renders as the turn's own breathing rail line, not a card; the
+ * toolActivity pref applies to the turn's SEPARATED elements (see
+ * transcript.tsx — R129-M).
  *
  * ROUND-120 (R120-P — the composer's edge + the kebab's Task list): the
  * owner's §H item 28 — the composer "rides the device edge — no bottom
@@ -914,7 +915,8 @@ export default function SessionScreen() {
   // (density / text size / timestamps / toolActivity) are read by the
   // TurnBlock + the item cards themselves through useChatPrefs — reactive,
   // exactly as before; the screen no longer folds tool runs here (the
-  // toolActivity pref applies INSIDE the block now).
+  // toolActivity pref applies to the turn's SEPARATED elements now —
+  // R129-M).
   const displayItems = useMemo<TranscriptItem[]>(() => {
     let items: TranscriptItem[];
     if (live !== null) {

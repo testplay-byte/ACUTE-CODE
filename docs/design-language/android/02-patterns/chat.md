@@ -236,7 +236,7 @@ one shared clay container:
   row.
 - **THE TOOL CARDS are proper cards** — one clay card per tool call with
   the HOUSE CARD PADDING (12px — not the well's cramped row insets),
-  `RADIUS_CARD` r12, 8px vertical gaps between cards: icon + verb +
+  r12 (the tool-card corner — a local literal; the tokens ladder's RADIUS_CARD is 20, too round for a dense row), 8px vertical gaps between cards: icon + verb +
   target head line, the status/result line, the expandable body (the
   retired cards' content logic — the write family's streaming tail +
   "Wrote {file}" + `+A/−B` diff chips (the minus is the server's U+2212),
