@@ -266,3 +266,96 @@ replaces nothing — it is the round's OWN gate per the owner's directive.
   constant; the on-device feel rides the device pass.
 - The context pill's cadence is the desktop's exact 2.5 s — chosen for
   parity, not re-tuned.
+
+---
+
+## §5 The waves as they landed
+
+- **Wave A** (commit `09df8c8`) — the arrows die, the cluster shrinks, the
+  dock owns its left inset, the rail slims. Pins: the R130 pill-set test
+  (the label is the LAST trigger child + exactly one leading svg), the
+  shrinkable-cluster contract in the R78-B pin, the dock-inset test, the
+  timeline geometry re-pins. Gates: Composer 93 + MessageTimeline 14 +
+  AgentChatPanel 85 GREEN.
+- **Wave B** (commit `c29ced4`) — `turnElementsPlan` v2 (the
+  emission-order interleave + the run folding), the ToolGroup/ToolRow/
+  ToolGroupHeader grammar with the ported PC lifecycle, the family colors,
+  the whole-row press target, the pure `toolFamily`/`toolGroupLabel`
+  helpers in turn-block.ts. Pins: transcript-turn re-pinned to the v2 plan
+  (+ the interleave + the lifecycle + the label grammar), turn-block gains
+  the classifier + glance pins. Gates: mobile tsc + jest 48/1,106.
+- **Wave C** (commits `2f1c19b` + `5cd34dd`) — the abort partial omits
+  fabricated usage, the meter's `actual` skips garbage rows, the api.ts
+  folded merge guarded, the PC meter's delayed heal, the phone's live pill
+  + the settle-boundary refresh. Pins: the midway-stop shape in
+  context-report, the no-usage partial in r43-turn-error. Gates: agent-core
+  30/30 on the touched suites, PC tsc + Composer + src/lib green.
+- **Wave D** (commit `928e050`) — the More-screen Update row below
+  Settings, the minimal screen, the Sheet-based download flow, the progress
+  under the button, the real native Delete (path-validated), the token
+  section removed. Pins: the two delete-affordance updater tests. Gates:
+  mobile tsc + jest 48/1,108.
+- **Wave E** (commit `2c191cd`) — the live battery ON THE REAL STACK: the
+  sidecar on a scratch DB + vite + agent-browser, real
+  `nvidia/nemotron-3.5-lightning:free` turns through the app's own SSE
+  pipeline (tools, approvals, a live mode switch through the arrow-free
+  picker). THE FINDING: the 1300px sweep caught the old ladder's
+  comfortable-width wrap (a ~470px box overflowing by ~18px — flex
+  line-breaking fires at base sizes before any shrink) → the denser
+  ladder (240→170@520→100@480→80@420→logo@350), probe-verified single-line
+  at 469 AND 337, wrap only at the 214px floor.
+
+## §6 The close-out
+
+**The full gate stack (all fresh, all green):** root tsc CLEAN; agent-core
+tsc CLEAN; mobile tsc CLEAN; FULL root vitest **297 files / 5,208 tests**
+(baseline 296/5,205); agent-core vitest **168 files / 3,091 tests** (the
+midway-stop + no-usage pins); mobile CI=1 jest **48 suites / 1,108 tests**
+(+10 vs the R129 baseline); eslint 0; design-audit CLEAN at baseline
+(R1 100/101, R2 1538/1635, R3 0/0, R4 15/16, R5 13/21); docs:check green;
+version:check 7/7 at 0.123.0.
+
+**The live battery (the round's own gate — the owner's explicit ask,
+"do local testing on your environment without even building it"):**
+the dev stack (the real agent-core sidecar on a scratch DB at .dev-r130 +
+vite with the VITE_ACUTE_* wiring + agent-browser at 1600px), seeded via
+REST (agent → openrouter → the free nemotron model; project; session),
+the wizard walked (the provider test answering "Connected • 2783ms •
+nvidia/nemotron-3.5-lightning:free • server key"), then FOUR real turns.
+THE EVIDENCE (shots/r130/):
+- `01-boot` → `03-session-composer`: the live composer with **zero
+  chevron glyphs** (probe-verified: 0 chevron svgs in the composer; each
+  picker pill carries exactly ONE leading family svg and its label as the
+  last child); the right cluster `min-w-0` without `shrink-0`.
+- `04-turn-running` → `06-after-midway-stop`: the first tool-using turn
+  (list_dir + read_file) completing with the REAL provider anchor
+  ("6% · provider-anchored · 59k measured at last request (of 1m
+  window)"); then a LONG turn STOPPED midway — "Stopped" rendered, NO
+  "usage unavailable", NO fabricated zero (the event log's abort partial
+  carries no usage; the meter fell back to the last REAL measurement, the
+  20k iteration), the Continue affordance back.
+- `07-narrow-760` / `07b-narrow-1300-single-line`: the shrink sweep —
+  single line at box 469px (the ladder fix's whole point), at 337px; wrap
+  only at the 214px layout floor (the legit R51-c emergency).
+- `08-final-wide` → `10-context-details`: the dock's measured left inset
+  (the composer's left edge 28px from the panel — the old 64px dead air
+  reclaimed); the timeline corridor w-7 in the DOM; the meter's live
+  polling confirmed (the 2.5s /context cadence in the network log), the
+  headline stepping 59k → 20k → 81k → 62k across turns (BOTH directions —
+  the R129 superseded-read stubbing visibly shrinking the re-sent
+  context); the details popover carrying the live composition (Messages
+  59.7k/71%, System prompt 8.2k, tools 4.7k) + the cache line (32% hit ·
+  65k/202k cached); zero console/page errors across the whole session.
+
+**The honest caveats:**
+- The MOBILE surfaces (the tool groups on a real screen, the live pill's
+  on-device cadence, the update sheet's native legs — the OkHttp download,
+  the delete, the OS installer hand-off) ride the owner's device pass;
+  the jest pins cover the pure + orchestration layers, as they did in
+  R124-R129.
+- The free-model battery used ONE model family (nemotron-3.5-lightning);
+  the cohere/north-mini-code fallback was probed at the API level but not
+  driven through a full app turn.
+- The PC meter's mid-iteration number steps per COMPLETED provider
+  request (the anchor's honest granularity — a finer live estimate rides
+  the standing queue in round.next).

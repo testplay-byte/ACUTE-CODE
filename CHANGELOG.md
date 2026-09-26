@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-26 round-129 -->
+<!-- last-reviewed: 2026-09-26 round-130 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,31 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [0.123.0] — 2026-09-26 — the composer fit + the mobile tool groups + the live meter
+
+### The chat composer fits (desktop)
+- **The three picker pills no longer show dropdown arrows** — the operation-mode, provider, and thinking-level pills keep their leading icons and labels; the trailing chevron glyphs are gone.
+- **Shrinking the conversation now shrinks smoothly all the way down.** The provider pill's label collapses in finer steps (240 → 170 → 100 → 80 → logo-only) and absorbs the remaining squeeze by ellipsizing, so the controls stay on ONE line at widths that used to throw the whole cluster onto a second line; only the layout's own minimum width wraps at all. (Found and fixed by a live browser battery on a real model session, not by guesswork.)
+- **The message input reaches further left.** The composer no longer inherits the reading column's wide left inset — the box now starts 20-28px from the panel edge instead of 48-64px, reclaiming the dead air beside the quick-navigation rail.
+- **The quick-nav rail slims down** — its hover corridor narrows from 36px to 28px and its resting pills from 10px to 8px (magnified 28→20px), leaving more room for the conversation itself.
+
+### The mobile transcript: grouped tools, honest order (Android)
+- **Consecutive tool calls now group into one card** — a run of calls renders as a single fold with a count line ("3 calls · 2 read · 1 edit") and the calls as one-line rows inside, exactly like the desktop's Working section.
+- **Text renders where it was received.** A reply that arrives between two runs of tool calls renders BETWEEN them — no more all-tools-at-the-top with a wall of text at the bottom.
+- **Tool cards collapse.** Groups open while the turn is live so you can watch the work happen, then fold shut a couple of seconds after it settles; a failed call keeps its group open. Your tap always wins.
+- **Every tool family has a color** — the write family's terracotta, the terminal's amber, the read family's taupe, the web/browser teal — on both the row's leading stripe and its icon.
+- **Tapping anywhere on a tool row expands it.** The row's whole card is the tap target (with edge slack), not a thin header strip — the "I tapped it and nothing happened" dead zones are gone.
+- **The live context meter rides above the phone's input** — the percentage, the used-of-window count, and a small pressure-colored bar, updating every 2.5s while the agent works (and once more when the turn ends or you stop it).
+
+### The context meter tells the truth (all surfaces)
+- **Stopping a conversation midway no longer breaks the meter.** The aborted partial used to persist a fabricated zero-token "measurement" that the meter then trusted ("0 measured at last request", or worse, an "unavailable" error that never healed) — the partial now carries no usage at all, the meter keeps the last REAL measurement, and a transient failure at the stop boundary heals itself within two seconds.
+
+### The update flow, rebuilt (Android)
+- **Update now sits directly below Settings in the More tab** — the phone's own update surface, out of the desktop-settings hub it used to hide in.
+- **The update screen is minimal**: the version at the top and nothing else, one Check updates button, one quiet line per answer — no description text, no shield icon, no inline release details.
+- **Checking for an update opens a bottom sheet** with the release details and the Download button at its foot; starting the download closes the sheet, and the progress bar (with Cancel) runs below the Check button. Once downloaded: Install — and Delete, which discards the cached APK for real.
+- **The optional GitHub-token section is gone** — removed outright.
 
 ## [0.122.0] — 2026-09-26 — the context-steward round: smarter context, the Scratchpad, the flat mobile transcript, leaner releases
 
