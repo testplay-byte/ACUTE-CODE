@@ -42,14 +42,25 @@ Workspace ── chat card ⇄ right sidebar (files/browser/terminal/…)
    (R128 decision, reversing the R126 split — the owner's directive:
    "clicking on any of the projects should not automatically switch the
    view to that specific project — it should only expand or collapse the
-   sessions of it.") The whole project row is the toggle; the dedicated
-   chevron button is RETIRED (no separate toggle affordance). Entering a
-   conversation is a SESSION row's job. Hover actions (new session,
-   delete) stay on the row and stop propagation. Row names render FULLY
-   when the hover actions are not visible — the actions OVERLAY on hover,
-   never reserving layout width (the owner's "the name becomes dotted way
-   too early while the right side is empty"); project rows sit a notch
-   taller than session rows (the project is the heavier object).
+   sessions of it.") The whole project row is the toggle. Entering a
+   conversation is a SESSION row's job. **ROUND-129 (the owner's second
+   directive — REWRITTEN): NO ARROWS ON PROJECT ROWS** — the left chevron
+   glyph is RETIRED entirely, not merely demoted to a presentation mark
+   ("I was shown the arrows on the left sides of each one of the projects,
+   which was not good. I told you to remove the arrows"); the expand state
+   reads from the session well beneath the row + the row's active/open
+   treatment. **Projects are SEPARATED** — a hairline divider + spacing
+   between project rows ("so that the projects are separate and they look
+   much more cleaner"). **Hover actions SHRINK the text** (R129, reversing
+   R128's overlay law): the action cluster occupies RESERVED FLEX WIDTH
+   that grows in on hover while the name's truncation TIGHTENS to make
+   room — the buttons never OVERLAY the text (the owner: "the text should
+   shrink… so that there is enough space for the edit button… and the new
+   session button and the delete button"); at rest the name renders FULLY.
+   Project rows sit a notch taller than session rows (the project is the
+   heavier object). The new-session and delete buttons share ONE quiet
+   ghost-button grammar (same size, same hover, same corner — no filled
+   accent square beside a bare icon).
 3. **Session switching lives in the sidebar's session tree** (per-project)
    — the owner's R49 directive: NO global sessions screen, ever.
 4. **The right sidebar is the workspace's tool belt** — browser-style tabs
@@ -64,19 +75,29 @@ Workspace ── chat card ⇄ right sidebar (files/browser/terminal/…)
 7. **Keyboard parity**: every nav row is a real `<button>`/`<a>` with
    `:focus-visible` (the global ring); ⌘K opens the palette; the sidebar
    rail's hover labels also carry `aria-label`.
-8. **Deletes confirm — ROUND-128**: deleting a session or a project
-   ALWAYS asks first — the danger `ConfirmDialog` (cancel takes focus,
-   ESC + outside-click dismiss; a project's dialog enumerates exactly
-   what dies — its sessions and their events). No sidebar delete is
-   immediate (the owner's "it should not be automatically deleted — the
-   confirmation should be asked, but it does not ask").
-9. **The General conversation — ROUND-128**: the projects section
-   carries a persistent General entry — conversations that need no
-   folder, living in the app's own internal folder under the sidecar
-   state dir (seeded by the backend, delete-protected, never a folder
-   picker). The owner's rule: "the user will not be required to select a
-   folder for that — it will select an internal folder and it will use
-   that."
+8. **Deletes confirm — ROUND-128; ROUND-129 semantics**: deleting a
+   session or a project ALWAYS asks first — the danger `ConfirmDialog`
+   (cancel takes focus, ESC + outside-click dismiss; the dialog
+   enumerates exactly what dies). No sidebar delete is immediate. **The
+   R129 delete-materiality law**: deleting a NORMAL project or session
+   removes APP RECORDS ONLY — the workspace folder and files on disk are
+   NEVER touched, and the dialog SAYS so; only SCRATCHPAD sessions delete
+   their own workspace folders with their records (law #9). The
+   Scratchpad project itself stays delete-protected.
+9. **The Scratchpad — ROUND-129 (rewritten from R128's General
+   conversation)**: the no-folder conversation section sits at the very
+   BOTTOM of the projects list, SEPARATED from the normal projects by
+   space + a hairline + its own "SCRATCHPAD" kicker row (never mixed
+   into the project list, never pinned first). It is named **Scratchpad**
+   (not "General" — the owner: "it will also not be called general, but
+   it will be something else so that it looks proper"). **Every
+   Scratchpad session is INDEPENDENT**: each gets its own dedicated
+   workspace folder under the sidecar state dir (`<dataDir>/scratchpad/
+   <sessionId>/`) — conversations never share or pollute one folder —
+   and deleting a Scratchpad session removes its folder with its
+   records. The section is seeded by the backend (stable row id),
+   delete-protected as a whole, never a folder picker, and carries its
+   own "New chat" affordance on the kicker row.
 
 ## 3. Archetype recipes (the materials)
 
