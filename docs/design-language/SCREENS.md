@@ -152,6 +152,18 @@ Workspace ── chat card ⇄ right sidebar (files/browser/terminal/…)
   `monoText`, live rhythm = the 550ms caret/delivery-edge.
 - The composer: one rounded-12 box, the focus-within accent edge + halo,
   the toolbar's non-wrapping action anchor — R125's law stands.
+  R130 (the owner's fit verdict): the picker pills carry NO trailing
+  chevron glyph (the leading family icon + the label ARE the affordance);
+  the right selector cluster is SHRINKABLE — the model pill is the row's
+  flex sponge (its label ellipsizes continuously past the tier ladder),
+  so the row shrinks smoothly instead of wrapping the cluster to a second
+  line (the R51-c wrap stays as the absurd-width emergency only); the
+  DOCK owns its own left inset (pl-5/md:pl-6/xl:pl-7 — WIDER than the
+  reading column: the input expands left over the dead air, the owner's
+  explicit ask; the right edge stays column-aligned), and the message
+  timeline's corridor is 28px (w-7 — the quick-nav "utilizes a bit less
+  space"; the rail is clamped to the transcript wrapper and never touches
+  the dock).
 
 ### Hub (Settings/Wizard)
 - The sidebar becomes the grouped nav (back-pill → search → sections);

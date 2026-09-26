@@ -204,83 +204,113 @@ everything together", the tool cards are "way too cramped", the thinking
 "is combined with the tool cards", and the reply reads as a bubble —
 "You should not utilize bubbles for the reply, but just directly writing
 the text… like how most of the other modern ones handle it. It would give
-us much more space."):**
+us much more space." R130 — SUPERSEDES the R129 ordering + card grammar:
+the owner's verdict: the cards were "always being shown expanded", "not
+grouped together like how they are in the PC version", and the text "was
+not shown in the appropriate place" — tools always at the top, text
+always at the bottom. The R130 grammar: EMISSION-ORDER INTERLEAVING +
+the TOOL GROUP.):**
 
 The turn's elements render as SIBLINGS with real spacing — never inside
-one shared clay container:
+one shared clay container — and IN THE ORDER THE WORK HAPPENED:
 
 ```
   Thinking ▾                              ← SEPARATE collapsible thinking row
   (mono-dim text behind the expand; 20-line cap + Show all)
 
   ┌──────────────────────────────┐
-  │ ▸ icon  verb · target        │        ← TOOL CARD: one clay card per call,
-  │ result line / [chip]         │          house card padding (12px), r12,
-  └──────────────────────────────┘          8px gaps between cards
-  ┌──────────────────────────────┐
-  │ ▸ icon  verb · target        │
-  └──────────────────────────────┘
+  │ ▸ 3 tool calls · 2 read ⋯    │        ← TOOL GROUP: one clay card per
+  │   ▸ icon verb · target       │          RUN of consecutive calls — a
+  │   ▸ icon verb · target       │          group header + one-line rows;
+  └──────────────────────────────┘          collapsed by default, live-open,
+                                           auto-collapse after settle
 
   model · time                           ← meta line, only when content starts
-  markdown content (streaming + caret)   ← THE REPLY — FLAT, full width,
+  markdown content (streaming + caret)   ← THE TEXT — FLAT, full width,
                                            NO card, NO container, NO bubble
+  ┌──────────────────────────────┐
+  │ ▸ 1 tool call ⋯              │        ← a LATER run of calls renders
+  └──────────────────────────────┘          WHERE IT HAPPENED — after the
+  more markdown content                  text it interrupted, never above
 ```
 
-
 - **THE THINKING ROW is its own element** — a separate collapsible row
-  ABOVE the tool cards and the reply, never inside a shared well with
+  ABOVE the tool groups and the text, never inside a shared well with
   tool rows: the label ("Thinking…" live / "Thought for 8s" settled) +
   chevron; the dim mono text behind the expand (the retired
   ThinkingBlock's own voice — 20-line settled cap + "Show all"; live
   thinking never clamps, live-open). A turn with no thinking renders no
   row.
-- **THE TOOL CARDS are proper cards** — one clay card per tool call with
-  the HOUSE CARD PADDING (12px — not the well's cramped row insets),
-  r12 (the tool-card corner — a local literal; the tokens ladder's RADIUS_CARD is 20, too round for a dense row), 8px vertical gaps between cards: icon + verb +
-  target head line, the status/result line, the expandable body (the
-  retired cards' content logic — the write family's streaming tail +
-  "Wrote {file}" + `+A/−B` diff chips (the minus is the server's U+2212),
-  the terminal family's output tail + exit summary, the read family's
-  quiet one-liner, the generic fallback's humanized verb + target).
-  Failed = the INLINE danger chip + the card's quiet danger wash;
-  running = the small warning chip; success = NOTHING (the result rides
-  the head line itself). Cards render OPEN by default (R123-W-m's law
-  survives — the owner must SEE the work), each independently
-  collapsible.
-- **THE RAIL SURVIVES AS THE CARDS' SUMMARY** — the turn's ONE glance
+- **THE TOOL GROUP (R130 — the PC Working-fold grammar, ported)** — one
+  clay card per RUN of consecutive tool calls: a HEADER (the call count +
+  the family glance + the chevron; the running/failed tell rides the
+  header while the group works) and the calls inside as ONE-LINE rows.
+  The auto-lifecycle law ports from the PC's own ToolLine: OPEN while the
+  turn is live (the owner watches the work happen), COLLAPSED when the
+  turn settles (a ~2 s hold first — the outcome is readable), a group
+  holding a FAILED call NEVER auto-collapses, and the user's tap wins for
+  the group's lifetime. COLLAPSED-BY-DEFAULT is the owner's explicit R130
+  ask — R123-W-m's "open by default (the owner must SEE the work)" is
+  RETIRED: the live-open law carries the seeing, the settled transcript
+  stays quiet.
+- **THE TOOL ROW + COLOR CODING (R130)** — each call inside the group is
+  a one-line row: the family icon in the FAMILY COLOR + a 2.5 px
+  family-colored left stripe + the verb·target title (mono, one line) +
+  the write family's `+A/−B` diff chips (the minus is the server's
+  U+2212) + the QUIET status chip (running = warning tint, failed =
+  danger tint, interrupted = neutral, success = NOTHING — the result
+  rides the head line). Tapping ANYWHERE on the row expands its details
+  inline (the write family's streaming tail + "Wrote {file}", the
+  terminal family's output tail + exit summary, the read family's quiet
+  one-liner, the generic fallback's humanized verb + target) — the row
+  IS the press target (the R129 head-row-only press target left dead
+  zones in the card padding — "I tapped on it, it apparently did
+  nothing"). FAMILY COLORS: write = accent (terracotta), terminal =
+  warning (amber), read = accent2 (taupe), web/browser = the chart sage
+  teal, generic = textSecondary; FAILED keeps the card's quiet danger
+  wash.
+
+
+- **THE RAIL SURVIVES AS THE GROUPS' SUMMARY** — the turn's ONE glance
   line ("Thought for 8s · 3 actions · `src/a.ts`, npm test" — the R120-CM
   hints law unchanged: the write family's file path, the terminal
   family's command, the read family's target, one hint per call
   (`toolHint`), ORDER-PRESERVING deduped (`toolHintList`), capped at
   `TOOL_HINT_MAX` 3 with the honest "+N more" tail; the hints ride BOTH
   the visible summary and the a11y label, pref-applied) renders ABOVE
-  the cards as a plain tertiary line — NO container, no expand of its
+  the groups as a plain tertiary line — NO container, no expand of its
   own. Live states unchanged: the breathing "Thinking…" (three
   staggered dots + the resolved model in micro mono) or the RUNNING
   tool's verb ("Reading a file…", the pure `runningToolWord` grammar) or
-  "Writing…" — ONE line, never a thinking row AND a tool card stacked.
+  "Writing…" — ONE line, never a thinking row AND a tool group stacked.
   A turn with no activity at all renders as the clean document — no
   rail. Breathing 0.85↔1 at 600ms legs only while the turn WORKS — once
   text streams, the shared LiveCaret owns the motion, never two
   breathing things for one state.
-- **THE REPLY IS FLAT** — no card, no container, NO bubble: the meta
+- **THE TEXT IS FLAT** — no card, no container, NO bubble: the meta
   line (model · time, 10px mono tertiary) above the first content chunk
   of the turn, the MarkdownText directly on the screen background, full
   width, the shared LiveCaret while streaming ("just directly writing
-  the text… like how most of the other modern ones handle it").
+  the text… like how most of the other modern ones handle it"). R130:
+  the text renders WHERE IT WAS RECEIVED — an element per run of
+  consecutive assistant segments, interleaved with the tool groups in
+  emission order (the R129 all-cards-above-one-reply-bottom shape is
+  retired; the meta line rides the FIRST text element with content).
 - The item MODEL is untouched (the persisted fold + live reducer keep emitting the
   same `TranscriptItem` union; the grouping is a pure display memo) — new
   renderers must not fork the data model.
-- **Retired as list items (R119-A → R129):** the standalone
+- **Retired as list items (R119-A → R129 → R130):** the standalone
   ThinkingPlaceholder card, the ThinkingBlock card, the AssistantBlock,
-  and the single-container TurnBlock — their content logic lives in the
-  SEPARATED elements (the thinking row, the tool cards, the flat reply).
+  the single-container TurnBlock, AND the R129 one-card-per-call
+  always-open tool card — their content logic lives in the SEPARATED
+  elements (the thinking row, the tool GROUPS, the flat text).
   Interactive/terminal surfaces stay standalone: error, approval mini,
   question, todo, subagent, image, meta, debug.
 - The toolActivity pref applies to the separated elements: hidden = no
-  tool cards and the rail only while thinking text exists (the clean
-  document — the summary never teases a count the cards will not show);
-  compact = one-line cards, no expansion; detailed = the full anatomy.
+  tool groups and the rail only while thinking text exists (the clean
+  document — the summary never teases a count the groups will not show);
+  compact = the one-line group headers only, no expansion; detailed =
+  the full anatomy.
 
 **Queued user rows — after the in-progress turn, as a message (R119-A + R119-C):**
 
