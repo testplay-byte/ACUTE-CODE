@@ -295,9 +295,13 @@ describe("Sidebar projects section (fixture ProjectsBackend)", () => {
     );
     const rail = await screen.findByTestId("sidebar-rail");
     expect(rail).toBeTruthy();
-    // Fixture projects render as tiles (the two normal seeds, then the
-    // Scratchpad entry last — the R129-S section split does not reach the
-    // rail); the tile's click now EXPANDS + TOGGLES instead of navigating.
+    // Fixture projects render as tiles (the two normal seeds ONLY — R131-P
+    // filters the Scratchpad row OUT of the rail's project tiles; its own
+    // dedicated bottom tile is pinned by the R131-P rail test below). The
+    // old "Scratchpad entry last" comment assumed the backend's order put
+    // the seeded row last — the WRONG WORLD (real installs seed it NEWEST,
+    // so it sorted FIRST; retired with R131-P — the fixture now tells that
+    // truth); the tile's click now EXPANDS + TOGGLES instead of navigating.
     const tile = await screen.findByRole("button", { name: /^show marketing-site sessions$/i, hidden: true });
     fireEvent.click(tile);
     // The sidebar expanded (the rail is gone, the full panel is back)...
@@ -620,8 +624,10 @@ describe("Sidebar minimized rail polish (R101-C)", () => {
   });
 
   it("R101-C: >10 projects renders the +N overflow tile; clicking it EXPANDS the sidebar without navigating", async () => {
-    // 3 seeds (incl. the R129-S Scratchpad entry) + 10 created = 13 projects
-    // → 10 rail tiles + a "+3" tile.
+    // 3 seeds (incl. the R131-P Scratchpad entry — the fixture's NEWEST
+    // row, the honest real-install world) + 10 created = 13 projects → 10
+    // PROJECT tiles (the Scratchpad EXCLUDED, R131-P) + a "+2" tile (12
+    // normal projects above the cap).
     const backend = getFixtureProjects();
     for (let i = 0; i < 10; i += 1) {
       await backend.create(`extra-${i}`, `/tmp/extra-${i}`);
@@ -629,16 +635,24 @@ describe("Sidebar minimized rail polish (R101-C)", () => {
     renderMinimizedRail();
     await screen.findByTestId("sidebar-rail");
 
-    // The cap stays 10 tiles — never a silent cut.
+    // The cap stays 10 tiles — never a silent cut. R131-P re-pin: the cap
+    // counts PROJECTS ONLY — the count is scoped to the rail-projects
+    // block, and the dedicated Scratchpad tile (which also spells "Show
+    // Scratchpad sessions") is NOT inside it.
+    const tilesHost = document.querySelector('[data-testid="rail-projects"]') as HTMLElement;
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: /^show /i, hidden: true })).toHaveLength(10);
+      const tiles = Array.from(tilesHost.querySelectorAll("button")).filter((b) =>
+        (b.getAttribute("aria-label") ?? "").startsWith("Show "),
+      );
+      expect(tiles).toHaveLength(10);
     });
+    expect(tilesHost.contains(screen.getByTestId("rail-scratchpad"))).toBe(false);
     const overflow = await screen.findByTestId("rail-projects-overflow");
-    expect(overflow.textContent).toContain("+3");
-    expect(overflow.getAttribute("aria-label")).toBe("3 more projects — expand to see all");
+    expect(overflow.textContent).toContain("+2");
+    expect(overflow.getAttribute("aria-label")).toBe("2 more projects — expand to see all");
     // The chip carries the same honest copy.
     expect(overflow.querySelector('[data-testid="rail-label"]')?.textContent).toBe(
-      "3 more projects — expand to see all",
+      "2 more projects — expand to see all",
     );
 
     // Click → the sidebar EXPANDS (the R87-A1 expand-first pattern) and the
@@ -653,12 +667,96 @@ describe("Sidebar minimized rail polish (R101-C)", () => {
   it("R101-C: ≤10 projects renders NO overflow tile (the affordance appears only when the cap bites)", async () => {
     renderMinimizedRail();
     await screen.findByTestId("sidebar-rail");
-    // 3 fixture projects (the two seeds + the Scratchpad entry) → 3 tiles, no
-    // overflow tile.
+    // 3 fixture projects — the two seeds + the Scratchpad entry. R131-P
+    // re-pin: the rail-projects block holds the TWO normal seeds only (the
+    // Scratchpad renders as its own dedicated bottom tile, outside the
+    // block + the cap), so there is no overflow.
+    const tilesHost = document.querySelector('[data-testid="rail-projects"]') as HTMLElement;
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: /^show /i, hidden: true })).toHaveLength(3);
+      const tiles = Array.from(tilesHost.querySelectorAll("button")).filter((b) =>
+        (b.getAttribute("aria-label") ?? "").startsWith("Show "),
+      );
+      expect(tiles).toHaveLength(2);
     });
     expect(screen.queryByTestId("rail-projects-overflow")).toBeNull();
+    expect(screen.getByTestId("rail-scratchpad")).toBeTruthy();
+  });
+
+  // R131-P (SCREENS §2 law #9, the rail half — the owner: "when it is
+  // collapsed, then the scratch pad shows at the very top… and also the
+  // scratch pad gets combined in with the other ones"): the rail NEVER
+  // renders the Scratchpad among the project tiles — even though the
+  // fixture (and every real install) makes it the NEWEST row, the exact
+  // position where the OLD created_at DESC order put it FIRST. It renders
+  // as its OWN dedicated tile at the rail's BOTTOM: after the project
+  // tiles + the +N overflow slot, separated by the rail's hairline divider
+  // grammar, OUTSIDE the 10-tile cap, with the same press grammar as a
+  // project tile (expand + toggle its session tree — never navigate).
+  it("R131-P: the Scratchpad NEVER rides the project tiles (newest-first world) — a DEDICATED bottom tile after the projects block, its own hairline, outside the cap", async () => {
+    // The honest-world premise: the fixture's Scratchpad row is the NEWEST
+    // project (created_at AFTER both seeds) — under the pre-R131 backend
+    // order it would sort FIRST, exactly the owner's "very top" report.
+    const projects = await getFixtureProjects().list();
+    const scratchpadRow = projects.find((p) => p.id === "general");
+    expect(scratchpadRow).toBeTruthy();
+    for (const other of projects) {
+      if (other.id !== "general") {
+        expect(scratchpadRow!.createdAt > other.createdAt).toBe(true);
+      }
+    }
+
+    renderMinimizedRail();
+    const rail = await screen.findByTestId("sidebar-rail");
+
+    // The dedicated tile renders once the projects query settles — await it
+    // first, then pin the structure (the project tiles + the bottom slot).
+    const dedicated = await screen.findByTestId("rail-scratchpad");
+
+    // The rail's PROJECT tiles hold the two normal seeds ONLY — the
+    // Scratchpad never mixes in ("combined in with the other ones" — dead).
+    const tilesHost = rail.querySelector('[data-testid="rail-projects"]') as HTMLElement;
+    expect(tilesHost).toBeTruthy();
+    const tileLabels = Array.from(tilesHost.querySelectorAll("button"))
+      .map((b) => b.getAttribute("aria-label") ?? "")
+      .filter((label) => label.startsWith("Show "));
+    expect(tileLabels).toEqual([
+      "Show ACUTE-CODE sessions",
+      "Show marketing-site sessions",
+    ]);
+
+    // The DEDICATED tile — a SIBLING AFTER the rail-projects block (never
+    // inside it), preceded immediately by the rail's hairline separator
+    // grammar, carrying the Scratchpad's own label + tile mark.
+    expect(tilesHost.contains(dedicated)).toBe(false);
+    expect(dedicated.getAttribute("aria-label")).toBe("Show Scratchpad sessions");
+    expect(dedicated.querySelector('[data-testid="rail-label"]')?.textContent).toBe(
+      "Scratchpad",
+    );
+    const railKids = Array.from(rail.children) as HTMLElement[];
+    const dedicatedIdx = railKids.indexOf(dedicated);
+    const projectsIdx = railKids.indexOf(tilesHost);
+    expect(projectsIdx).toBeGreaterThanOrEqual(0);
+    expect(dedicatedIdx).toBeGreaterThan(projectsIdx);
+    const separator = railKids[dedicatedIdx - 1];
+    expect(separator.getAttribute("aria-hidden")).toBe("true");
+    expect(separator.className).toContain("border-t");
+    expect(separator.className).toContain("w-9");
+
+    // The press does what a PROJECT tile's press does, targeted at the
+    // Scratchpad's stable id: EXPAND the sidebar + toggle ITS session tree
+    // — without navigating (the dashboard stub stays the rendered route).
+    fireEvent.click(dedicated);
+    expect(await screen.findByText("Navigation")).toBeTruthy();
+    expect(screen.queryByTestId("sidebar-rail")).toBeNull();
+    expect(useProjectChatStore.getState().appSidebarMinimized).toBe(false);
+    expect(screen.getByText("dashboard stub")).toBeTruthy();
+    await waitFor(() => {
+      const well = document.querySelector("[data-session-well]");
+      expect(well).toBeTruthy();
+      // The well that opened is the SCRATCHPAD's (inside its separated
+      // bottom section — not a normal project's).
+      expect(well!.closest("[data-scratchpad-section]")).toBeTruthy();
+    });
   });
 });
 

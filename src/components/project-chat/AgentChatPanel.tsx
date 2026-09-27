@@ -205,8 +205,9 @@ const CONTENT_H_PAD_CLASS =
  * it is squished"): the padding also SHRINKS when the chat column is
  * squished — an @max-[560px] tier steps it down to 16px and @max-[420px] to
  * 10px, so a half-width chat keeps its reading room instead of padding
- * eating it (the min-width floor is 240px; at that width the panel is
- * pill-first, not prose-first).
+ * eating it (the R131-P min-width floor is 400px — the @max-[420px] tier
+ * covers the floor band and a hair above it; the panel is pill-first down
+ * there, not prose-first).
  * R101-D: the horizontal padding leg is extracted (CONTENT_H_PAD_CLASS just
  * above) so nested slots compose against the column's inset exactly once. */
 const CONTENT_COL_CLASS = `mx-auto w-full max-w-[1080px] ${CONTENT_H_PAD_CLASS}`;
@@ -1046,13 +1047,14 @@ function UserMessage({
    * "sending" until the turn acks, "sent" (the single check) after;
    * a persisted bubble leaves it undefined (no glyph). */
   delivery?: "sending" | "sent";
-  /** ROUND-119 (R119-C): an extra node rendered INSIDE the hover cluster
-   * (the timestamp · copy · revert row). The queued-user message is the
-   * first consumer — its clock+"queued" state indicator and its Send-now /
-   * Remove affordances ride the SAME reveal the cluster already owns, so a
-   * queued bubble keeps the exact input-row idiom (hover reveals the acts,
-   * the body stays a message) instead of the old amber banner's always-on
-   * chrome. Optional + last so every existing call site is untouched. */
+  /** R119-C (updated R131-P): an extra node rendered INSIDE the actions
+   * row BELOW the bubble (the timestamp · copy · revert row). The
+   * queued-user message is the first consumer — its clock+"queued" state
+   * indicator and its Send-now / Remove affordances ride the SAME reveal
+   * the row already owns, so a queued bubble keeps the exact input-row
+   * idiom (hover reveals the acts, the body stays a message) instead of
+   * the old amber banner's always-on chrome. Optional + last so every
+   * existing call site is untouched. */
   hoverActions?: ReactNode;
   /** ROUND-121 (R121-b — the pixels round): the owning project's id — when
    * present, IMAGE attachments render through AttachmentImageThumb (bytes
@@ -1096,46 +1098,32 @@ function UserMessage({
       initial="initial"
       animate="animate"
     >
-      {/* R89-D2: min-w-0 on the row + the bubble (flex children must be
-          clampable or long tokens mint width at the 240px chat floor —
-          "the content starts to show outside it"), and the bubble gets MORE
-          relative room when the panel is squished (92% below 420px:
-          the hover actions + the padding tiers already reclaimed the rest).
-          R99-B (the research anatomy — user = INPUT, a bubble never a
-          document): the row caps at min(75%, 640px) of the reading column —
-          wide windows used to stretch the bubble to 82% (~885px), reading
-          like a full-width document instead of a message.
-          R100-D (§C4.3): the cap tightens to min(65%, 640px) — the input-row
-          idiom; 75% let a short prompt read as a document. */}
-      <div className="flex items-end gap-1 max-w-[min(65%,640px)] @max-[420px]:max-w-[92%] min-w-0">
-        {/* R97-H: the hover time chip joins the actions cluster (the same
-            reveal animation — the cluster is already invisible until hover).
-            R99-B: ONE unified hover row — timestamp · copy · revert, gap-1,
-            tabular-nums on the time (see TimestampChip). */}
-        <div className="flex items-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity pb-0.5 shrink-0">
-          {/* R117-f: the delivery tick joins the cluster (mobile R116-m's
-              beside-the-clock placement) — only on the optimistic echo's
-              rungs; a persisted bubble renders none. */}
-          {delivery !== undefined ? <DeliveryTick status={delivery} /> : null}
-          <TimestampChip ts={ts} className="pb-1 pr-0.5" />
-          <CopyButton text={content} />
-          {/* R119-C: the queued bubble's state indicator + affordances ride
-              the SAME cluster (see the prop's docblock above). */}
-          {hoverActions !== undefined ? hoverActions : null}
-          {onRevert !== undefined ? (
-            <button
-              type="button"
-              onClick={onRevert}
-              disabled={revertDisabled}
-              aria-label="Revert to this message"
-              title="Revert to this message"
-              className="w-6 h-6 rounded-md grid place-items-center transition-colors duration-100 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-40"
-              style={{ color: styles.textTertiary }}
-            >
-              <History size={11} />
-            </button>
-          ) : null}
-        </div>
+      {/* R131-P (owner: "the width of the message which I sent is made much
+          smaller even though there is a lot of empty area on the left side
+          of it. The option to revert to the message or to copy the message
+          should be shown below it rather than being shown on the left side
+          of it"): the cap wrapper is a COLUMN now (flex-col items-end)
+          holding [bubble, actions-row] — the OLD beside-the-bubble cluster
+          rendered LEFT of the bubble INSIDE this wrapper, and its
+          opacity-0 legs still occupied layout width, so at the narrow tier
+          the invisible cluster ate ~70-90px of the bubble's cap. The bubble
+          now owns the width tier ALONE:
+          · wide (above the panel's 420px @container tier): the cap stays
+            min(65%, 640px) of the reading column — the input-row idiom
+            (R100-D; "if it is expanded, then it will never take up all the
+            width on the left side" — 35% of the reading column stays
+            empty);
+          · narrow (the panel's own @container ≤ 420px — the tier that now
+            covers the R131-P 400px floor band): max-w-full — the bubble
+            uses ALL the reading column's width, its pl-11 / pr-2.5 padding
+            providing the margins ("it can utilize all the width which it
+            can with some padding on the right and left side"); the old
+            92% compromise is retired (it existed to share the row with the
+            invisible cluster).
+          min-w-0 rides the wrapper + the bubble (flex children must be
+          clampable or long tokens mint width at the 400px chat floor —
+          "the content starts to show outside it"). */}
+      <div className="flex flex-col items-end max-w-[min(65%,640px)] @max-[420px]:max-w-full min-w-0">
         <div
           className={`rounded-2xl rounded-br-[5px] px-3.5 py-2.5 text-[13px] leading-[1.55] border min-w-0 ${bubbleFillClass}`}
           style={{
@@ -1194,6 +1182,37 @@ function UserMessage({
             collapseLabel="Show less"
             className="whitespace-pre-wrap break-words"
           />
+        </div>
+        {/* R131-P: the hover actions row — BELOW the bubble, right-aligned,
+            NEVER beside it (the owner's directive; the old beside-the-bubble
+            cluster is what shrank the bubble at the narrow tier). Same
+            reveal (opacity-0 group-hover:opacity-100 on the row's group),
+            same gap grammar (gap-1); the old pb-0.5/pb-1 baseline-alignment
+            legs are retired — the row is its own line now. R97-H: the hover
+            time chip joins the cluster; R99-B: ONE unified hover row —
+            timestamp · copy · revert (tabular-nums on the time);
+            R117-f: the delivery tick rides it on the optimistic echo's
+            rungs; R119-C: the queued bubble's hoverActions slot rides it. */}
+        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          {delivery !== undefined ? <DeliveryTick status={delivery} /> : null}
+          <TimestampChip ts={ts} className="pr-0.5" />
+          <CopyButton text={content} />
+          {/* R119-C: the queued bubble's state indicator + affordances ride
+              the SAME row (see the prop's docblock above). */}
+          {hoverActions !== undefined ? hoverActions : null}
+          {onRevert !== undefined ? (
+            <button
+              type="button"
+              onClick={onRevert}
+              disabled={revertDisabled}
+              aria-label="Revert to this message"
+              title="Revert to this message"
+              className="w-6 h-6 rounded-md grid place-items-center transition-colors duration-100 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ color: styles.textTertiary }}
+            >
+              <History size={11} />
+            </button>
+          ) : null}
         </div>
       </div>
     </motion.div>
@@ -1990,17 +2009,19 @@ export function QueuedUserMessage({
   projectId?: string;
 }) {
   const styles = useThemeStyles();
-  // The queued state's hover cluster node — one ReactNode threaded into
-  // UserMessage's existing reveal row (timestamp · copy · HERE · revert), so
-  // the bubble's internals stay single-sourced (no fork of the input idiom).
+  // The queued state's hover node — one ReactNode threaded into
+  // UserMessage's actions row BELOW the bubble (timestamp · copy · HERE ·
+  // revert), so the bubble's internals stay single-sourced (no fork of
+  // the input idiom).
   const hoverActions: ReactNode = (
     <>
       {/* The state indicator: tiny clock + lowercase mono "queued" — a
-          waiting state, deliberately NOT the amber warning spelling. */}
+          waiting state, deliberately NOT the amber warning spelling.
+          (R131-P: pb-1 baseline leg retired — the row is its own line now.) */}
       <span
         data-testid="queued-hover-state"
         title="Sends after the current step"
-        className="flex items-center gap-1 pb-1 pr-0.5 shrink-0 font-mono text-[10px]"
+        className="flex items-center gap-1 pr-0.5 shrink-0 font-mono text-[10px]"
         style={{ color: styles.textTertiary }}
       >
         <Clock size={10} aria-hidden style={{ color: styles.textTertiary }} />
@@ -2057,10 +2078,10 @@ export function QueuedUserMessage({
           projectId={projectId}
         />
       </div>
-      {/* The always-visible waiting caption — BELOW the bubble, right-aligned
-          to the message column, mono 10px textTertiary. Hover reveals the
-          fuller affordances; this line alone keeps the state honest on
-          touch, where hover never fires. */}
+      {/* The always-visible waiting caption — BELOW the actions row,
+          right-aligned to the message column, mono 10px textTertiary. Hover
+          reveals the fuller affordances; this line alone keeps the state
+          honest on touch, where hover never fires. */}
       <div
         data-testid="queued-state-caption"
         title="Sends after the current step"

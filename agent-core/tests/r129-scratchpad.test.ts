@@ -60,7 +60,7 @@ vi.mock("ai", () => ({
 
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { buildServer } from "../src/server";
-import { createProject } from "../src/storage/projects";
+import { createProject, listProjects } from "../src/storage/projects";
 import {
   createSession,
   getSession,
@@ -590,6 +590,39 @@ describe("R129-S: ensureScratchpadChildWorkspace (the orchestrator create-site h
       expect(ensureScratchpadChildWorkspace(db, "sess_ghost", GENERAL_PROJECT_ID)).toBeNull();
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── R131-P (SCREENS §2 law #9, the backend half): the projects-list order ────
+describe("R131-P: listProjects orders the Scratchpad LAST — always", () => {
+  it("the Scratchpad sorts LAST even when it is the NEWEST row (the real-install world) — and the normal projects keep their newest-first order", async () => {
+    // The real-install shape the owner hit: user projects created BEFORE
+    // the R128 boot seed, so the Scratchpad row's created_at is the NEWEST
+    // — under the pre-R131 plain created_at DESC it sorted FIRST (the
+    // collapsed rail's "scratch pad shows at the very top" report).
+    // (The sleeps keep the three created_at values strictly apart — the
+    // same-millisecond tie would fall to the id DESC tiebreak.)
+    const olderRoot = mkdtempSync(join(tmpdir(), "acute-r131-order-"));
+    try {
+      createProject(db, { name: "Older", rootPath: olderRoot });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      createProject(db, { name: "Newer", rootPath: join(olderRoot, "sub") });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      // Seeded LAST → the newest created_at in the table.
+      ensureGeneralProject(db, dataDir);
+      const rows = listProjects(db);
+      expect(rows.map((p) => p.name)).toEqual(["Newer", "Older", "Scratchpad"]);
+      // The premise holds: the Scratchpad row really IS the newest by
+      // timestamp — the CASE leg, not the clock, puts it last.
+      const scratchpad = rows.find((p) => p.id === GENERAL_PROJECT_ID)!;
+      for (const other of rows) {
+        if (other.id !== GENERAL_PROJECT_ID) {
+          expect(scratchpad.createdAt > other.createdAt).toBe(true);
+        }
+      }
+    } finally {
+      rmSync(olderRoot, { recursive: true, force: true });
     }
   });
 });

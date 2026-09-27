@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-24 round-126 -->
+<!-- last-reviewed: 2026-09-27 round-131 -->
 # Components — the primitive catalog and composition rules
 
 Serves DESIGN-SYSTEM §5 (anatomy inventory). The inventory there names the
@@ -223,9 +223,19 @@ compressed-vs-full directive):
 
 - **User message = input**: right-aligned accent-tinted bubble, radius 16px
   with the 5px br corner (the sanctioned shape), capped at
-  `min(75%, 640px)` of the reading column (92% below 420px — a bubble,
-  never a full-width document); ONE unified hover action row
-  (timestamp · copy · revert, `tabular-nums` on the time).
+  `min(65%, 640px)` of the reading column when wide (the R100-D
+  input-row idiom — a bubble, never a full-width document; 35% of the
+  reading column stays empty so an expanded chat never reads as a
+  document), full reading-column width minus its own padding at the
+  narrow tier (the panel's ≤420px @container band — the reading column's
+  `pl-11/pr-2.5` provides the margins). **ROUND-131 (R131-P, the
+  owner's verdict — "the option to revert to the message or to copy the
+  message should be shown below it rather than being shown on the left
+  side of it"): the hover action row (timestamp · copy · revert · the
+  queued slot, `tabular-nums` on the time) sits BELOW the bubble,
+  right-aligned in its own row — NEVER beside it (the old
+  beside-the-bubble cluster's `opacity-0` legs occupied real layout
+  width and ate the bubble's cap at the narrow tier).**
 - **Assistant turn = document**: borderless full-width markdown. The turn
   HEADER is a ~20px identity row — a 6px accent dot + the turn's MODEL as
   an identity chip (§2 grammar: mono, subtle bg, truncate) + the hover

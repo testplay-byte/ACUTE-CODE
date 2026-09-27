@@ -752,11 +752,26 @@ function MinimizedRail({
   const { pathname } = useLocation();
   const projectsQuery = useProjects();
   const sessionsQuery = useSessions();
-  // R129-S (SCREENS §2 law #9): the rail's tiles read in the same order the
-  // expanded panel's rows do — the backend's order (created_at DESC) puts
-  // the seeded Scratchpad row last (it is the oldest row); the expanded
-  // panel renders it in its own bottom section (see ProjectSection).
-  const projects = projectsQuery.data ?? [];
+  // R131-P (SCREENS §2 law #9, the rail half — the owner: "when it is
+  // collapsed, then the scratch pad shows at the very top… and also the
+  // scratch pad gets combined in with the other ones"): the rail SPLITS
+  // the list exactly the way the expanded panel does — normal projects
+  // render as tiles; the Scratchpad row (stable id "general") is FILTERED
+  // OUT and renders as its OWN dedicated tile at the rail's BOTTOM (below
+  // the +N overflow tile, with its own hairline separator — see the tile).
+  // The R129-S assumption this comment used to carry ("the backend's
+  // created_at DESC puts the seeded row last") was the WRONG WORLD: on
+  // real installs the seed ran AFTER the user's projects, so the row is
+  // the NEWEST and sorted FIRST — that is exactly what the owner saw at
+  // the top of his collapsed rail. The placement is now structural here
+  // (the filter) AND in the backend (storage/projects.ts orders `general`
+  // LAST explicitly — every consumer sees the same truth).
+  const railProjects = (projectsQuery.data ?? []).filter(
+    (p) => p.id !== GENERAL_PROJECT_ID,
+  );
+  const scratchpad = (projectsQuery.data ?? []).find(
+    (p) => p.id === GENERAL_PROJECT_ID,
+  );
   const sessions = sessionsQuery.data ?? [];
   // ROUND-42 parity: a project with any running session shows the live dot.
   const runningSessions = useActiveStreams((s) => s.active);
@@ -893,7 +908,9 @@ function MinimizedRail({
           navigates anymore (the expanded panel's row is the tree's toggle
           too; entering a conversation is a SESSION row's job). The tile
           stays the project's own color mark (ProjectTile), so color identity
-          survives minimization; running projects get the live dot. */}
+          survives minimization; running projects get the live dot.
+          R131-P: NORMAL PROJECTS ONLY — the Scratchpad row is filtered out
+          above and renders as its own dedicated bottom tile below. */}
       <div className="flex flex-col items-center gap-1.5 py-0.5" data-testid="rail-projects">
         {projectsQuery.isPending ? (
           /* R97-I part 2 (owner: a UI "aware of its states"): the projects
@@ -907,7 +924,7 @@ function MinimizedRail({
              sidebar owns the retryable error surface. */
           <SkeletonRows rows={4} rowClassName="w-10 h-10" gap={1.5} />
         ) : (
-          projects.slice(0, 10).map((project) => {
+          railProjects.slice(0, 10).map((project) => {
             const active = activeProjectId === project.id;
             const running = runningProjects.has(project.id);
             return (
@@ -951,23 +968,81 @@ function MinimizedRail({
             +N tile in the rail's own button geometry whose click EXPANDS the
             sidebar (the R87-A1 expand-first pattern at the tiles above —
             expanding WITHOUT navigating is the honest behavior; the full
-            projects list lives in the expanded panel). */}
-        {projects.length > 10 && (
+            projects list lives in the expanded panel). R131-P: the cap and
+            the +N count read from railProjects — NORMAL PROJECTS ONLY; the
+            dedicated Scratchpad tile below is never counted in the cap. */}
+        {railProjects.length > 10 && (
           <button
             onClick={onExpand}
-            aria-label={`${projects.length - 10} more projects — expand to see all`}
-            title={`${projects.length - 10} more projects — expand to see all`}
+            aria-label={`${railProjects.length - 10} more projects — expand to see all`}
+            title={`${railProjects.length - 10} more projects — expand to see all`}
             data-testid="rail-projects-overflow"
             className="group relative w-10 h-10 shrink-0 grid place-items-center rounded-lg text-[11px] font-medium tabular-nums text-muted transition-colors hover:bg-hover"
           >
-            +{projects.length - 10}
+            +{railProjects.length - 10}
             <RailLabel
-              text={`${projects.length - 10} more projects — expand to see all`}
+              text={`${railProjects.length - 10} more projects — expand to see all`}
               styles={styles}
             />
           </button>
         )}
       </div>
+
+      {/* R131-P (SCREENS §2 law #9, the rail half — the owner: "when the
+          sidebar is expanded, the scratch pad shows at the very bottom,
+          which is good. But when it is collapsed, then the scratch pad
+          shows at the very top… and also the scratch pad gets combined in
+          with the other ones"): the DEDICATED Scratchpad tile — the rail's
+          own BOTTOM slot, after the project tiles + the +N overflow tile,
+          separated from them by the rail's existing hairline divider
+          grammar (the same w-9 border-t the nav block uses). The tile
+          grammar mirrors the project tiles (the ProjectTile mark in the
+          Scratchpad's own slate color, the full-name label chip, the live
+          dot, the active tint) — and the press does exactly what a
+          project tile's press does, targeted at the Scratchpad's stable
+          id: EXPAND the sidebar + toggle its session tree. Renders only
+          when the row exists (an older sidecar without the boot seed
+          degrades to no tile, exactly like the expanded section's row). */}
+      {!projectsQuery.isPending && scratchpad !== undefined ? (
+        <>
+          <div
+            aria-hidden
+            className="w-9 shrink-0 border-t my-1"
+            style={{ borderColor: styles.borderSubtle }}
+          />
+          <button
+            onClick={() => {
+              onExpand();
+              onToggleProject(GENERAL_PROJECT_ID);
+            }}
+            aria-label="Show Scratchpad sessions"
+            title="Scratchpad"
+            aria-current={activeProjectId === GENERAL_PROJECT_ID ? "page" : undefined}
+            data-testid="rail-scratchpad"
+            className="group relative w-10 h-10 shrink-0 grid place-items-center rounded-lg transition-colors hover:bg-hover"
+            style={{
+              background:
+                activeProjectId === GENERAL_PROJECT_ID
+                  ? withAlpha(scratchpad.color, 0.14)
+                  : undefined,
+              border:
+                activeProjectId === GENERAL_PROJECT_ID
+                  ? `1px solid ${withAlpha(scratchpad.color, 0.4)}`
+                  : "1px solid transparent",
+            }}
+          >
+            <ProjectTile color={scratchpad.color} name={scratchpad.name} />
+            <RailLabel text="Scratchpad" styles={styles} />
+            {runningProjects.has(GENERAL_PROJECT_ID) && (
+              <span
+                aria-label="Running"
+                className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2"
+                style={{ background: styles.accent, borderColor: styles.sidebarBg }}
+              />
+            )}
+          </button>
+        </>
+      ) : null}
 
       {/* Spacer pushes the footer icons to the bottom (the full sidebar's
           footer rhythm). */}
@@ -1117,9 +1192,13 @@ function ProjectSection({
   // BOTTOM): the list SPLITS — normal projects render in the project rows;
   // the Scratchpad row (stable id "general") renders in its OWN separated
   // section below (never mixed in, never pinned first — pinGeneralFirst is
-  // RETIRED). The backend's order (created_at DESC) already places the
-  // seeded row last (it is the oldest row); the split makes the placement
-  // structural, not accidental.
+  // RETIRED). R131-P honesty note: the OLD claim that "the backend's order
+  // (created_at DESC) already places the seeded row last" described the
+  // FIXTURE's world, not real installs (the seed runs at boot, so on
+  // installs whose projects predate the R128 seed the Scratchpad is the
+  // NEWEST row and sorted FIRST). The backend now orders `general` LAST
+  // explicitly (storage/projects.ts), and this DOM-position split keeps
+  // the expanded panel's placement structural regardless of order.
   const allProjects = projectsQuery.data ?? [];
   const projects = allProjects.filter((p) => p.id !== GENERAL_PROJECT_ID);
   const scratchpad = allProjects.find((p) => p.id === GENERAL_PROJECT_ID);
