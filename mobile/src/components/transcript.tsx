@@ -267,24 +267,67 @@ const RADIUS_TOOL_CARD = 12;
  *  before the fold closes; a group holding a FAILED call never arms it. */
 const TOOL_GROUP_COLLAPSE_HOLD_MS = 2500;
 
-/** R130 — the tool row's family COLOR (the color-coding contract): write =
- *  the accent terracotta, terminal = the warning amber, read = the accent2
- *  taupe, web/browser = the chart's sage teal (the data-viz exploration
- *  hue — the one documented extra-hue exception), generic = textSecondary.
- *  The stripe + the leading icon share this one spelling per row. */
-function toolFamilyColor(family: ToolFamily, tokens: { accent: string; warning: string; accent2: string; textSecondary: string }, isDark: boolean): string {
+/** R131-M — the tool rows' FADED register, part 1: the family STRIPE's
+ *  width. The R130-B 2.5px bar read LOUD (the owner's v0.123.0 verdict: "the
+ *  UI of the tool calls is not good… it should be faded out kind of vibe.
+ *  It should not be that highlighted or such") — the bar thins to a 1.5px
+ *  hairline at the row's left edge. Pure + exported so jest pins the
+ *  register; `styles.toolRowStripe` renders it verbatim. */
+export const TOOL_ROW_STRIPE_WIDTH = 1.5;
+
+/** R131-M — the tool rows' FADED register, part 2: the family FADE depth.
+ *  The family hue rides at 50% over the row's resting surface (the recessed
+ *  well) — the brief's 45–55% band, midpoint — so the color coding SURVIVES
+ *  at a glance while the saturation (the "highlighted" feel) dies. Pure +
+ *  pinned. */
+export const TOOL_FAMILY_FADE = 0.5;
+
+/** R131-M — the FAILED row's wash depth over the well: the R130-B depth
+ *  (0.08), carried VERBATIM onto the new resting surface. Failures never
+ *  fade — the honest-error law; the only full-strength registers left on a
+ *  tool row are the failure treatment and the live (running) work. */
+export const TOOL_FAILED_WASH_DEPTH = 0.08;
+
+/** R131-M — the tool row's family COLOR, FADED (the color-coding contract's
+ *  quiet register): write = the accent terracotta, terminal = the warning
+ *  amber, read = the accent2 taupe, web/browser = the chart's sage teal (the
+ *  one documented extra-hue exception) — each at TOOL_FAMILY_FADE over the
+ *  RECESSED well surface the rows sit on (mixHex toward the surface = the
+ *  hue at ~50% opacity over it, the house's one mix spelling); generic =
+ *  textSecondary VERBATIM (the already-secondary register — an rgba ladder
+ *  value, never mixHex-able, and never in need of fading). The stripe + the
+ *  leading icon share this ONE spelling per row (the R130 law survives at
+ *  the faded register). Pure + exported so jest pins the register. */
+export function toolFamilyColor(
+  family: ToolFamily,
+  tokens: { accent: string; warning: string; accent2: string; surfaceWell: string; textSecondary: string },
+  isDark: boolean,
+): string {
   switch (family) {
     case "write":
-      return tokens.accent;
+      return mixHex(tokens.surfaceWell, tokens.accent, TOOL_FAMILY_FADE);
     case "terminal":
-      return tokens.warning;
+      return mixHex(tokens.surfaceWell, tokens.warning, TOOL_FAMILY_FADE);
     case "read":
-      return tokens.accent2;
+      return mixHex(tokens.surfaceWell, tokens.accent2, TOOL_FAMILY_FADE);
     case "web":
-      return chartHue(CHART_HUES.output, isDark);
+      return mixHex(tokens.surfaceWell, chartHue(CHART_HUES.output, isDark), TOOL_FAMILY_FADE);
     default:
       return tokens.textSecondary;
   }
+}
+
+/** R131-M — the FAILED row's full treatment (pure + pinned): the quiet
+ *  danger WASH at the carried-verbatim R130-B depth over the row's resting
+ *  well surface + the status chip's FULL-STRENGTH danger ink. The fade
+ *  never touches a failure — the wash keeps its depth, the chip keeps the
+ *  flat semantic hue (never the family fade), so a failed call stays the
+ *  one thing on a tool row that cannot fade into the background. */
+export function toolFailedRowTreatment(tokens: {
+  surfaceWell: string;
+  danger: string;
+}): { wash: string; chipInk: string } {
+  return { wash: mixHex(tokens.surfaceWell, tokens.danger, TOOL_FAILED_WASH_DEPTH), chipInk: tokens.danger };
 }
 /** chat.md — the WhatsApp tail hint: the user bubble's bottom-right corner. */
 const RADIUS_BUBBLE_TAIL = 16;
@@ -1820,9 +1863,11 @@ function PulseDot({ color, size }: { color: string; size: number }) {
 // ── the tool groups (R130 — the PC Working-fold grammar, PORTED: one clay
 // CARD per RUN of consecutive calls + one-line color-coded rows) ───────────
 //
-// THE TOOL GROUP: the house card treatment (12px padding, r12, the card
-// surface + hairline clayRim + small clay shadow — the R129 card's own
-// geometry, now around a RUN of calls) wrapping either a SINGLE call's row
+// THE TOOL GROUP (R131-M — the faded register): the RECESSED WELL
+// treatment (12px padding, r12, the surfaceWell tint + the borderSubtle
+// hairline rim, NO elevation shadow — the R129 card + clayRim + clayShadow
+// treatment retired by the owner's v0.123.0 "faded out kind of vibe"
+// verdict) wrapping either a SINGLE call's row
 // (the row IS the group's fold head — its details render behind the group's
 // own disclosure) or a GROUP HEADER + the calls as ONE-LINE rows behind the
 // fold. The auto-lifecycle law ports from the PC's own ToolLine
@@ -1834,20 +1879,23 @@ function PulseDot({ color, size }: { color: string; size: number }) {
 // pins the group to its one line(s) — no expansion; hidden renders no
 // groups at all.
 //
-// THE TOOL ROW: one line — the family stripe (2.5px, the family color) +
-// the family icon (the same color — the R130 color coding: write = accent,
-// terminal = warning amber, read = accent2, web/browser = the chart sage
-// teal, generic = textSecondary) + the verb·target title (mono, one line)
-// + the write family's +A/−B diff chips + the QUIET status chip + the
-// chevron while expandable. THE ROW IS THE PRESS TARGET — the whole row's
-// card, not a head-line strip inside it (the R129 head-row-only target
-// left dead zones in the card padding — the owner: "I tapped on it, it
-// apparently did nothing. I had to click the arrow"). A RUNNING call's
+// THE TOOL ROW (R131-M — the secondary register): one line — the family
+// stripe (a 1.5px hairline, the family color FADED to ~50% over the well)
+// + the family icon (the SAME quiet family color — the one faded spelling
+// per row: the color coding survives at a glance, the saturation dies) +
+// the verb·target title (mono, one line, SECONDARY ink — the PC ToolLine's
+// own calm register) + the write family's +A/−B diff chips + the QUIET
+// status chip + the chevron while expandable. THE ROW IS THE PRESS TARGET
+// — the whole row, not a head-line strip inside it (the R129 head-row-only
+// target left dead zones in the card padding — the owner: "I tapped on it,
+// it apparently did nothing. I had to click the arrow"). A RUNNING call's
 // streaming tails render OUTSIDE the fold (always visible live work); the
 // settled details render behind the row's own disclosure clip. The failed
-// call's tell stays the R116-m grammar (the inline danger chip + the row's
-// quiet danger wash); running = the small warning chip; success = NOTHING;
-// R128-W6's INTERRUPTED settle stays NEUTRAL.
+// call's tell stays the R116-m grammar at FULL STRENGTH (the inline danger
+// chip + the row's quiet danger wash — failures never fade, the
+// honest-error law); running = the small warning chip (the live-open law's
+// visible live indicator); success = NOTHING; R128-W6's INTERRUPTED settle
+// stays NEUTRAL.
 
 function ToolGroup({
   items,
@@ -1925,13 +1973,15 @@ function ToolGroup({
       style={[
         styles.toolCallCard,
         {
-          // R129-M's card surface (never surfaceWell) + the hairline clayRim
-          // + the small clay shadow (the chat cards' own weight); the R130
-          // GROUP carries the same treatment around the RUN of calls. A
-          // failed call washes its own ROW, not the whole group card.
-          backgroundColor: tokens.card,
-          borderColor: tokens.clayRim,
-          boxShadow: tokens.clayShadowSm,
+          // R131-M — the faded register: the group card IS the recessed well
+          // now — the surfaceWell tint + the borderSubtle hairline rim, and
+          // NO elevation shadow (a recessed surface casts none; the R129-M
+          // card + clayRim + clayShadowSm treatment is retired by the
+          // owner's "faded out kind of vibe" verdict). The rows sit ON this
+          // well, transparent; a failed call washes its own ROW over it,
+          // not the whole group.
+          backgroundColor: tokens.surfaceWell,
+          borderColor: tokens.borderSubtle,
           paddingVertical: densityVerticalPadding(prefs.chatDensity),
         },
       ]}
@@ -1973,7 +2023,9 @@ function ToolGroup({
  * label (toolGroupLabel — "3 calls · 2 read · 1 edit"; a single call never
  * renders a header, its row speaks) + the running/failed chip + the chevron
  * while expandable. The WHOLE line is the press target (R130's tap-anywhere
- * law at the group level too). */
+ * law at the group level too). R131-M — the header speaks the SECONDARY
+ * register with its rows (the glyph's accent fill prominence dies; the
+ * running/failed chips stay full-strength — the only two that may). */
 function ToolGroupHeader({
   label,
   running,
@@ -1992,9 +2044,9 @@ function ToolGroupHeader({
   const { tokens } = useTheme();
   const row = (
     <View style={styles.toolGroupHead}>
-      <Layers size={13} color={tokens.accent} strokeWidth={2.2} />
+      <Layers size={13} color={tokens.textSecondary} strokeWidth={2.2} />
       <TypeMono
-        style={{ color: tokens.text, fontFamily: fontFamily.monoMedium, flex: 1 }}
+        style={{ color: tokens.textSecondary, fontFamily: fontFamily.monoMedium, flex: 1 }}
         numberOfLines={1}
       >
         {label}
@@ -2025,14 +2077,15 @@ function ToolGroupHeader({
 }
 
 /**
- * R130 — THE TOOL ROW: one call's ONE-LINE row inside the group (or AS a
- * single-call group's whole fold head): the family STRIPE (2.5px, the
- * family color) + the family ICON (the same color — the color-coding
- * contract) + the verb·target title (`toolRowTitle`, mono, one line) + the
- * write family's +A/−B diff chips + the QUIET status chip (running =
- * warning; failed = danger + the row's quiet danger wash; interrupted =
- * neutral; success = NOTHING — the result rides the line) + the chevron
- * while expandable.
+ * R130/R131-M — THE TOOL ROW: one call's ONE-LINE row inside the group (or
+ * AS a single-call group's whole fold head): the family STRIPE (R131-M: a
+ * 1.5px hairline in the family color FADED over the well) + the family
+ * ICON (the same quiet family color — the color-coding contract at the
+ * secondary register) + the verb·target title (`toolRowTitle`, mono, one
+ * line, SECONDARY ink) + the write family's +A/−B diff chips + the QUIET
+ * status chip (running = warning; failed = danger + the row's quiet danger
+ * wash — both FULL-STRENGTH, never faded; interrupted = neutral; success =
+ * NOTHING — the result rides the line) + the chevron while expandable.
  *
  * THE WHOLE ROW IS THE PRESS TARGET (R130's tap-anywhere fix): the
  * Pressable wraps the row's own card — no dead zones in the padding; a
@@ -2070,8 +2123,10 @@ function ToolRow({
   const isWeb = WEB_TOOLS.has(item.toolName);
   const isBrowser = BROWSER_TOOLS.has(item.toolName);
 
-  // R130 — the family's COLOR + ICON (one spelling per family: the stripe,
-  // the icon, and the glance word in the group label all read toolFamily).
+  // R130/R131-M — the family's quiet COLOR + ICON (one spelling per family:
+  // the stripe, the icon, and the glance word in the group label all read
+  // toolFamily; the color is the FADED register — TOOL_FAMILY_FADE over the
+  // well the row sits on).
   const family = toolFamily(item.toolName);
   const familyColor = toolFamilyColor(family, tokens, isDark);
   const icon = isWrite ? (
@@ -2124,19 +2179,26 @@ function ToolRow({
       style={[
         styles.toolRow,
         {
-          // The failed call's quiet danger wash (donts #37's card-wide tint,
-          // translated to the ROW inside the group — precise, never the
-          // whole group).
-          backgroundColor: failed ? mixHex(tokens.card, tokens.danger, 0.08) : "transparent",
+          // R131-M — the rows sit ON the group's recessed well (transparent;
+          // the group card carries the surfaceWell tint), and the failed
+          // call's quiet danger wash (donts #37's card-wide tint, translated
+          // to the ROW inside the group — precise, never the whole group)
+          // rides the FULL-STRENGTH treatment: the R130-B depth carried
+          // verbatim over the row's new resting surface (failures never
+          // fade — the honest-error law; toolFailedRowTreatment is the one
+          // pure spelling, pinned).
+          backgroundColor: failed ? toolFailedRowTreatment(tokens).wash : "transparent",
         },
       ]}
     >
-      {/* R130 — the family STRIPE: a 2.5px family-colored bar at the row's
-          left edge (the glanceable color coding). */}
+      {/* R130/R131-M — the family STRIPE: a 1.5px family-colored hairline at
+          the row's left edge (the glanceable color coding at the faded
+          register — the quiet family color over the well; the R130-B 2.5px
+          full-strength bar retired by the owner's "faded out" verdict). */}
       <View style={[styles.toolRowStripe, { backgroundColor: familyColor }]} />
       {icon}
       <TypeMono
-        style={{ color: tokens.text, fontFamily: fontFamily.monoMedium, flex: 1 }}
+        style={{ color: tokens.textSecondary, fontFamily: fontFamily.monoMedium, flex: 1 }}
         numberOfLines={1}
       >
         {title}
@@ -2285,7 +2347,12 @@ function WriteDiffChips({ added, removed }: { added: number; removed: number }) 
  * the right-side FAIL text badge column is retired): "running" rides the
  * small warning-tinted chip, "failed"/"interrupted" their compact tints —
  * and NOTHING on success (the result rides the row line itself, never a
- * badge). One quiet chip, never a shouty column. */
+ * badge). One quiet chip, never a shouty column. R131-M — the fade never
+ * touches the semantics: the running ink stays the full warning hue (the
+ * live-open law's visible live indicator) and the failed ink stays the
+ * FULL danger hue (toolFailedRowTreatment's one pure spelling — pinned:
+ * failures are the one thing on a tool row that never fades); only the
+ * resting stripes/icons/titles stepped down. */
 function ToolWordChip({ word }: { word: "running" | "failed" | "interrupted" }) {
   const { tokens } = useTheme();
   const tint =
@@ -2294,7 +2361,12 @@ function ToolWordChip({ word }: { word: "running" | "failed" | "interrupted" }) 
       : word === "interrupted"
         ? mixHex(tokens.card, tokens.textSecondary, 0.1)
         : mixHex(tokens.card, tokens.danger, 0.1);
-  const ink = word === "running" ? tokens.warning : word === "interrupted" ? tokens.textSecondary : tokens.danger;
+  const ink =
+    word === "running"
+      ? tokens.warning
+      : word === "interrupted"
+        ? tokens.textSecondary
+        : toolFailedRowTreatment(tokens).chipInk;
   return (
     <View style={[styles.statusChip, { backgroundColor: tint }]}>
       <TypeMono style={{ color: ink, fontSize: 10, lineHeight: 13 }} numberOfLines={1}>
@@ -3459,12 +3531,15 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
     borderRadius: RADIUS_PILL,
   },
-  /** R129-M/R130 — THE TOOL GROUP CARD: one clay card per RUN of consecutive
-   *  calls — the house CARD padding (spacing.md = 12px all sides; the
-   *  density pref's compact rung halves the VERTICAL at the call site, its
-   *  pinned contract), r12 (chat.md), the card fill + hairline clayRim +
-   *  the small clay shadow at the call site. The 8px gaps BETWEEN groups
-   *  ride the turn column's own beat (the plan's toolGroupGap). */
+  /** R129-M/R130/R131-M — THE TOOL GROUP CARD: one group card per RUN of
+   *  consecutive calls — the house CARD padding (spacing.md = 12px all
+   *  sides; the density pref's compact rung halves the VERTICAL at the call
+   *  site, its pinned contract), r12 (chat.md). R131-M — the faded register:
+   *  the surface + rim + shadow are THEME values at the call site now (the
+   *  recessed surfaceWell tint + the borderSubtle hairline, NO elevation
+   *  shadow — a recessed surface casts none; the R130 card + clayRim +
+   *  clayShadowSm treatment is retired). The 8px gaps BETWEEN groups ride
+   *  the turn column's own beat (the plan's toolGroupGap). */
   toolCallCard: {
     borderRadius: RADIUS_TOOL_CARD,
     borderWidth: StyleSheet.hairlineWidth,
@@ -3480,8 +3555,11 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     minHeight: 32,
   },
-  /** R130 — THE TOOL ROW: one call's one-line row — the family stripe +
-   *  icon + title + chips + chevron; the whole row is the press target. */
+  /** R130/R131-M — THE TOOL ROW: one call's one-line row — the family
+   *  stripe + icon + title + chips + chevron; the whole row is the press
+   *  target. The row itself paints NOTHING at rest (transparent — it sits
+   *  ON the group's recessed well); only a FAILED call washes it (the
+   *  full-strength danger treatment, never faded). */
   toolRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3490,12 +3568,15 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: spacing.xs,
   },
-  /** R130 — the row's family STRIPE: a 2.5px family-colored bar at the
-   *  row's left edge (the glanceable color coding — chat.md §Transcript). */
+  /** R130/R131-M — the row's family STRIPE: a 1.5px family-colored hairline
+   *  at the row's left edge (the glanceable color coding at the FADED
+   *  register — the quiet family color over the well; the R130-B 2.5px
+   *  full-strength bar is retired by the owner's "faded out" verdict —
+   *  TOOL_ROW_STRIPE_WIDTH is the pinned constant). */
   toolRowStripe: {
-    width: 2.5,
+    width: TOOL_ROW_STRIPE_WIDTH,
     alignSelf: "stretch",
-    borderRadius: 1.25,
+    borderRadius: TOOL_ROW_STRIPE_WIDTH / 2,
   },
   assistantLive: {
     flexDirection: "row",

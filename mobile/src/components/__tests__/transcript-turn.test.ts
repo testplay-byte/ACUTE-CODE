@@ -25,6 +25,17 @@
  * (toolStatusWord, the tools-hidden hint, the user bubble's plan) ride
  * untouched below.
  *
+ * ROUND-131 (R131-M — the tool rows' FADED register): the owner's v0.123.0
+ * verdict on the tool groups' UI — "it should be faded out kind of vibe. It
+ * should not be that highlighted or such" — is pinned at the STYLE-REGISTER
+ * level: the thinned 1.5px family stripe (TOOL_ROW_STRIPE_WIDTH), the
+ * family colors at the ~50% fade over the recessed well (TOOL_FAMILY_FADE
+ * + toolFamilyColor), and the FAILED row's danger treatment SURVIVING the
+ * fade at full strength (toolFailedRowTreatment + TOOL_FAILED_WASH_DEPTH).
+ * The R130 STRUCTURAL pins above (interleaving, grouping, collapsed-default,
+ * live-open, failed-stays-open, the geometry family) ride byte-untouched —
+ * only the visual register changed.
+ *
  * The component module's import graph is jest-mocked the
  * transcript-delivery.test.ts way (reanimated, lucide, router/clipboard,
  * the markdown/image deep chain) — the VALUES under test are pure exports.
@@ -62,11 +73,16 @@ jest.mock("@/components/image-viewer", () => ({ ImageViewer: () => null }));
 
 import {
   TOOLS_HIDDEN_HINT_COPY,
+  TOOL_FAMILY_FADE,
+  TOOL_FAILED_WASH_DEPTH,
+  TOOL_ROW_STRIPE_WIDTH,
   acquireToolsHiddenHint,
   dismissToolsHiddenHint,
   mountToolsHiddenHintBlock,
   releaseToolsHiddenHintBlock,
   resetToolsHiddenHintForTest,
+  toolFailedRowTreatment,
+  toolFamilyColor,
   toolStatusWord,
   turnElementsPlan,
   userBubbleBodyPlan,
@@ -74,7 +90,7 @@ import {
 } from "@/components/transcript";
 import { groupDisplayRows, type ToolItem, type TurnGroup } from "@/features/turn-block";
 import type { ToolActivity } from "@/design/theme";
-import { spacing } from "@/design/tokens";
+import { CHART_HUES, chartHue, mixHex, spacing } from "@/design/tokens";
 import type { AttachmentView, TranscriptItem } from "@/features/sessions";
 
 function attachment(name: string, path?: string): AttachmentView {
@@ -485,6 +501,102 @@ describe("R130 — the tool group label's grammar (toolGroupLabel, pure)", () =>
     ]);
     const group = plan.elements.find((el) => el.element === "tool-group");
     expect(group?.element === "tool-group" && group.label).toBe("3 calls · 2 read · run");
+  });
+});
+
+// ── R131-M — the tool rows' FADED register (the owner's v0.123.0 verdict) ───
+// The tool groups/rows read too LOUD ("it should be faded out kind of vibe.
+// It should not be that highlighted or such") — the register steps down to
+// the calm, recessed secondary one. The pure exports below ARE the register
+// the component renders (toolFamilyColor feeds the stripe + the icon,
+// TOOL_ROW_STRIPE_WIDTH is styles.toolRowStripe's width, toolFailedRowTreatment
+// feeds the failed row's wash + the chip's ink); the R130-B structural laws
+// above ride byte-untouched.
+
+/** Clay's resolved pairs (tokens.ts's own values — the fixture the register
+ *  math runs against; surfaceWell is the RECESSED well the rows sit on). */
+const CLAY_LIGHT = {
+  card: "#FDFDFB",
+  accent: "#C4653F",
+  accent2: "#8A6A55",
+  warning: "#F59E0B",
+  danger: "#EF4444",
+  surfaceWell: mixHex("#FDFDFB", "#8A6A55", 0.08),
+  textSecondary: "rgba(0,0,0,0.62)",
+} as const;
+const CLAY_DARK = {
+  card: "#332C26",
+  accent: "#D98A63",
+  accent2: "#8A6A55",
+  warning: "#F59E0B",
+  danger: "#EF4444",
+  surfaceWell: mixHex("#332C26", "#FFFFFF", 0.05),
+  textSecondary: "rgba(255,255,255,0.62)",
+} as const;
+
+describe("R131-M — the tool rows' faded register (thin stripes, faded family colors)", () => {
+  it("the family STRIPE thins to the 1.5px hairline (the R130-B 2.5px full-strength bar is retired)", () => {
+    // The loud register dies here: 2.5px at the family color read as a
+    // highlighted bar; 1.5px reads as the quiet hairline coding.
+    expect(TOOL_ROW_STRIPE_WIDTH).toBe(1.5);
+    expect(TOOL_ROW_STRIPE_WIDTH).not.toBe(2.5);
+  });
+
+  it("the family FADE depth is the ~50% band's midpoint over the recessed well", () => {
+    expect(TOOL_FAMILY_FADE).toBe(0.5);
+  });
+
+  it("every chromatic family reads its hue at the fade over the WELL — never the full-strength token (both modes)", () => {
+    for (const [clay, isDark] of [
+      [CLAY_LIGHT, false],
+      [CLAY_DARK, true],
+    ] as const) {
+      const well = clay.surfaceWell;
+      // write = the accent terracotta, faded over the well
+      expect(toolFamilyColor("write", clay, isDark)).toBe(mixHex(well, clay.accent, TOOL_FAMILY_FADE));
+      expect(toolFamilyColor("write", clay, isDark)).not.toBe(clay.accent);
+      // terminal = the warning amber, faded over the well
+      expect(toolFamilyColor("terminal", clay, isDark)).toBe(mixHex(well, clay.warning, TOOL_FAMILY_FADE));
+      expect(toolFamilyColor("terminal", clay, isDark)).not.toBe(clay.warning);
+      // read = the accent2 taupe, faded over the well
+      expect(toolFamilyColor("read", clay, isDark)).toBe(mixHex(well, clay.accent2, TOOL_FAMILY_FADE));
+      expect(toolFamilyColor("read", clay, isDark)).not.toBe(clay.accent2);
+      // web/browser = the chart's sage teal (the documented extra-hue
+      // exception), faded over the well
+      const sage = chartHue(CHART_HUES.output, isDark);
+      expect(toolFamilyColor("web", clay, isDark)).toBe(mixHex(well, sage, TOOL_FAMILY_FADE));
+      expect(toolFamilyColor("web", clay, isDark)).not.toBe(sage);
+    }
+  });
+
+  it("the GENERIC family stays textSecondary verbatim (the already-secondary register — never mixHex-able, never in need of fading)", () => {
+    expect(toolFamilyColor("other", CLAY_LIGHT, false)).toBe(CLAY_LIGHT.textSecondary);
+    expect(toolFamilyColor("other", CLAY_DARK, true)).toBe(CLAY_DARK.textSecondary);
+  });
+
+  it("the faded family colors still differ per family (the color CODING survives the fade — quiet, not gone)", () => {
+    const colors = (["write", "terminal", "read", "web"] as const).map(
+      (family) => toolFamilyColor(family, CLAY_LIGHT, false),
+    );
+    expect(new Set(colors).size).toBe(4);
+  });
+});
+
+describe("R131-M — the FAILED row's danger treatment SURVIVES the fade (still full-strength)", () => {
+  it("the wash keeps the R130-B depth (0.08) over the row's new resting well surface — never the family fade", () => {
+    expect(TOOL_FAILED_WASH_DEPTH).toBe(0.08);
+    const treatment = toolFailedRowTreatment(CLAY_LIGHT);
+    expect(treatment.wash).toBe(mixHex(CLAY_LIGHT.surfaceWell, CLAY_LIGHT.danger, TOOL_FAILED_WASH_DEPTH));
+    // The failure wash is deliberately NOT the faded register — a failure
+    // must never fade into the background (the honest-error law).
+    expect(treatment.wash).not.toBe(mixHex(CLAY_LIGHT.surfaceWell, CLAY_LIGHT.danger, TOOL_FAMILY_FADE));
+    expect(treatment.wash).not.toBe(CLAY_LIGHT.surfaceWell);
+  });
+
+  it("the status chip's failed ink stays the FULL danger hue (the flat semantic token, never the fade)", () => {
+    const treatment = toolFailedRowTreatment(CLAY_LIGHT);
+    expect(treatment.chipInk).toBe(CLAY_LIGHT.danger);
+    expect(treatment.chipInk).not.toBe(mixHex(CLAY_LIGHT.surfaceWell, CLAY_LIGHT.danger, TOOL_FAMILY_FADE));
   });
 });
 

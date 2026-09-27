@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-20 round-114 -->
+<!-- last-reviewed: 2026-09-28 round-131 -->
 <!-- status: the MOBILE design-language contract — the owner's R109 direction:
      "a combination of Clay Studio, the 3D kind of vibe... some combination of
      liquid Chrome UI design style aesthetics with the borders and such. Don't
@@ -6,7 +6,8 @@
      the sibling of the desktop language (docs/design-language/) — same clay
      substrate, same rationed chrome, adapted to Android's material truths
      (elevation, edge-to-edge, touch targets). R114-c: the light whites cooled
-     one step and the TAB ROOTS went header-free (§5/§6). -->
+     one step and the TAB ROOTS went header-free (§5/§6). R131-M: the
+     transcript's tool rows stepped down to the faded register (§9). -->
 
 # DESIGN.md — the ACUTE companion's design language
 
@@ -161,3 +162,51 @@ shimmer on content.
 - cold blue-black shadows (always warm ink family)
 - bold-everything typography; neon accents; mirror finishes
 - any border that animates its shine
+
+## §9 The transcript's tool rows — the faded register (R131-M)
+
+The owner's v0.123.0 verdict on the mobile tool groups — the grouping, the
+interleaving, the collapsed-default and the tap-anywhere laws all stayed
+GOOD; the VISUAL register did not: *"the UI of the tool calls is not good.
+Like it should be faded out kind of vibe. It should not be that highlighted
+or such."* The law that replaces the loud R130-B register:
+
+**Tool rows are the calm, recessed secondary register — thin desaturated
+stripes, secondary text, the recessed surface; failures and live work are
+the only full-strength registers.**
+
+- **The recessed surface**: the tool GROUP card is the recessed well
+  (`surfaceWell`) with the `borderSubtle` hairline rim and NO elevation
+  shadow — a recessed surface casts none. The rows sit ON the well,
+  transparent at rest.
+- **The thin desaturated stripes**: the family stripe is a 1.5px hairline
+  (`TOOL_ROW_STRIPE_WIDTH`, down from the retired 2.5px bar), and the
+  family color rides at ~50% mixed toward that well surface
+  (`TOOL_FAMILY_FADE` = 0.5 over `surfaceWell`, the house's one `mixHex`
+  spelling) — the color CODING survives at a glance, the saturation
+  (the "highlighted" feel) dies.
+- **The icon's register — the documented choice**: the family icon keeps the
+  SAME quiet family color as the stripe (one faded spelling per family —
+  chosen over the textSecondary register so the tool family stays
+  identifiable at a glance against the clay well; the glyph keeps its
+  13px/2.2-stroke shape, only the color steps down). The generic family
+  stays `textSecondary` verbatim.
+- **The secondary text**: the row's verb·target title (and the group
+  header's glance line + glyph) speak `textSecondary` ink at the mono-medium
+  weight — never the primary text register. The rail above stays tertiary;
+  the rows' titles sit one step up from it, one step down from body text.
+  The diff chips and status chips keep their quiet badge treatment
+  (mono regular weight — never bold).
+- **The full-strength exceptions (never faded)**: a FAILED call keeps its
+  precise danger treatment — the quiet wash at the carried-verbatim 0.08
+  depth over the well + the chip's full flat danger ink (the honest-error
+  law: failures must never fade into the background); a RUNNING call keeps
+  its full warning chip + the always-visible streaming tails (the live-open
+  law). Everything else on a tool row is the recessed secondary register.
+- **What "faded" does NOT mean**: not disabled-looking (no blanket opacity
+  wash), not invisible — a calm, recessed, secondary register, the mobile
+  sibling of the PC WorkingSection's quiet tool lines.
+- **What the fade does NOT touch**: the grouping, the emission-order
+  interleaving, the collapsed-default + live-open + failed-stays-open
+  lifecycle, and the whole-row press targets (the tap-anywhere law) — all
+  pinned in the transcript suites, byte-untouched by the register change.
