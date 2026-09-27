@@ -1353,6 +1353,26 @@ def _clear_repair_flag():
         pass
 
 
+def _ask_repair_now(expected, latest):
+    """R131-U: the repair flag's full delete-and-reinstall cycle is OPT-IN
+    now — one explicit confirm, never a silent cycle on a normal run (the
+    owner's v0.123.0 "way too jittery" verdict: a double-click that
+    silently churns through a full uninstall + reinstall is exactly the
+    surprise to retire).
+
+    Returns True (repair now), False (explicitly declined), or None (no tty —
+    tests, CI, pipes: the ask is impossible). A None answer KEEPS the flag
+    (the data is real; the next interactive run asks) — only an explicit
+    decline clears it, and `ACUTE.bat reinstall` stays the explicit door."""
+    if not sys.stdin.isatty():
+        return None
+    return confirm(
+        f"The last launch ran engine {expected or 'unknown'} instead of {latest}.\n"
+        "Delete the app completely and reinstall it now?",
+        default=True,
+    )
+
+
 def _desktop_exe_version(exe):
     """R63: the installed EXE's real FileVersion (PowerShell VersionInfo).
 
@@ -1846,12 +1866,132 @@ def _desktop_download(pat, asset_id, version, digest=""):
     return None
 
 
+# R131-U: the access-denied markers a captured installer stderr can carry
+# (NSIS /S is silent by design, so stderr is USUALLY empty -- the exit code
+# is the real signal; these markers only sharpen the case when a wrapper
+# or an AV shim did print something).
+_ACCESS_DENIED_MARKERS = (
+    "access is denied",
+    "error 5",
+    "error 740",
+    "elevation required",
+    "administrator",
+)
+
+
+def _installer_access_denied_markers(stderr):
+    """R131-U (pure): which access-denied markers the installer's stderr
+    carries -- a sharpened (never the only) signal for the elevated retry."""
+    low = str(stderr or "").lower()
+    return [marker for marker in _ACCESS_DENIED_MARKERS if marker in low]
+
+
+def _should_retry_install_elevated(returncode, stderr):
+    """R131-U (pure): does a failed silent install deserve the ONE elevated
+    retry? The write-failure shape: a non-zero exit (a silent NSIS writes
+    nothing to stdout/stderr, so the code IS the signal) with either an
+    explicit access-denied marker in a captured stderr, or an EMPTY capture
+    (the honest default -- NSIS /S never speaks). A non-empty stderr WITHOUT
+    the markers is a different failure (a corrupt download, a missing
+    dependency): no UAC prompt for it, the honest note instead. A zero exit
+    never retries (the per-user default stays -- no gratuitous UAC on
+    healthy installs)."""
+    if returncode == 0:
+        return False
+    if _installer_access_denied_markers(stderr):
+        return True
+    return not str(stderr or "").strip()
+
+
+def _run_installer_elevated(installer_path, timeout_s=None):
+    """R131-U: the ONE elevated retry -- ShellExecuteExW with the verb
+    "runas" (SEE_MASK_NOCLOSEPROCESS + WaitForSingleObject +
+    GetExitCodeProcess, the canonical ctypes pattern). The OS's own UAC
+    consent dialog IS the ask: Windows prompts the user natively, a
+    DECLINED consent answers SE_ERR_ACCESSDENIED, and the install either
+    completes (exit code 0) or fails honestly. Returns (ok, reason) --
+    the reason is human-readable on every failure path."""
+    if not IS_WIN:
+        return False, "the elevated retry is only available on Windows"
+    if timeout_s is None:
+        timeout_s = DESKTOP_INSTALL_TIMEOUT_S
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except (ImportError, ValueError) as exc:  # a stripped python must not crash the flow
+        return False, f"ctypes is unavailable ({exc.__class__.__name__})"
+
+    class _SHELLEXECUTEINFOW(ctypes.Structure):
+        # The shellapi.h struct, ctypes-spelled: only cbSize/fMask/lpVerb/
+        # lpFile/lpParameters/nShow/hProcess carry meaning here; the union
+        # tail (hIcon/hMonitor) keeps the layout width-honest.
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("fMask", ctypes.c_ulong),
+            ("hwnd", wintypes.HANDLE),
+            ("lpVerb", wintypes.LPCWSTR),
+            ("lpFile", wintypes.LPCWSTR),
+            ("lpParameters", wintypes.LPCWSTR),
+            ("lpDirectory", wintypes.LPCWSTR),
+            ("nShow", ctypes.c_int),
+            ("hInstApp", wintypes.HINSTANCE),
+            ("lpIDList", ctypes.c_void_p),
+            ("lpClass", wintypes.LPCWSTR),
+            ("hkeyClass", wintypes.HKEY),
+            ("dwHotKey", wintypes.DWORD),
+            ("hIconOrMonitor", wintypes.HANDLE),
+            ("hProcess", wintypes.HANDLE),
+        ]
+
+    SEE_MASK_NOCLOSEPROCESS = 0x40
+    SW_SHOWNORMAL = 1
+    WAIT_TIMEOUT = 0x102
+    info = _SHELLEXECUTEINFOW()
+    info.cbSize = ctypes.sizeof(_SHELLEXECUTEINFOW)
+    info.fMask = SEE_MASK_NOCLOSEPROCESS
+    info.lpVerb = "runas"  # THE ASK: the OS's own UAC consent dialog
+    info.lpFile = str(installer_path)
+    info.lpParameters = "/S"
+    info.nShow = SW_SHOWNORMAL
+    log(f"$ elevated install: {installer_path} /S (verb=runas -- Windows will ask for administrator permission)")
+    try:
+        if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
+            return False, "the consent dialog was declined (or the elevated launch was refused)"
+        if not info.hProcess:
+            # The shell reused an existing instance instead of handing us a
+            # process -- the install is running but unobservable from here.
+            return True, "launched (no process handle returned -- completion unobserved)"
+        try:
+            wait = ctypes.windll.kernel32.WaitForSingleObject(
+                ctypes.c_void_p(info.hProcess), int(timeout_s * 1000)
+            )
+            if wait == WAIT_TIMEOUT:
+                return False, f"the elevated install did not finish within {timeout_s}s"
+            code = wintypes.DWORD(0)
+            if not ctypes.windll.kernel32.GetExitCodeProcess(
+                ctypes.c_void_p(info.hProcess), ctypes.byref(code)
+            ):
+                return False, "the elevated install finished but its exit code could not be read"
+            if code.value != 0:
+                return False, f"the elevated installer exited with code {code.value}"
+            return True, "the elevated install completed"
+        finally:
+            ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(info.hProcess))
+    except OSError as exc:
+        return False, f"the elevated launch failed ({exc.__class__.__name__}: {exc})"
+
+
 def _desktop_install(installer_path):
     """Run the NSIS installer silently (/S) and wait for it to finish.
 
-    installMode=currentUser → RequestExecutionLevel user, no UAC prompt. The
-    tauri template ABORTS a silent DOWNGRADE, which the caller prevents by
-    only installing when the release version >= the installed one.
+    installMode=currentUser → RequestExecutionLevel user, no UAC prompt on a
+    HEALTHY install (the per-user default stays). R131-U (the elevation
+    leg): when the silent install fails with the write-failure shape (a
+    non-zero exit -- a silent NSIS prints nothing, so the exit code IS the
+    signal; access-denied markers in stderr where captured), ONE elevated
+    retry fires: ShellExecuteExW with the verb "runas" -- the OS's own UAC
+    consent dialog IS the ask. A declined consent or a second failure fails
+    honestly with the human-readable reason.
     """
     log(f"$ silent install: {installer_path.name} /S")
     try:
@@ -1863,11 +2003,37 @@ def _desktop_install(installer_path):
             errors="replace",
             timeout=DESKTOP_INSTALL_TIMEOUT_S,
         )
-    except (subprocess.TimeoutExpired, OSError) as exc:
+    except subprocess.TimeoutExpired:
+        note(f"the installer did not finish within {DESKTOP_INSTALL_TIMEOUT_S}s — not an access problem; no elevation retry")
+        return False
+    except PermissionError as exc:
+        # Executing the installer itself was refused — the elevated retry is
+        # exactly this shape (admin may pass where the user could not).
+        warn(f"running the installer was refused ({exc.__class__.__name__}) — asking once for administrator permission")
+        elevated, reason = _run_installer_elevated(installer_path)
+        if elevated:
+            ok(f"the elevated install succeeded ({reason})")
+            return True
+        warn(f"the elevated retry failed — {reason}")
+        return False
+    except OSError as exc:
         note(f"installer did not complete ({exc.__class__.__name__})")
         return False
     if proc.returncode != 0:
-        note(f"installer exited with code {proc.returncode}")
+        if _should_retry_install_elevated(proc.returncode, proc.stderr):
+            warn(
+                f"the silent installer exited with code {proc.returncode} — "
+                "the install directory may need administrator permission"
+            )
+            ok("asking once for administrator permission (Windows will show its own consent dialog)")
+            elevated, reason = _run_installer_elevated(installer_path)
+            if elevated:
+                ok(f"the elevated install succeeded ({reason})")
+                return True
+            warn(f"the elevated retry failed — {reason}")
+            return False
+        detail = str(proc.stderr or "").strip()
+        note(f"installer exited with code {proc.returncode}" + (f" — {redact(detail[:200])}" if detail else ""))
         return False
     return True
 
@@ -1927,12 +2093,20 @@ def desktop_flow(pat, force_reinstall=False):
     installed EXE's FileVersion on disk, and — after launch — the running
     ENGINE's /health version are each compared with the latest GitHub
     release. A hybrid install (registry bumped, exe stale — what a silent
-    install over a still-closing app leaves behind), a stale repair flag,
-    or `ACUTE.bat reinstall` triggers a FULL removal (NSIS uninstaller +
-    folder residue + stale registry entries) followed by a fresh install,
-    which is then verified the same three ways. The app is closed AND
-    process-waited before any install, and the download is sha256-checked
-    against GitHub's asset digest. Data in %APPDATA% is never touched.
+    install over a still-closing app leaves behind) or `ACUTE.bat
+    reinstall` triggers a FULL removal (NSIS uninstaller + folder residue +
+    stale registry entries) followed by a fresh install, which is then
+    verified the same three ways. The app is closed AND process-waited
+    before any install, and the download is sha256-checked against GitHub's
+    asset digest. Data in %APPDATA% is never touched.
+
+    ROUND-131 (R131-U) — THE CALM LAW: the churn is gone. A failed silent
+    install asks ONCE for administrator permission (the OS's own UAC
+    consent — see _desktop_install); the post-install verification gets
+    exactly ONE delete-and-reinstall retry with the human-readable reason;
+    and the repair flag no longer forces a silent full cycle on the next
+    normal run — it ASKS (one confirm; non-interactive runs keep the flag
+    and stay honest, and ACUTE.bat reinstall stays the explicit door).
     """
     with step("Desktop app (packaged ACUTE-CODE)"):
         release = _desktop_latest_release(pat)
@@ -1978,16 +2152,44 @@ def desktop_flow(pat, force_reinstall=False):
             and _version_norm(exe_version) == _version_norm(installed["version"])
         )
 
+        # R131-U (the calm law): the repair flag is a NOTE now, not a silent
+        # license — the full delete-and-reinstall cycle it used to force on
+        # the next normal run is OPT-IN: the explicit reinstall command
+        # (force_reinstall), or the ONE confirm below. An explicit decline
+        # clears the flag (the owner's choice — no re-asking every run); a
+        # NON-interactive run keeps it (the ask was impossible, the data is
+        # real, the next interactive run asks) — and the disk-truth checks
+        # underneath stay untouched either way.
+        repair_approved = False
+        if repair_expected is not None and not force_reinstall:
+            ask = _ask_repair_now(repair_expected, version)
+            if ask is True:
+                repair_approved = True
+            elif ask is False:
+                warn(
+                    f"the repair was declined for this run — the app may run engine "
+                    f"{repair_expected or 'unknown'} instead of {version} until repaired"
+                )
+                note("run ACUTE.bat reinstall any time to force the full repair")
+                _clear_repair_flag()
+                repair_expected = None
+            else:
+                warn(
+                    "this run cannot ask (no interactive terminal) — the pending repair "
+                    "stays flagged; it will be offered on the next interactive run"
+                )
+                note("run ACUTE.bat reinstall any time to force the full repair now")
+
         uninstall_first = False
         reason = ""
         if force_reinstall:
             uninstall_first = True
             reason = f"reinstall requested — deleting the app completely and installing {version} fresh"
-        elif repair_expected is not None:
+        elif repair_approved:
             uninstall_first = True
             reason = (
                 f"the last launch ran engine {repair_expected or 'unknown'} instead of "
-                f"{version} — deleting the app completely and reinstalling"
+                f"{version} — deleting the app completely and reinstalling (you approved)"
             )
         elif installed is None:
             reason = f"installing the desktop app {version} (first time)"
@@ -2059,7 +2261,11 @@ def desktop_flow(pat, force_reinstall=False):
                 return False
             # R63 POST-INSTALL VERIFICATION: the registry AND the exe on disk
             # must both report the release version — anything else is a
-            # hybrid install and gets one full delete-and-reinstall retry.
+            # hybrid install and gets ONE full delete-and-reinstall retry
+            # (R131-U: exactly one — the churn the owner called "way too
+            # jittery" was this cycle repeating; after the single retry the
+            # flag + the next run's OPT-IN ask is the honest path, never
+            # another silent cycle).
             exe_version = _desktop_exe_version(exe)
             registry_version = installed["version"] or ""
             verified = (
@@ -2068,20 +2274,22 @@ def desktop_flow(pat, force_reinstall=False):
             )
             if not verified:
                 warn(
-                    "the fresh install does not verify: registry {} / exe {} vs release {}".format(
+                    "the fresh install does not verify — which step failed: the registry reports {}, "
+                    "the exe on disk reports {} (release is {}); what was verified: the download's "
+                    "sha256 + the installer's own exit code".format(
                         registry_version or "(none)", exe_version or "(unprobed)", version
                     )
                 )
-                ok("deleting the app completely and reinstalling it once more")
+                ok("ONE retry: deleting the app completely and reinstalling it once more")
                 if _desktop_uninstall(installed) and _desktop_install(installer):
                     installed = _desktop_find_installed()
                     if installed is None:
-                        warn("the second install left no installed app — using the dev-servers flow")
+                        warn("the retry install left no installed app — using the dev-servers flow")
                         return False
                     exe, missing = _desktop_install_files(installed)
                     if missing:
                         warn(
-                            "the second install is incomplete ({} missing) — using the dev-servers flow".format(
+                            "the retry install is incomplete ({} missing) — using the dev-servers flow".format(
                                 ", ".join(missing)
                             )
                         )
@@ -2094,9 +2302,12 @@ def desktop_flow(pat, force_reinstall=False):
                     )
                 if not verified:
                     warn(
-                        "the desktop install still does not verify after a full reinstall — "
-                        "using the dev-servers flow (the next run will retry the repair)"
+                        "the desktop install still does not verify after the one retry "
+                        "(registry {} / exe {} vs release {}) — using the dev-servers flow".format(
+                            registry_version or "(none)", exe_version or "(unprobed)", version
+                        )
                     )
+                    note("the next run will ASK whether to delete and reinstall (never silently)")
                     _write_repair_flag(version)
                     return False
             ok(f"installed {installed['version']} → {installed['location']}")
@@ -2163,7 +2374,9 @@ def desktop_flow(pat, force_reinstall=False):
                     f"the running engine reports version {engine_version}, expected {version} — "
                     "the install is a hybrid"
                 )
-                ok("flagged: the next run deletes and reinstalls the app automatically "
+                # R131-U: the next run ASKS (one confirm) — never the old
+                # silent delete-and-reinstall churn on a normal double-click.
+                ok("flagged: the next run will ASK whether to delete and reinstall "
                    "(or run ACUTE.bat reinstall now)")
                 _write_repair_flag(version)
             else:

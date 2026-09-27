@@ -15,10 +15,13 @@ import {
   buildNotificationCommand,
   buildRelaunchPlan,
   exeIsReady,
+  GUARD_SPAWN_OPTIONS,
   isProcessAlive,
   NO_PID_SETTLE_MS,
   parseGuardOutput,
   parseSupervisorArgs,
+  PRIMARY_RELINQUISH_MS,
+  relaunchBackoffMs,
   RELAUNCH_BACKOFF_MS,
   RELAUNCH_MAX_ATTEMPTS,
   RELAUNCH_VERIFY_MS,
@@ -115,8 +118,8 @@ describe("isProcessAlive (the default strategy)", () => {
   });
 });
 
-describe("buildRelaunchPlan / shouldRelaunch", () => {
-  it("the letter's plan: 3 attempts, 2s backoff, ~10s verify", () => {
+describe("buildRelaunchPlan / shouldRelaunch / relaunchBackoffMs", () => {
+  it("the letter's plan: 3 attempts, 2s backoff base, ~10s verify", () => {
     expect(buildRelaunchPlan()).toEqual({
       maxAttempts: RELAUNCH_MAX_ATTEMPTS,
       backoffMs: RELAUNCH_BACKOFF_MS,
@@ -128,6 +131,18 @@ describe("buildRelaunchPlan / shouldRelaunch", () => {
     // The cadences the letter pinned for the two wait legs.
     expect(APP_EXIT_POLL_MS).toBe(250);
     expect(NO_PID_SETTLE_MS).toBe(1500);
+    // R131-U: the watch-mode grace for the app's own relauncher to land
+    // (the ownership handshake -- see the exclusivity tests below).
+    expect(PRIMARY_RELINQUISH_MS).toBe(3000);
+  });
+
+  it("R131-U: the backoff ladder is exponential (2s -> 4s -> 8s) -- a failing belt gets strictly calmer, never a flicker storm", () => {
+    expect(relaunchBackoffMs(1)).toBe(2000);
+    expect(relaunchBackoffMs(2)).toBe(4000);
+    expect(relaunchBackoffMs(3)).toBe(8000);
+    // hostile/absent inputs clamp to the first rung, never NaN.
+    expect(relaunchBackoffMs(0)).toBe(2000);
+    expect(relaunchBackoffMs(Number.NaN)).toBe(2000);
   });
 
   it("the guard vetoes (never double-launch) and the attempt budget stops the loop", () => {
@@ -136,6 +151,11 @@ describe("buildRelaunchPlan / shouldRelaunch", () => {
     expect(shouldRelaunch({ appRunning: false, attempts: 2 })).toBe(true);
     expect(shouldRelaunch({ appRunning: false, attempts: RELAUNCH_MAX_ATTEMPTS })).toBe(false);
     expect(shouldRelaunch({ appRunning: false })).toBe(true);
+  });
+
+  it("R131-U: the guard's spawn options are frozen windowsHide -- the console flash dies at EVERY probe site", () => {
+    expect(GUARD_SPAWN_OPTIONS).toEqual({ windowsHide: true });
+    expect(Object.isFrozen(GUARD_SPAWN_OPTIONS)).toBe(true);
   });
 });
 
@@ -249,7 +269,10 @@ describe("exeIsReady", () => {
 
 /** A fake deps bundle + a state recorder. guardAnswer() is consulted per
  * probe; the default says "not running" until the app spawn is recorded,
- * then "running" -- exactly the real verify-window shape. */
+ * then "running" -- exactly the real verify-window shape. R131-U: the deps
+ * seam also records a UNIFIED event stream ("guard" / "spawn" / "install"
+ * / "notify") so the ownership-exclusivity law can be pinned by ORDER:
+ * which actor moved first, and whether the supervisor ever competed. */
 function fakeDeps(overrides = {}) {
   const state = {
     t: 0,
@@ -260,6 +283,7 @@ function fakeDeps(overrides = {}) {
     chmods: [],
     timers: [],
     exited: undefined,
+    events: [],
   };
   const guardAnswer =
     overrides.guardAnswer ??
@@ -277,15 +301,18 @@ function fakeDeps(overrides = {}) {
   const deps = {
     spawn: (cmd, args, opts) => {
       state.appSpawns.push({ cmd, args, opts });
+      state.events.push(["spawn", cmd]);
       return { unref() {} };
     },
     spawnAndWait: async (cmd, args, opts, timeout) => {
       state.waited.push({ cmd, args, opts, timeout });
+      state.events.push(["install-or-notify", cmd]);
       return overrides.spawnAndWaitCode ?? 0;
     },
-    captureOutput: async (cmd, args) => {
+    captureOutput: async (cmd, args, opts) => {
       const out = guardAnswer();
-      state.guards.push({ cmd, args, out });
+      state.guards.push({ cmd, args, opts, out });
+      state.events.push(["guard", cmd]);
       return out;
     },
     sleep: async (ms) => {
@@ -333,17 +360,18 @@ describe("runSupervisor (mode behavior, all edges injected)", () => {
     const { state, deps } = fakeDeps();
     const code = await runSupervisor(supervisorArgs({ mode: "watch" }), deps);
     expect(code).toBe(0);
-    // The relaunch: detached, stdio ignored, cwd = the exe's dir, unref'd.
+    // The relaunch: detached, stdio ignored, HIDDEN (R131-U: every spawn
+    // site carries windowsHide), cwd = the exe's dir, unref'd.
     expect(state.appSpawns).toEqual([
       {
         cmd: "/opt/ACUTE-CODE.AppImage",
         args: [],
-        opts: { detached: true, stdio: "ignore", cwd: "/opt" },
+        opts: { detached: true, stdio: "ignore", windowsHide: true, cwd: "/opt" },
       },
     ]);
-    // The notification: notify-send (linux), waited on.
+    // The notification: notify-send (linux), waited on, HIDDEN.
     expect(state.waited).toEqual([
-      { cmd: "notify-send", args: ["ACUTE-CODE", "Updated to v0.121.0 -- restarting"], opts: { stdio: "ignore" }, timeout: 15000 },
+      { cmd: "notify-send", args: ["ACUTE-CODE", "Updated to v0.121.0 -- restarting"], opts: { stdio: "ignore", windowsHide: true }, timeout: 15000 },
     ]);
     // The hard-lifetime timer was armed at max-wait + 120s.
     expect(state.timers.map((t) => t.ms)).toEqual([720_000]);
@@ -355,6 +383,23 @@ describe("runSupervisor (mode behavior, all edges injected)", () => {
     expect(story).toContain("relaunch attempt 1/3");
     expect(story).toContain("relaunch verified on attempt 1");
     expect(story).toContain("the notification finished with code 0");
+  });
+
+  it("R131-U (the calm law): EVERY guard probe carries windowsHide -- the tasklist/pgrep flash storm is dead", async () => {
+    const { state, deps } = fakeDeps({ platform: "win32" });
+    await runSupervisor(
+      supervisorArgs({
+        mode: "run",
+        appExe: "C:\\Apps\\ACUTE-CODE\\ACUTE-CODE.exe",
+        installer: "C:\\Temp\\ACUTE-CODE_0.121.0_x64-setup.exe",
+      }),
+      deps,
+    );
+    expect(state.guards.length).toBeGreaterThan(0);
+    for (const probe of state.guards) {
+      expect(probe.cmd).toBe("tasklist");
+      expect(probe.opts).toEqual(GUARD_SPAWN_OPTIONS);
+    }
   });
 
   it("the GUARD: an instance already running exits the supervisor BEFORE any relaunch or toast", async () => {
@@ -380,7 +425,9 @@ describe("runSupervisor (mode behavior, all edges injected)", () => {
     expect(state.waited[0]).toEqual({
       cmd: "C:\\Temp\\ACUTE-CODE_0.121.0_x64-setup.exe",
       args: ["/S"],
-      opts: { detached: true, stdio: "ignore" },
+      // R131-U: the installer spawn stays detached + ignored AND gains
+      // windowsHide (the NSIS installer is console-capable).
+      opts: { detached: true, stdio: "ignore", windowsHide: true },
       timeout: 600_000,
     });
     expect(state.appSpawns).toEqual([
@@ -389,15 +436,25 @@ describe("runSupervisor (mode behavior, all edges injected)", () => {
         args: [],
         // cwd = the exe's own directory (node:path's dirname -- the
         // platform-flavored module the supervisor itself uses).
-        opts: { detached: true, stdio: "ignore", cwd: dirname("C:\\Apps\\ACUTE-CODE\\ACUTE-CODE.exe") },
+        opts: { detached: true, stdio: "ignore", windowsHide: true, cwd: dirname("C:\\Apps\\ACUTE-CODE\\ACUTE-CODE.exe") },
       },
     ]);
-    // The toast (windows leg) follows the relaunch.
+    // The toast (windows leg) follows the relaunch -- HIDDEN (powershell.exe
+    // is a console exe; without windowsHide it allocates its own window).
     expect(state.waited[1]?.cmd).toBe("powershell.exe");
     expect(state.waited[1]?.args[0]).toBe("-NoProfile");
+    expect(state.waited[1]?.opts).toEqual({ stdio: "ignore", windowsHide: true });
     const story = state.logLines.join("\n");
     expect(story).toContain("the installer exited with code 0");
     expect(story).toContain("mode=run");
+    // R131-U (one owner): run mode asks NO grace -- the supervisor IS the
+    // primary, so its first relaunch follows exactly ONE guard probe (the
+    // pre-flight check), never the watch-mode grace poll.
+    const firstSpawn = state.events.findIndex(([kind]) => kind === "spawn");
+    const guardProbesBeforeSpawn = state.events
+      .slice(0, firstSpawn)
+      .filter(([kind]) => kind === "guard").length;
+    expect(guardProbesBeforeSpawn).toBe(1);
   });
 
   it("run mode, AppImage leg: chmod +x lands before the direct exec", async () => {
@@ -411,7 +468,7 @@ describe("runSupervisor (mode behavior, all edges injected)", () => {
     expect(state.waited[0]).toEqual({
       cmd: "/tmp/ACUTE-CODE_0.121.0_amd64.AppImage",
       args: [],
-      opts: { detached: true, stdio: "ignore" },
+      opts: { detached: true, stdio: "ignore", windowsHide: true },
       timeout: 600_000,
     });
   });
@@ -446,6 +503,60 @@ describe("runSupervisor (mode behavior, all edges injected)", () => {
     expect(code).toBe(0);
     expect(state.appSpawns).toEqual([]);
     expect(state.logLines.join("\n")).toContain("the app never exited within the wait budget");
+  });
+
+  // ── R131-U (U3): ONE OWNER FOR THE RESTART ─────────────────────────────
+  // The modes were already split by design (watch = the app's own flow is
+  // primary, run = the supervisor owns it); the gap was TIMING: the AppImage
+  // leg's primary relauncher fires ~1.25s AFTER the old pid dies, so a
+  // zero-grace guard could beat it to the spawn and double-launch. The
+  // PRIMARY_RELINQUISH_MS grace closes the window -- pinned here by ORDER.
+  it("watch mode: the app's OWN relauncher landing mid-grace stands the supervisor down -- NO competing relaunch", async () => {
+    // The primary's instance appears 1500ms after the app exits (the
+    // AppImage sh -c leg's real shape: pid-death -> 1s settle -> exec).
+    const { state, deps } = fakeDeps();
+    let appExitAt = null;
+    const depsWithLatePrimary = {
+      ...deps,
+      isProcessAlive: (_pid) => {
+        if (appExitAt === null) {
+          appExitAt = state.t;
+          return false; // the app exits at the first poll
+        }
+        return false;
+      },
+      captureOutput: async (cmd, args, opts) => {
+        const primaryLanded = appExitAt !== null && state.t - appExitAt >= 1500;
+        const out = primaryLanded ? { stdout: "1234\n", code: 0 } : { stdout: "", code: 1 };
+        state.guards.push({ cmd, args, opts, out });
+        state.events.push(["guard", cmd]);
+        return out;
+      },
+    };
+    const code = await runSupervisor(supervisorArgs({ mode: "watch" }), depsWithLatePrimary);
+    expect(code).toBe(0);
+    // THE ownership law: the primary won, the supervisor NEVER spawned.
+    expect(state.appSpawns).toEqual([]);
+    expect(state.waited).toEqual([]);
+    expect(state.logLines.join("\n")).toContain("already running -- supervisor exits");
+    // And it stood down within the grace budget (t advanced past the landing).
+    expect(state.t).toBeGreaterThanOrEqual(1500);
+  });
+
+  it("watch mode with a DEAD primary (the R128 incident): the grace expires honestly and the belt takes over", async () => {
+    const { state, deps } = fakeDeps();
+    const code = await runSupervisor(supervisorArgs({ mode: "watch" }), deps);
+    expect(code).toBe(0);
+    // The belt's rescue waited out the full grace before its first spawn:
+    // the pre-spawn guard probes are the grace ladder (6 polls of 500ms)
+    // plus the final one -- the belt yielded, THEN moved.
+    const firstSpawn = state.events.findIndex(([kind]) => kind === "spawn");
+    expect(firstSpawn).toBeGreaterThanOrEqual(0);
+    const guardsBeforeSpawn = state.events
+      .slice(0, firstSpawn)
+      .filter(([kind]) => kind === "guard").length;
+    expect(guardsBeforeSpawn).toBe(PRIMARY_RELINQUISH_MS / 500 + 1);
+    expect(state.appSpawns.length).toBe(1);
   });
 });
 

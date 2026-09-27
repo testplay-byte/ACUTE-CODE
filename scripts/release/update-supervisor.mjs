@@ -71,6 +71,31 @@
  * importing this module from vitest never starts the loop. runSupervisor()
  * takes an injectable deps object (spawn/clock/fs probes) -- every external
  * edge is mockable. See tests/scripts/update-supervisor.test.mjs.
+ *
+ * ── ROUND-131 (R131-U): THE CALM LAW ──────────────────────────────────────
+ *
+ * The owner's v0.123.0 verdict: "the updating process was not that smooth.
+ * It opened up quite a lot of terminals, and the overall experience was way
+ * too jittery." Two fixes in this file:
+ *
+ *   · NO CONSOLE FLASHES: the supervisor itself runs DETACHED (spawned by
+ *     update.rs with DETACHED_PROCESS), so it OWNS NO CONSOLE -- which means
+ *     every console-exe child it spawns (tasklist, powershell.exe) would
+ *     allocate a FRESH console window of its own: dozens of flashing black
+ *     boxes at the 500ms guard cadence. Every spawn site now passes
+ *     windowsHide: true (libuv's CREATE_NO_WINDOW) -- the child runs, pipes
+ *     its answer back, and no window ever exists. The guard stays tasklist
+ *     BY NAME on purpose: its job is to detect an instance this process did
+ *     NOT spawn (the app's own watcher relaunching itself), so a Node-native
+ *     pid probe (`process.kill(pid, 0)`) cannot replace it -- the pid the
+ *     supervisor knows is the OLD, deliberately-dead one. Hidden, not gone.
+ *   · ONE OWNER FOR THE RESTART: watch mode grants the app's own flow a
+ *     PRIMARY_RELINQUISH_MS grace window before concluding "not running"
+ *     (the AppImage leg's sh -c relauncher fires ~1.25s AFTER the old pid
+ *     dies -- a zero-grace guard could beat it to the spawn and double-
+ *     launch); run mode keeps no grace (the supervisor IS the primary there).
+ *     The relaunch ladder's backoff is exponential (2s -> 4s -> 8s), so a
+ *     failing belt never flicker-storms the app window.
  */
 import { spawn } from "node:child_process";
 import { appendFileSync, chmodSync, closeSync, mkdirSync, openSync, statSync } from "node:fs";
@@ -89,10 +114,19 @@ export const EXE_READY_POLL_MS = 500;
 export const GUARD_POLL_MS = 500;
 /** Relaunch attempts before the honest give-up log. */
 export const RELAUNCH_MAX_ATTEMPTS = 3;
-/** Backoff between failed relaunch attempts (ms). */
+/** Backoff BASE between failed relaunch attempts (ms) -- R131-U: the ladder
+ * is exponential (2s -> 4s -> 8s, see relaunchBackoffMs) so a failing belt
+ * never flicker-storms the app window; this constant is attempt 1's step. */
 export const RELAUNCH_BACKOFF_MS = 2000;
 /** How long each relaunch attempt waits for the guard to see the new instance. */
 export const RELAUNCH_VERIFY_MS = 10_000;
+/** R131-U (the calm law): watch mode's grace for the app's OWN relauncher to
+ * land before the supervisor takes the restart over -- the AppImage leg's
+ * sh -c pid-wait relauncher fires ~1.25s after the old pid dies, so a
+ * zero-grace guard could beat it to the spawn and double-launch. 3s covers
+ * it with ~2x headroom; a crashed primary only delays the belt's rescue by
+ * the same 3s (invisible next to the R128 failure it exists to fix). */
+export const PRIMARY_RELINQUISH_MS = 3000;
 /** The hard lifetime bound's overshoot past max-wait (seconds). */
 export const HARD_LIFETIME_GRACE_SECS = 120;
 /** Bounded wait for guard probes (tasklist/pgrep) and the toast (ms). */
@@ -217,6 +251,18 @@ export function buildRelaunchPlan() {
 }
 
 /**
+ * R131-U: the exponential backoff between failed relaunch attempts --
+ * 2s after attempt 1, 4s after attempt 2, 8s after attempt 3 (the ladder
+ * doubles from RELAUNCH_BACKOFF_MS; with maxAttempts 3 only the first two
+ * steps ever fire, but the pure function pins the whole law). The goal is
+ * no visible flicker storms: each retry is strictly calmer than the last.
+ */
+export function relaunchBackoffMs(attempt) {
+  const n = Math.max(1, Number(attempt) || 1);
+  return RELAUNCH_BACKOFF_MS * 2 ** (n - 1);
+}
+
+/**
  * THE GUARD's pure decision: relaunch only when no instance is already
  * running (never double-launch) and the attempt budget is not spent.
  */
@@ -268,6 +314,15 @@ export function parseGuardOutput(platform, appExe, stdout, exitCode, selfPid) {
     .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== selfPid);
   return pids.length > 0;
 }
+
+/**
+ * R131-U (the calm law): the spawn options EVERY guard probe carries --
+ * windowsHide: true is libuv's CREATE_NO_WINDOW, the difference between a
+ * hidden tasklist answer and a fresh console window flashing on screen at
+ * every 500ms poll. Exported so the deps seam's recorded options can be
+ * pinned by the tests (a guard that forgets it re-opens the flash storm).
+ */
+export const GUARD_SPAWN_OPTIONS = Object.freeze({ windowsHide: true });
 
 /**
  * The run-mode installer command (pure): Windows -> the setup.exe with NSIS's
@@ -346,7 +401,7 @@ function defaultDeps() {
   return {
     spawn: (command, args, options) => spawn(command, args, options),
     spawnAndWait,
-    captureOutput,
+    captureOutput: (command, args, options) => captureOutput(command, args, options),
     sleep: (ms) => new Promise((r) => {
       setTimeout(r, ms);
     }),
@@ -416,13 +471,17 @@ function spawnAndWait(command, args, options, timeoutMs) {
   });
 }
 
-/** Spawn + collect stdout + exit code (bounded): { stdout, code } | null. */
-function captureOutput(command, args) {
+/** Spawn + collect stdout + exit code (bounded): { stdout, code } | null.
+ * R131-U: `options` rides through to the spawn -- the guard passes
+ * GUARD_SPAWN_OPTIONS (windowsHide) so a console-exe probe never allocates
+ * a visible window (this process owns no console, so the child would get a
+ * fresh flashing one of its own without it). */
+function captureOutput(command, args, options = {}) {
   return new Promise((resolve) => {
     let settled = false;
     let child;
     try {
-      child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"] });
+      child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"], ...options });
     } catch {
       resolve(null);
       return;
@@ -526,8 +585,30 @@ export async function runSupervisor(parsed, deps = {}) {
       log("the app executable is in place -- proceeding to the guard");
     }
 
-    // STEP 3 -- THE GUARD.
-    if (await isAppRunning(parsed, d, log)) {
+    // STEP 3 -- THE GUARD. R131-U (one owner for the restart): in watch
+    // mode the app's OWN flow may still be mid-relaunch when we get here
+    // (the AppImage leg's pid-wait relauncher fires ~1.25s AFTER the old pid
+    // dies, and the overlay/deb watchers relaunch BEFORE the exit -- either
+    // way the instance appears within the grace window). Poll for
+    // PRIMARY_RELINQUISH_MS before concluding "not running"; a primary that
+    // lands mid-window stands the supervisor down WITHOUT a competing
+    // relaunch. Run mode asks NO grace -- the supervisor IS the primary
+    // there, and its installer just finished synchronously.
+    let appRunning = false;
+    if (parsed.mode === "watch") {
+      const graceDeadline = d.now() + PRIMARY_RELINQUISH_MS;
+      while (d.now() < graceDeadline) {
+        if (await isAppRunning(parsed, d, log)) {
+          appRunning = true;
+          break;
+        }
+        await d.sleep(GUARD_POLL_MS);
+      }
+    }
+    if (!appRunning) {
+      appRunning = await isAppRunning(parsed, d, log);
+    }
+    if (appRunning) {
       log("already running -- supervisor exits");
       return 0;
     }
@@ -542,6 +623,10 @@ export async function runSupervisor(parsed, deps = {}) {
         const child = d.spawn(parsed.appExe, [], {
           detached: true,
           stdio: "ignore",
+          // R131-U: the GUI app allocates no console of its own, but a
+          // belt-and-suspenders windowsHide costs nothing and keeps EVERY
+          // spawn site in this file under the same calm law.
+          windowsHide: true,
           cwd: dirname(parsed.appExe),
         });
         child?.unref?.();
@@ -563,7 +648,9 @@ export async function runSupervisor(parsed, deps = {}) {
         break;
       }
       log(`relaunch attempt ${attempt} not verified within ${plan.verifyMs}ms`);
-      if (attempt < plan.maxAttempts) await d.sleep(plan.backoffMs);
+      // R131-U: the exponential ladder (2s -> 4s -> ...) -- each retry is
+      // strictly calmer than the last; a failing belt never flicker-storms.
+      if (attempt < plan.maxAttempts) await d.sleep(relaunchBackoffMs(attempt));
     }
 
     // STEP 5 -- THE NOTIFICATION (belt leg; only when THIS process brought
@@ -572,7 +659,15 @@ export async function runSupervisor(parsed, deps = {}) {
     if (relaunched && installerSucceeded) {
       const note = buildNotificationCommand(d.platform(), parsed.version);
       log(`notifying: ${note.command} -- "${note.text.title}" / "${note.text.body}"`);
-      const code = await d.spawnAndWait(note.command, note.args, { stdio: "ignore" }, PROBE_TIMEOUT_MS);
+      // R131-U: windowsHide -- powershell.exe is a console exe and this
+      // process owns no console, so without it the toast would allocate a
+      // visible window of its own (the second flash family the owner saw).
+      const code = await d.spawnAndWait(
+        note.command,
+        note.args,
+        { stdio: "ignore", windowsHide: true },
+        PROBE_TIMEOUT_MS,
+      );
       if (code === null) {
         log("the notification did not finish (or failed to spawn) -- the app's own setup splash remains the primary UX");
       } else {
@@ -646,7 +741,14 @@ async function runInstallerAndWait(parsed, d, log) {
     }
   }
   log(`launching the installer: ${cmd.command} ${cmd.args.join(" ")}`);
-  const code = await d.spawnAndWait(cmd.command, cmd.args, { detached: true, stdio: "ignore" }, parsed.maxWaitSecs * 1000);
+  // R131-U: windowsHide rides the detached + ignored shape -- the NSIS
+  // installer is a console-capable exe and must never allocate a window.
+  const code = await d.spawnAndWait(
+    cmd.command,
+    cmd.args,
+    { detached: true, stdio: "ignore", windowsHide: true },
+    parsed.maxWaitSecs * 1000,
+  );
   if (code === null) {
     log("the installer did not exit within the wait budget -- treating the install as failed (the restart is still guaranteed)");
     return false;
@@ -657,10 +759,12 @@ async function runInstallerAndWait(parsed, d, log) {
 
 /** The guard, live: run the platform probe and parse it. A probe that cannot
  * run at all answers NOT running (the owner's incident was a dead app, not a
- * doubled one -- the restart wins the tie; logged honestly). */
+ * doubled one -- the restart wins the tie; logged honestly). R131-U: every
+ * probe carries GUARD_SPAWN_OPTIONS (windowsHide) -- tasklist on Windows
+ * would otherwise flash a fresh console at each 500ms poll. */
 async function isAppRunning(parsed, d, log) {
   const cmd = buildGuardCommand(d.platform(), parsed.appExe);
-  const result = await d.captureOutput(cmd.command, cmd.args);
+  const result = await d.captureOutput(cmd.command, cmd.args, GUARD_SPAWN_OPTIONS);
   if (result === null) {
     log(`the guard probe could not run (${cmd.command} ${cmd.args.join(" ")}) -- treating as not running`);
     return false;

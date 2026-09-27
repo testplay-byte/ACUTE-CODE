@@ -108,6 +108,44 @@
 //!    (the R104 fixed 3s guess retired — no WebKitGTK cache/data-dir race,
 //!    no double window, ever).
 //!
+//! ── ROUND-131 (R131-U): THE ELEVATION LEG + THE CALM HANDOFF. The owner's
+//! v0.123.0 verdict on the silent update: "we need to have a proper system
+//! for managing the updates and handling it properly, and if it requires
+//! the admin permissions, then it should ask for the admin permissions
+//! from the user too." Three answers in this module:
+//!
+//!  · THE ASK: every Windows install leg can now RETRY ONCE with elevation
+//!    — ShellExecuteW with the verb "runas", whose UAC consent dialog is
+//!    the OS's own native ask (Windows prompts the user; a DECLINED
+//!    consent returns SE_ERR_ACCESSDENIED and the flow fails honestly,
+//!    never a loop). The per-user default STAYS: the elevation only fires
+//!    on the access-denied failure shape — the launch-level GetLastError
+//!    5/740 in the overlay leg, the SE_ERR 5 in the /S /R fallback leg,
+//!    and the WRITE-LOCKED TARGET symptom in the overlay watcher (the
+//!    installer exits non-zero having written NOTHING — a partial write is
+//!    a different failure and recovers without elevation). The
+//!    `update-elevation-required {reason}` event fires BEFORE every
+//!    elevation for observability.
+//!  · THE OVERLAY WATCHER'S HONEST VERDICT: a WAIT_OBJECT_0 on the
+//!    installer handle used to be treated as success unconditionally — a
+//!    failed silent NSIS (nothing written, the exe renamed away) then
+//!    "relaunched" a missing exe and called it installed. The watcher now
+//!    reads GetExitCodeProcess: 0 = the success path verbatim; non-zero =
+//!    the honest failure with the .old name RESTORED (the app stays
+//!    launchable) — except the nothing-written shape, which elevates once
+//!    first.
+//!  · THE CALM HANDOFF: an elevated launch is fire-and-forget
+//!    (ShellExecuteW yields no process handle), so the overlay legs hand
+//!    the restart to the WATCH-MODE supervisor the caller already spawned:
+//!    this window closes via schedule_exit, the supervisor waits for the
+//!    exe at the original path to appear, guards, and relaunches — the
+//!    same belt that owns every other restart the app cannot observe.
+//!
+//! The terminal-flash + restart-ladder halves of the calm live in
+//! scripts/release/update-supervisor.mjs (its R131-U header) — every
+//! supervisor spawn is windowsHide'd, and watch mode grants the app's own
+//! relauncher a grace window before the belt moves.
+//!
 //! ROUND-104 (R104): THE LINUX LEG. The owner's v0.100.0 report: "It was
 //! saying 'Restarting into 0.100.0' and then it said 'Connecting to Agent
 //! Core' but apparently it did not get updated… It was version 0.99.0 in
@@ -403,8 +441,13 @@ pub async fn run_update_installer(
             Ok(true) => {
                 // The overlay flow is LIVE: the watcher thread owns the
                 // install's visibility, the relaunch, and this process's
-                // exit — no schedule_exit (the window must SURVIVE until
-                // the new exe is ready to take over).
+                // exit — no schedule_exit HERE (the window must SURVIVE
+                // until the new exe is ready to take over). The ONE
+                // exception already scheduled its own exit INSIDE
+                // install_with_overlay: the R131-U elevated handoff (the
+                // `runas` retry is live but unobservable — this window
+                // closes after the reply's splash leg, and the supervisor
+                // below owns the restart).
                 //
                 // R128-W1: the OVERLAY leg's supervisor (mode "watch") —
                 // the restart guarantee if the watcher above ever dies
@@ -453,8 +496,42 @@ pub async fn run_update_installer(
                         "update: the external supervisor owns the fallback install — wait exit → installer /S → guard → relaunch → notify",
                     );
                 } else {
-                    silent_launch::open_with_parameters(&path, silent_launch::ARGS)
-                        .map_err(|e| format!("launching the silent installer failed: {e}"))?;
+                    // R131-U (the elevation leg): the checked twin surfaces the
+                    // raw SE_ERR code so the access-denied shape (5) can ask
+                    // ONCE for administrator permission — ShellExecuteW verb
+                    // "runas" triggers the OS's own UAC consent dialog (that IS
+                    // the ask). This leg runs only when the supervisor could
+                    // not be staged (dev/web builds); the elevated launch is
+                    // fire-and-forget, so the relaunch rides the SAME `/R`
+                    // template hook the parameters carry. A declined consent
+                    // fails honestly — never a loop.
+                    match silent_launch::open_with_parameters_checked(&path, silent_launch::ARGS) {
+                        Ok(()) => {}
+                        Err((code, message)) => {
+                            if silent_launch::se_err_is_access_denied(code) {
+                                let _ = app.emit(
+                                    "update-elevation-required",
+                                    format!(
+                                        "launching the silent installer was refused (access denied) — asking once for administrator permission"
+                                    ),
+                                );
+                                crate::sidecar::log_line(
+                                    "update: the silent installer launch was refused (access denied) — ONE elevated retry via the runas verb",
+                                );
+                                silent_launch::open_elevated_with_parameters(
+                                    &path,
+                                    silent_launch::ARGS,
+                                )
+                                .map_err(|e| {
+                                    format!("launching the silent installer failed: {e}")
+                                })?;
+                            } else {
+                                return Err(format!(
+                                    "launching the silent installer failed: {message}"
+                                ));
+                            }
+                        }
+                    }
                 }
             }
             Err(e) => return Err(e),
@@ -868,6 +945,19 @@ mod appimage {
 // is SE_ERR_DLLNOTFOUND — the R99-H review catch: a > 31 boundary would
 // misclassify a missing DLL as success and the app would exit in 1.5s
 // claiming an install that never ran).
+//
+// ── ROUND-131 (R131-U): THE ELEVATION LEG. The owner's verdict on the
+// silent update: “if it requires the admin permissions, then it should ask
+// for the admin permissions from the user too.” The per-user default STAYS
+// (installMode=currentUser — no gratuitous UAC on a healthy install); what
+// changed is the FAILURE shape: when the launch is refused with the
+// access-denied SE_ERR, `open_elevated_with_parameters` retries ONCE with
+// the verb "runas" — the OS's own UAC consent dialog, which IS the ask
+// (Windows prompts the user natively; a DECLINED consent comes back as
+// SE_ERR_ACCESSDENIED and the caller fails honestly). Never a loop: one
+// elevated retry, then the honest error. The `update-elevation-required`
+// event (emitted by the callers BEFORE elevating) carries the reason for
+// observability — the frontend pre-confirm is a flagged follow-up.
 #[cfg(windows)]
 pub(crate) mod silent_launch {
     /// The parameter string for the silent leg: NSIS's `/S` (silent
@@ -877,6 +967,11 @@ pub(crate) mod silent_launch {
     /// install — the finish-page "run app" checkbox never renders
     /// silently, so the template's own restart flag is the relaunch leg).
     pub const ARGS: &str = "/S /R";
+
+    /// R131-U: SE_ERR_ACCESSDENIED (shellapi.h) — the ONE SE_ERR shape that
+    /// means "the OS refused this launch for permissions", and the trigger
+    /// for the single elevated retry.
+    const SE_ERR_ACCESSDENIED: isize = 5;
 
     // SAFETY-of-declaration: six word/pointer-sized scalar arguments and an
     // integer return — no structs, so there is no layout to get wrong. The
@@ -897,21 +992,26 @@ pub(crate) mod silent_launch {
     /// flag keeps the call honest for any future non-silent parameter leg.
     const SW_SHOWNORMAL: i32 = 1;
 
-    /// Opens `path` with the default "open" verb and `parameters` as the
-    /// launched process's command line. Buffers are NUL-terminated UTF-16
-    /// and outlive the call (the shell copies what it needs before
-    /// returning). Errors carry ShellExecuteW's own SE_ERR code.
-    pub fn open_with_parameters(path: &str, parameters: &str) -> Result<(), String> {
+    /// The raw launcher, shared by every verb: `None` is the default
+    /// "open" verb; `Some("runas")` is the UAC elevation verb. Errors
+    /// carry ShellExecuteW's own raw SE_ERR code so callers can branch on
+    /// the access-denied shape (see open_with_parameters_checked).
+    fn shell_execute(path: &str, parameters: &str, verb: Option<&str>) -> Result<(), isize> {
         let file: Vec<u16> = wide(path);
         let params: Vec<u16> = wide(parameters);
-        // SAFETY: `file`/`params` are NUL-terminated UTF-16 buffers alive
-        // until the call returns; the null hwnd (no owner window), null
-        // verb (the default "open" verb), and null directory (the target's
-        // own directory) are each explicitly documented as legal nulls.
+        let operation: Option<Vec<u16>> = verb.map(wide);
+        // SAFETY: `file`/`params` (and the optional verb buffer, when the
+        // elevated leg supplied one) are NUL-terminated UTF-16 buffers
+        // alive until the call returns — the shell copies what it needs
+        // before returning; the null hwnd (no owner window), null directory
+        // (the target's own directory), and a null verb (the None leg — the
+        // documented default "open" verb) are each documented legal nulls.
         let result = unsafe {
             ShellExecuteW(
                 0,
-                std::ptr::null(),
+                operation
+                    .as_ref()
+                    .map_or(std::ptr::null(), |buf| buf.as_ptr()),
                 file.as_ptr(),
                 params.as_ptr(),
                 std::ptr::null(),
@@ -923,8 +1023,44 @@ pub(crate) mod silent_launch {
         if result > 32 {
             Ok(())
         } else {
-            Err(describe_se_err(result))
+            Err(result)
         }
+    }
+
+    /// Opens `path` with the default "open" verb and `parameters` as the
+    /// launched process's command line. Buffers are NUL-terminated UTF-16
+    /// and outlive the call (the shell copies what it needs before
+    /// returning). Errors carry ShellExecuteW's own SE_ERR code.
+    pub fn open_with_parameters(path: &str, parameters: &str) -> Result<(), String> {
+        shell_execute(path, parameters, None).map_err(describe_se_err)
+    }
+
+    /// R131-U: the checked twin — the raw SE_ERR code rides next to the
+    /// described message so the fallback leg can branch on the
+    /// access-denied shape before deciding to elevate.
+    pub fn open_with_parameters_checked(
+        path: &str,
+        parameters: &str,
+    ) -> Result<(), (isize, String)> {
+        shell_execute(path, parameters, None)
+            .map_err(|code| (code, describe_se_err(code)))
+    }
+
+    /// R131-U (the elevation leg): the ONE elevated retry — ShellExecuteW
+    /// with the verb "runas". Windows shows its own UAC consent dialog
+    /// (the OS asks the user natively — that IS the ask); a DECLINED
+    /// consent answers SE_ERR_ACCESSDENIED and the caller fails honestly.
+    /// The launched installer is fire-and-forget (ShellExecuteW yields no
+    /// process handle) — each caller documents who owns the restart after
+    /// an elevated launch.
+    pub fn open_elevated_with_parameters(path: &str, parameters: &str) -> Result<(), String> {
+        shell_execute(path, parameters, Some("runas")).map_err(describe_se_err)
+    }
+
+    /// R131-U: the access-denied shape at the SE_ERR level — pure, one
+    /// spelling, greppable from every caller's decision.
+    pub fn se_err_is_access_denied(code: isize) -> bool {
+        code == SE_ERR_ACCESSDENIED
     }
 
     fn wide(text: &str) -> Vec<u16> {
@@ -952,13 +1088,36 @@ pub(crate) mod silent_launch {
 
 /// Non-Windows dev checkouts: the silent installer launch is a
 /// packaged-Windows-app concern (the wincred.rs imp-stub pattern — keep
-/// every call site honest instead of silently pretending).
+/// every call site honest instead of silently pretending). R131-U: the
+/// elevation trio grows the same honest stubs — the call sites stay
+/// compilable cross-platform and answer the honest refusal.
 #[cfg(not(windows))]
 pub(crate) mod silent_launch {
     pub const ARGS: &str = "";
 
     pub fn open_with_parameters(_path: &str, _parameters: &str) -> Result<(), String> {
         Err("the silent installer launch is only available in the packaged Windows app".to_string())
+    }
+
+    /// R131-U stub: same refusal, code + message shape preserved.
+    pub fn open_with_parameters_checked(
+        _path: &str,
+        _parameters: &str,
+    ) -> Result<(), (isize, String)> {
+        Err((
+            0,
+            "the silent installer launch is only available in the packaged Windows app".to_string(),
+        ))
+    }
+
+    /// R131-U stub: the elevated retry is a packaged-Windows-app concern.
+    pub fn open_elevated_with_parameters(_path: &str, _parameters: &str) -> Result<(), String> {
+        Err("the elevated installer launch is only available in the packaged Windows app".to_string())
+    }
+
+    /// R131-U stub: no SE_ERR exists off-Windows — never the denied shape.
+    pub fn se_err_is_access_denied(_code: isize) -> bool {
+        false
     }
 }
 
@@ -1011,9 +1170,18 @@ pub(crate) mod overlay {
     use tauri::{AppHandle, Emitter};
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Threading::{
-        CreateProcessW, WaitForSingleObject, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
-        PROCESS_INFORMATION, STARTUPINFOW,
+        CreateProcessW, GetExitCodeProcess, WaitForSingleObject, CREATE_NEW_PROCESS_GROUP,
+        DETACHED_PROCESS, PROCESS_INFORMATION, STARTUPINFOW,
     };
+
+    /// R131-U (the elevation leg): the two launch-level GetLastError shapes
+    /// that mean "permissions refused this launch" (winerror.h): 5 =
+    /// ERROR_ACCESS_DENIED, 740 = ERROR_ELEVATION_REQUIRED (the installer's
+    /// manifest or an ACL asked for admin). Declared locally, mirroring the
+    /// module's own WAIT_OBJECT_0/WAIT_TIMEOUT pattern (plain winbase.h
+    /// constants, no wider windows-sys surface).
+    const ERROR_ACCESS_DENIED: u32 = 5;
+    const ERROR_ELEVATION_REQUIRED: u32 = 740;
 
     /// The watcher's wait budget, imported from the parent module's
     /// INSTALL_WAIT_BUDGET_SECS (one shared constant for the Windows
@@ -1060,14 +1228,22 @@ pub(crate) mod overlay {
     pub const RENAMED_SUFFIX: &str = ".old";
 
     /// Try the overlay install. Returns:
-    ///   · Ok(true)  — the flow is LIVE (rename done, installer launched,
-    ///                 watcher owns the exit); the caller must NOT exit.
+    ///   · Ok(true)  — the flow is LIVE: either the classic shape (rename
+    ///                 done, installer launched with an OWNED handle, the
+    ///                 watcher owns the exit — the caller must NOT exit) or
+    ///                 the R131-U ELEVATED HANDOFF (the launch was refused
+    ///                 with the access-denied shape and the one `runas`
+    ///                 retry is live but unobservable — install_with_overlay
+    ///                 itself called schedule_exit, and the caller's
+    ///                 watch-mode supervisor owns the restart).
     ///   · Ok(false) — the self-rename refused (AV/filesystem lock); the
     ///                 caller falls back to the R99-C /S /R flow verbatim.
     ///   · Err(e)    — the installer launch failed AFTER a successful
-    ///                 rename; the exe's name has been RESTORED and the
-    ///                 app is fully alive — the frontend's recovery maps
-    ///                 this exactly like a rejected /S /R launch.
+    ///                 rename (including a DECLINED elevation consent — the
+    ///                 elevated note rides the message); the exe's name has
+    ///                 been RESTORED and the app is fully alive — the
+    ///                 frontend's recovery maps this exactly like a rejected
+    ///                 /S /R launch.
     ///
     /// The sidecar kill has ALREADY happened (the command's shared
     /// ordering contract) — every path here runs with the engine down,
@@ -1142,13 +1318,56 @@ pub(crate) mod overlay {
             )
         };
         if ok == 0 {
+            let code = unsafe { GetLastError() };
+            // R131-U (the elevation leg): the access-denied /
+            // elevation-required launch shape gets ONE elevated retry —
+            // ShellExecuteW with the verb "runas" IS the ask (the OS's own
+            // UAC consent dialog; a declined consent comes back as
+            // SE_ERR_ACCESSDENIED). The event fires BEFORE elevating so the
+            // observability story exists even though the webview is about to
+            // hand the screen to the splash. The elevated installer is
+            // fire-and-forget (no process handle), so the flow hands off:
+            // schedule_exit below closes this window after the reply's
+            // splash leg, and the WATCH-MODE supervisor the caller spawns on
+            // Ok(true) owns the restart — it waits for the exe at the
+            // original path to appear (the elevated NSIS writes it), then
+            // relaunches. The .old rename is deliberately NOT rolled back
+            // here: restoring it would put the OLD exe at the install path
+            // while the elevated installer is mid-flight.
+            let mut elevated_note = "";
+            if code == ERROR_ACCESS_DENIED || code == ERROR_ELEVATION_REQUIRED {
+                let _ = app.emit(
+                    "update-elevation-required",
+                    format!(
+                        "launching the installer was refused (error {code}) — asking once for administrator permission"
+                    ),
+                );
+                crate::sidecar::log_line(
+                    "update: the overlay installer launch was refused (access denied) — ONE elevated retry via the runas verb",
+                );
+                match super::silent_launch::open_elevated_with_parameters(
+                    &installer.to_string_lossy(),
+                    OVERLAY_ARGS,
+                ) {
+                    Ok(()) => {
+                        crate::sidecar::log_line(
+                            "update: the elevated installer is live — the watch-mode supervisor owns the restart after this window closes",
+                        );
+                        super::schedule_exit(app);
+                        return Ok(true);
+                    }
+                    Err(_) => {
+                        elevated_note =
+                            " (the one elevated retry was refused — the administrator permission was likely declined)";
+                    }
+                }
+            }
             // RESTORE the exe's name before erroring — the install never
             // started, and the app must stay normally launchable.
             let _ = std::fs::rename(&exe_old, &exe);
-            let code = unsafe { GetLastError() };
             let err = std::io::Error::from_raw_os_error(code as i32);
             return Err(format!(
-                "launching the installer failed: {err} — the running app is untouched"
+                "launching the installer failed: {err}{elevated_note} — the running app is untouched"
             ));
         }
         // The thread handle is not needed (we only wait on the process).
@@ -1164,6 +1383,12 @@ pub(crate) mod overlay {
         //    precedent; AppHandle is Send).
         let watcher_app = app.clone();
         let watcher_exe = exe.clone();
+        // R131-U: the failure legs need the pair that can UNDO the overlay —
+        // the staged installer (for the one elevated retry) and the renamed
+        // .old path (to restore the app's launchability when the install
+        // did not land).
+        let watcher_installer = installer.to_path_buf();
+        let watcher_exe_old = exe_old.clone();
         let process = SendHandle(proc_info.hProcess);
         std::thread::spawn(move || {
             // R123 (the disjoint-capture lesson, twice over): a FUNCTION CALL
@@ -1178,8 +1403,103 @@ pub(crate) mod overlay {
             let wait = unsafe { WaitForSingleObject(handle, WAIT_BUDGET_MS) };
             match wait {
                 WAIT_OBJECT_0 => {
-                    // The install finished — the new exe owns the original
-                    // path. Tell the splash, relaunch, exit.
+                    // R131-U (the write-locked target symptom): the installer's
+                    // OWN exit code is the honest verdict. A silent NSIS that
+                    // could not write $INSTDIR (per-machine residue, a protected
+                    // path, an AV/ACL lock) exits non-zero while the original
+                    // path still holds NOTHING — the pre-R131 code treated any
+                    // WAIT_OBJECT_0 as success and then "relaunched" a missing
+                    // exe. Non-zero = the install failed. The elevated retry
+                    // fires ONLY on the nothing-was-written shape (the exe at
+                    // the original path is still absent): a PARTIAL write is a
+                    // different failure (disk full, a specific locked file) —
+                    // elevating there is a gratuitous UAC AND would race the
+                    // supervisor's exe-ready wait against a half-written exe.
+                    let mut exit_code: u32 = 0;
+                    // SAFETY: `handle` is the CreateProcessW process handle
+                    // this watcher exclusively owns (the SendHandle contract);
+                    // `exit_code` is a plain u32 OUT local. A failing call
+                    // leaves it 0 — the pre-R131 success treatment, never a
+                    // false failure.
+                    unsafe { GetExitCodeProcess(handle, &mut exit_code) };
+                    if exit_code != 0 {
+                        let exe_written = watcher_exe.is_file();
+                        if exe_written {
+                            // A partial install — not the permission shape.
+                            // RESTORE the exe's name (the rename is undone, the
+                            // app stays normally launchable) and recover over
+                            // the still-running old binary, exactly like the
+                            // timeout leg below.
+                            let _ = std::fs::rename(&watcher_exe_old, &watcher_exe);
+                            crate::sidecar::log_line(&format!(
+                                "update: the overlay installer exited with code {exit_code} after a partial write — the .old exe name was restored, recovering"
+                            ));
+                            let _ = watcher_app.emit(
+                                "update-install-failed",
+                                format!(
+                                    "the silent install failed part-way (exit code {exit_code}) — the app keeps running the current version; try the update again (or use the Releases page)"
+                                ),
+                            );
+                            unsafe { CloseHandle(handle) };
+                            return;
+                        }
+                        // The nothing-was-written shape — ask ONCE for
+                        // administrator permission: ShellExecuteW verb "runas"
+                        // triggers the OS's own UAC consent dialog (that IS the
+                        // ask); a DECLINED consent answers SE_ERR_ACCESSDENIED.
+                        let _ = watcher_app.emit(
+                            "update-elevation-required",
+                            format!(
+                                "the silent install failed (exit code {exit_code}) — asking once for administrator permission"
+                            ),
+                        );
+                        crate::sidecar::log_line(&format!(
+                            "update: the overlay installer exited with code {exit_code} having written nothing — ONE elevated retry via the runas verb"
+                        ));
+                        match super::silent_launch::open_elevated_with_parameters(
+                            &watcher_installer.to_string_lossy(),
+                            OVERLAY_ARGS,
+                        ) {
+                            Ok(()) => {
+                                // The elevated installer is live but UNOBSERVABLE
+                                // from here (ShellExecuteW yields no handle) —
+                                // hand off: this window closes after the splash
+                                // leg, and the WATCH-MODE supervisor the caller
+                                // already spawned waits for the exe at the
+                                // original path to appear (the elevated NSIS
+                                // writes it — the path is provably empty, so
+                                // there is no partial-file race), then
+                                // relaunches. The .old rename stays (the next
+                                // startup's cleanup removes it).
+                                crate::sidecar::log_line(
+                                    "update: the elevated installer is live — the watch-mode supervisor owns the restart after this window closes",
+                                );
+                                unsafe { CloseHandle(handle) };
+                                super::schedule_exit(&watcher_app);
+                                return;
+                            }
+                            Err(e) => {
+                                // The consent was declined (or the elevated
+                                // launch refused) — RESTORE the exe's name so
+                                // the app stays normally launchable, then the
+                                // honest failure the frontend's recovery maps.
+                                let _ = std::fs::rename(&watcher_exe_old, &watcher_exe);
+                                crate::sidecar::log_line(&format!(
+                                    "update: the elevated retry was refused ({e}) — the .old exe name was restored, recovering"
+                                ));
+                                let _ = watcher_app.emit(
+                                    "update-install-failed",
+                                    format!(
+                                        "the silent install failed (exit code {exit_code}) and the administrator permission was not granted ({e}) — the app keeps running the current version; try the update again (or use the Releases page)"
+                                    ),
+                                );
+                                unsafe { CloseHandle(handle) };
+                                return;
+                            }
+                        }
+                    }
+                    // The install finished with exit code 0 — the new exe owns
+                    // the original path. Tell the splash, relaunch, exit.
                     crate::sidecar::log_line(
                         "update: the overlay install finished — relaunching the new version",
                     );
