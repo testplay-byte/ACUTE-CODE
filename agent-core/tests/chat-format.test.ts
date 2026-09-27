@@ -466,6 +466,236 @@ describe("cachedInputTokens capture (ROUND-50 R50-c1)", () => {
   });
 });
 
+/* ── R131-T (Wave T): the finish frame's two truths — context vs billing ──────
+ *
+ * The owner's v0.123.0 device pass: "even though the context was, like
+ * roughly 200K, or maybe sometimes 30K, 40K… but the actual which it was
+ * showing me on the context window itself was like around 900K… as soon as
+ * the context message session ended, it properly started showing me the
+ * correct, accurate one." ONE chatStream() call is ONE streamText whose
+ * internal tool loop RE-SENDS the whole history every step — the finish
+ * frame's usage block used to carry the ACCUMULATED input (N_steps ×
+ * context), which the runtime persisted as the stats carrier the context
+ * meter AND the compaction gate anchor on mid-turn. R131-T splits the two
+ * truths at this seam:
+ *   · usage       = the LAST step's own input+output (the context truth —
+ *                   what a follow-up request would re-send);
+ *   · turnUsage   = the call's cumulative spend (the billing truth — the
+ *                   runtime's totalInputTokens + the usage_events row).
+ */
+describe("R131-T: streamAiSdkChat finish frame — the LAST step is the context truth, the SUM is the billing truth", () => {
+  /** Drain a streamAiSdkChat call and return its finish frame. */
+  const finishOf = async () => {
+    for await (const event of streamAiSdkChat({
+      ...baseInput,
+      provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+    })) {
+      if (event.type === "finish") return event;
+    }
+    throw new Error("no finish frame");
+  };
+
+  it("a 3-step tool stream: usage carries the 3rd step's input (NOT the sum); turnUsage keeps the call's cumulative spend", async () => {
+    // The owner's exact shape, compressed: a ~200K-context session where the
+    // SDK's internal tool loop ran 3 provider requests. Each step RE-SENT
+    // the whole history, so the inputs climb 200_000 → 200_200 → 200_400.
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield { type: "text-delta", text: "working" };
+        yield {
+          type: "finish-step",
+          usage: { inputTokens: 200_000, outputTokens: 900, inputTokenDetails: { cacheReadTokens: 120_000 } },
+        };
+        yield { type: "tool-call", toolCallId: "c1", toolName: "read_file", input: { path: "a.txt" } };
+        yield {
+          type: "finish-step",
+          usage: { inputTokens: 200_200, outputTokens: 1_100, inputTokenDetails: { cacheReadTokens: 130_000 } },
+        };
+        yield { type: "text-delta", text: "done" };
+        yield {
+          type: "finish-step",
+          usage: { inputTokens: 200_400, outputTokens: 1_500, inputTokenDetails: { cacheReadTokens: 150_000 } },
+        };
+      })(),
+      // The SDK's accumulated totalUsage (v7: aggregated across all steps).
+      totalUsage: Promise.resolve({
+        inputTokens: 600_600,
+        outputTokens: 3_500,
+        totalTokens: 604_100,
+        inputTokenDetails: { cacheReadTokens: 400_000 },
+      }),
+      usage: Promise.resolve({
+        inputTokens: 600_600,
+        outputTokens: 3_500,
+        totalTokens: 604_100,
+        inputTokenDetails: { cacheReadTokens: 400_000 },
+      }),
+    }));
+    const finish = await finishOf();
+    // THE CONTEXT TRUTH — the meter's 200K story, not the 900K lie: the
+    // frame's usage is the LAST (3rd) request's own numbers.
+    expect(finish.usage.inputTokens).toBe(200_400);
+    expect(finish.usage.outputTokens).toBe(1_500);
+    expect(finish.usage.totalTokens).toBe(201_900);
+    // The newest request's OWN cached tier (not the call-wide sum).
+    expect(finish.cachedInputTokens).toBe(150_000);
+    // THE BILLING TRUTH — the call's cumulative spend rides the additive
+    // turnUsage: the runtime's totalInputTokens accumulation + the turn's
+    // usage_events row keep the SUM (the spend was real; only its old
+    // double-duty as "context at last request" was the defect).
+    expect(finish.turnUsage).toEqual({
+      inputTokens: 600_600,
+      outputTokens: 3_500,
+      cachedInputTokens: 400_000,
+    });
+  });
+
+  it("a SINGLE-step stream stays byte-identical: usage === turnUsage === the pre-R131 larger-of-the-two-sources formula", async () => {
+    // One step reporting MORE than the (empty) totals — the max wins, and
+    // both truths are the SAME number (there is only one request).
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield { type: "text-delta", text: "hi" };
+        yield {
+          type: "finish-step",
+          usage: { inputTokens: 50_000, outputTokens: 10, inputTokenDetails: { cacheReadTokens: 41_000 } },
+        };
+      })(),
+      // totalUsage resolves empty (no totalTokens either) — the
+      // larger-of-the-two-sources rule: the step's numbers win.
+      totalUsage: Promise.resolve({ inputTokens: 0, outputTokens: 0 }),
+      usage: Promise.resolve({ inputTokens: 0, outputTokens: 0 }),
+    }));
+    const finish = await finishOf();
+    expect(finish.usage).toEqual({ inputTokens: 50_000, outputTokens: 10, totalTokens: 50_010 });
+    expect(finish.cachedInputTokens).toBe(41_000);
+    expect(finish.turnUsage).toEqual({
+      inputTokens: 50_000,
+      outputTokens: 10,
+      cachedInputTokens: 41_000,
+    });
+  });
+
+  it("multi-step with usage ONLY on totalUsage: the frame carries the honest UNKNOWN (0/0) — the cumulative input never masquerades as context again", async () => {
+    // Two steps whose usage objects carry no numbers (a provider that
+    // reports nothing per step) + a real totalUsage. The SUM cannot be
+    // decomposed into "the newest request's input", so the context truth is
+    // UNKNOWN: 0/0 (the runtime's carriers then omit the usage block and
+    // the meter keeps the last REAL measurement — the R130-C1 absence
+    // encoding), while billing keeps the real spend on turnUsage.
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield { type: "tool-call", toolCallId: "c1", toolName: "read_file", input: { path: "b.txt" } };
+        yield { type: "finish-step", usage: {} };
+        yield { type: "finish-step", usage: {} };
+      })(),
+      totalUsage: Promise.resolve({ inputTokens: 8_100, outputTokens: 90, totalTokens: 8_190 }),
+      usage: Promise.resolve({ inputTokens: 8_100, outputTokens: 90, totalTokens: 8_190 }),
+    }));
+    const finish = await finishOf();
+    expect(finish.usage.inputTokens).toBe(0);
+    expect(finish.usage.outputTokens).toBe(0);
+    expect(finish.turnUsage?.inputTokens).toBe(8_100);
+    expect(finish.turnUsage?.outputTokens).toBe(90);
+  });
+
+  it("the LAST USAGE-BEARING step wins: a trailing usage-less step leaves the prior step's truth standing", async () => {
+    // Steps 1-2 report real numbers; the 3rd step's usage object carries
+    // none (providerUsageAnchor's own law — only a finite inputTokens
+    // anchors). The newest REQUEST's usage is unknown, but the newest
+    // KNOWN measurement is step 2's: that is what the meter should show
+    // (never the SUM).
+    streamTextMock.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield {
+          type: "finish-step",
+          usage: { inputTokens: 200_000, outputTokens: 900, inputTokenDetails: { cacheReadTokens: 120_000 } },
+        };
+        yield {
+          type: "finish-step",
+          usage: { inputTokens: 200_200, outputTokens: 1_100, inputTokenDetails: { cacheReadTokens: 130_000 } },
+        };
+        yield { type: "finish-step", usage: {} };
+      })(),
+      totalUsage: Promise.resolve({ inputTokens: 400_200, outputTokens: 2_000, totalTokens: 402_200 }),
+      usage: Promise.resolve({ inputTokens: 400_200, outputTokens: 2_000, totalTokens: 402_200 }),
+    }));
+    const finish = await finishOf();
+    expect(finish.usage.inputTokens).toBe(200_200);
+    expect(finish.usage.outputTokens).toBe(1_100);
+    expect(finish.cachedInputTokens).toBe(130_000);
+    expect(finish.turnUsage?.inputTokens).toBe(400_200);
+    expect(finish.turnUsage?.outputTokens).toBe(2_000);
+  });
+});
+
+/* ── R131-T (Wave T): the SYNC twin — ChatTurnOutput.contextUsage ──────────── */
+describe("R131-T: aiSdkChat contextUsage — the last generateText step is the sync path's context truth", () => {
+  it("a multi-step call reports the LAST step's own usage as contextUsage; usage keeps the aggregated total (billing)", async () => {
+    generateTextMock.mockResolvedValueOnce({
+      text: "did the work",
+      // generateText's aggregated usage across all steps — the SUM.
+      usage: { inputTokens: 40_200, outputTokens: 2_000, totalTokens: 42_200 },
+      steps: [
+        { usage: { inputTokens: 20_000, outputTokens: 1_000 } },
+        { usage: { inputTokens: 20_200, outputTokens: 1_000 } },
+      ],
+    });
+    const result = await aiSdkChat({
+      ...baseInput,
+      provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+    });
+    // Billing truth unchanged.
+    expect(result.usage.inputTokens).toBe(40_200);
+    expect(result.usage.outputTokens).toBe(2_000);
+    // Context truth: the LAST (2nd) step's own numbers.
+    expect(result.contextUsage).toEqual({ inputTokens: 20_200, outputTokens: 1_000 });
+  });
+
+  it("SINGLE-step calls omit contextUsage — every consumer falls back to usage byte-identically (the settled path)", async () => {
+    generateTextMock.mockResolvedValueOnce({
+      text: "ok",
+      usage: { inputTokens: 12_000, outputTokens: 300, totalTokens: 12_300 },
+      steps: [{ usage: { inputTokens: 12_000, outputTokens: 300 } }],
+    });
+    const single = await aiSdkChat({
+      ...baseInput,
+      provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+    });
+    expect(single.contextUsage).toBeUndefined();
+    expect(single.usage.inputTokens).toBe(12_000);
+
+    // Steps-less mocks/stubs (the pre-R131 mock shape) stay omitted too.
+    generateTextMock.mockResolvedValueOnce({
+      text: "ok",
+      usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+      steps: [],
+    });
+    const stepsLess = await aiSdkChat({
+      ...baseInput,
+      provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+    });
+    expect(stepsLess.contextUsage).toBeUndefined();
+  });
+
+  it("a multi-step call whose last step reports no numbers: contextUsage is the honest UNKNOWN 0/0 (never the aggregated sum)", async () => {
+    generateTextMock.mockResolvedValueOnce({
+      text: "tools only",
+      usage: { inputTokens: 31_000, outputTokens: 500, totalTokens: 31_500 },
+      steps: [{ usage: { inputTokens: 30_000, outputTokens: 400 } }, { usage: {} }],
+    });
+    const result = await aiSdkChat({
+      ...baseInput,
+      provider: { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1" },
+    });
+    expect(result.usage.inputTokens).toBe(31_000);
+    // 0/0 — the runtime's carrier persists it and the meter's garbage-row
+    // guards skip it (the last REAL measurement stands); the cumulative
+    // 31_000 must never become "context at last request".
+    expect(result.contextUsage).toEqual({ inputTokens: 0, outputTokens: 0 });
+  });
+});
+
 /* ── ROUND-75 (R75): the live 429 find — error PARTS re-thrown ──────────────── */
 
 describe("R75: streamAiSdkChat re-throws the SDK's error PARTS (the real rate-limit path)", () => {

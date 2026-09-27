@@ -673,6 +673,12 @@ export interface ChatStepSnapshot {
 
 export interface ChatTurnOutput {
   text: string;
+  /** R131-T (Wave T): the BILLING truth — generateText's aggregated usage
+   * across ALL the call's internal steps (N_steps × context on a
+   * tool-using call). The turn's totalInputTokens accumulation and the
+   * usage_events row read this. Unchanged semantics since ROUND-24; every
+   * pre-existing consumer (compaction summarizer, feedback writer, debug
+   * analyst, the sync route's reply) keeps reading exactly this. */
   usage: {
     inputTokens: number;
     outputTokens: number;
@@ -682,6 +688,20 @@ export interface ChatTurnOutput {
      * prompt_tokens_details.cached_tokens into it). Undefined when the
      * provider didn't report a cached tier. */
     cachedInputTokens?: number;
+  };
+  /** R131-T (Wave T): the CONTEXT truth — the LAST step's own input+output
+   * (the newest provider request, exactly what a follow-up request would
+   * re-send). The sync runner's stats carriers (the context meter's `actual`
+   * + the compaction gate's providerUsageAnchor) read this in preference to
+   * `usage`. Present on EVERY multi-step call — 0/0 when the final step
+   * reported no usable per-step numbers (the honest UNKNOWN: the meter's
+   * garbage-row guards skip it and keep the last REAL measurement; the
+   * cumulative total must never masquerade as "context at last request").
+   * Single-step calls OMIT it so every consumer falls back to `usage` —
+   * byte-identical to pre-R131 (the settled path). */
+  contextUsage?: {
+    inputTokens: number;
+    outputTokens: number;
   };
   /** Executed tool calls in order (empty when no tools were provided/used). */
   toolCalls: ChatToolCall[];
@@ -744,6 +764,37 @@ export const aiSdkChat: ChatFn = async (input) => {
   // maps OpenRouter's prompt_tokens_details.cached_tokens here; other
   // providers leave it undefined (the usage row then stores NULL).
   const cachedInputTokens = result.usage.inputTokenDetails?.cacheReadTokens;
+  // R131-T (Wave T): the LAST step's own usage — the context truth for the
+  // sync twin (the streamed adapter's finish-step tracking, read off the
+  // result instead of the stream). generateText re-sends the whole history
+  // on every internal step, so `usage` above is N_steps × context (billing)
+  // while the stats carriers need the newest request's own numbers. Present
+  // on EVERY multi-step call — 0/0 when the final step reported no usable
+  // per-step numbers (the honest UNKNOWN: the runtime's carriers persist it,
+  // and the meter's garbage-row guards skip it, keeping the last REAL
+  // measurement — the cumulative total must NEVER masquerade as "context at
+  // last request" again). Single-step calls (and steps-less mocks/stubs)
+  // OMIT it, so every consumer falls back to `usage` byte-identically.
+  const lastStep = Array.isArray(result.steps)
+    ? (result.steps[result.steps.length - 1] as
+        | { usage?: { inputTokens?: unknown; outputTokens?: unknown } }
+        | undefined)
+    : undefined;
+  const lastStepInputTokens = lastStep?.usage?.inputTokens;
+  const lastStepOutputTokens = lastStep?.usage?.outputTokens;
+  const contextUsage =
+    Array.isArray(result.steps) && result.steps.length > 1
+      ? {
+          inputTokens:
+            typeof lastStepInputTokens === "number" && Number.isFinite(lastStepInputTokens)
+              ? lastStepInputTokens
+              : 0,
+          outputTokens:
+            typeof lastStepOutputTokens === "number" && Number.isFinite(lastStepOutputTokens)
+              ? lastStepOutputTokens
+              : 0,
+        }
+      : undefined;
   return {
     text: result.text,
     usage: {
@@ -752,6 +803,7 @@ export const aiSdkChat: ChatFn = async (input) => {
       totalTokens: result.usage.totalTokens ?? inputTokens + outputTokens,
       ...(typeof cachedInputTokens === "number" ? { cachedInputTokens } : {}),
     },
+    ...(contextUsage !== undefined ? { contextUsage } : {}),
     toolCalls: extractToolCalls(result.steps),
   };
 };
@@ -978,12 +1030,41 @@ export type StreamChatEvent =
   | { type: "tool-result"; toolCallId?: string; toolName: string; argsSummary: string; args?: unknown; ok: boolean; outputSummary?: string }
   | {
       type: "finish";
+      /** R131-T (Wave T, the owner's v0.123.0 verdict: "even though the
+       * context was… roughly 200K… the actual which it was showing me on
+       * the context window itself was like around 900K"): the CONTEXT truth
+       * — the NEWEST provider request's own input+output (the last step of
+       * this call's internal tool loop, i.e. exactly what a follow-up
+       * request would re-send). Pre-R131 this block carried the call's
+       * CUMULATIVE input (N_steps × context ≈ the owner's 900K), which the
+       * runtime persisted as the stats carrier the context meter AND the
+       * compaction gate anchor on mid-turn. Single-step streams keep the
+       * exact pre-R131 formula (byte-identical — the settled path). */
       usage: { inputTokens: number; outputTokens: number; totalTokens: number };
       /** ROUND-50 (R50-c1): prompt tokens served from the provider cache
        * (usage.inputTokenDetails.cacheReadTokens on the finish-step/total
        * usage). 0 when absent — the runtime accumulates it into the turn's
-       * usage_events row for the context meter's cache-hit-rate line. */
+       * usage_events row for the context meter's cache-hit-rate line.
+       * R131-T: on multi-step calls this is the LAST step's cached tier
+       * (the same newest-request truth as `usage`; the call-wide SUM rides
+       * `turnUsage.cachedInputTokens`). */
       cachedInputTokens?: number;
+      /** R131-T (Wave T): the BILLING truth — this one SDK call's cumulative
+       * spend across ALL its internal steps (the larger-of-the-two-sources
+       * cross-check, the pre-R131 `usage` numbers verbatim). The runtime's
+       * totalInputTokens accumulation + the turn's usage_events row read
+       * THIS; the stats carriers (context meter, compaction anchor) read
+       * `usage`. Two numbers for two purposes, never conflated again.
+       * Absent on stub/legacy adapters — the runtime then falls back to
+       * `usage` itself, the pre-R131 semantics exactly (a stub's usage
+       * block IS its whole call). */
+      turnUsage?: {
+        inputTokens: number;
+        outputTokens: number;
+        /** The call-wide cached-token sum (the pre-R131 cachedInputTokens
+         * formula verbatim). */
+        cachedInputTokens: number;
+      };
     };
 
 // R107-b (F4): `signal` moved DOWN into ChatTurnInput — the sync adapter
@@ -1112,6 +1193,21 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
   // usage and cross-checked against the awaited totals exactly like the
   // input/output token counts (some providers report only one of the two).
   let stepCached = 0;
+  // R131-T (Wave T, the owner's v0.123.0 verdict — "even though the context
+  // was… roughly 200K… it was showing me… around 900K"): the NEWEST step's
+  // OWN usage — the context-anchoring truth. ONE chatStream() call is ONE
+  // streamText whose internal tool loop RE-SENDS the whole history every
+  // step, so the accumulators above are N_steps × context (the BILLING
+  // truth, emitted as the finish frame's additive turnUsage), while the
+  // number the context meter + the compaction gate need is the LAST
+  // request's input+output — exactly what a follow-up request would
+  // re-send. Null until a finish-step part carries a usage object; the
+  // LAST usage-bearing step wins (a step that reports no usage object
+  // leaves the prior step's truth standing — same newest-usage-bearing
+  // law as the runtime's providerUsageAnchor).
+  let lastStepInput: number | null = null;
+  let lastStepOutput: number | null = null;
+  let lastStepCached: number | null = null;
   // ROUND-80 (R80, owner: "the chat ends without any error message or
   // anything some times"): the silent-truncation witnesses. A HEALTHY
   // provider stream always carries at least one finish-step part (the
@@ -1246,6 +1342,23 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
           stepCached +=
             (part as { usage?: { inputTokenDetails?: { cacheReadTokens?: number } } }).usage
               ?.inputTokenDetails?.cacheReadTokens ?? 0;
+          // R131-T (Wave T): the newest USAGE-BEARING step's own numbers —
+          // overwritten so the LAST one wins. A step whose usage object
+          // carries no finite inputTokens is not usage-bearing (providerUsage
+          // Anchor's own law: inputTokens must be a finite number to anchor);
+          // it leaves the prior step's truth standing. These feed the finish
+          // frame's usage block (the context truth); the SUM accumulators
+          // above feed turnUsage (the billing truth).
+          if (
+            typeof stepUsage.inputTokens === "number" &&
+            Number.isFinite(stepUsage.inputTokens)
+          ) {
+            lastStepInput = stepUsage.inputTokens;
+            lastStepOutput = stepUsage.outputTokens ?? 0;
+            lastStepCached =
+              (part as { usage?: { inputTokenDetails?: { cacheReadTokens?: number } } }).usage
+                ?.inputTokenDetails?.cacheReadTokens ?? 0;
+          }
         }
       }
     }
@@ -1269,13 +1382,60 @@ export const streamAiSdkChat: StreamChatFn = async function* (input) {
     throw streamError;
   }
   const totals = (await result.totalUsage) ?? (await result.usage);
-  usage.inputTokens = Math.max(totals.inputTokens ?? 0, stepInput);
-  usage.outputTokens = Math.max(totals.outputTokens ?? 0, stepOutput);
-  usage.totalTokens = totals.totalTokens ?? usage.inputTokens + usage.outputTokens;
-  // Same larger-of-the-two-sources rule as the token counts above.
-  const cachedInputTokens = Math.max(
+  // R131-T (Wave T): the BILLING truth — this one SDK call's cumulative
+  // spend across ALL its internal steps (the pre-R131 `usage` formula
+  // VERBATIM: the larger-of-the-two-sources cross-check). It rides the
+  // finish frame as the ADDITIVE turnUsage field; the runtime's
+  // totalInputTokens accumulation + the turn's usage_events row keep the
+  // SUM. The error-path symbol above (readStreamPartialUsage) keeps these
+  // same accumulated numbers too — a failed call's real burn is billing.
+  const turnUsage = {
+    inputTokens: Math.max(totals.inputTokens ?? 0, stepInput),
+    outputTokens: Math.max(totals.outputTokens ?? 0, stepOutput),
+  };
+  // Same larger-of-the-two-sources rule as the token counts above (the
+  // call-wide cached SUM — billing for the usage row's cache line).
+  const turnCachedInputTokens = Math.max(
     totals.inputTokenDetails?.cacheReadTokens ?? 0,
     stepCached,
   );
-  yield { type: "finish", usage, cachedInputTokens };
+  // R131-T (Wave T): the CONTEXT truth — on a MULTI-step call the finish
+  // frame's usage block carries the LAST usage-bearing step's own
+  // input+output (the newest provider request — what a follow-up request
+  // would re-send), NOT the call's cumulative input. This is the number the
+  // runtime persists as the iteration's stats carrier, so the context
+  // meter's headline AND the compaction gate's providerUsageAnchor read the
+  // truth mid-turn instead of N_steps × context (the owner's
+  // 200K-shown-as-900K defect). Guard rails: a SINGLE-step stream keeps the
+  // exact pre-R131 formula — byte-identical numbers on the settled path —
+  // and a multi-step provider that reports usage ONLY on totalUsage cannot
+  // be decomposed: the frame carries the honest UNKNOWN (0/0 — the runtime
+  // then omits the usage block entirely, the R130-C1 absence encoding, and
+  // the meter keeps the last REAL measurement) rather than letting the
+  // cumulative input masquerade as "context at last request" again.
+  const multiStepCall = stepFinishCount > 1;
+  if (multiStepCall) {
+    usage.inputTokens = lastStepInput ?? 0;
+    usage.outputTokens = lastStepOutput ?? 0;
+    usage.totalTokens = usage.inputTokens + usage.outputTokens;
+  } else {
+    usage.inputTokens = turnUsage.inputTokens;
+    usage.outputTokens = turnUsage.outputTokens;
+    usage.totalTokens = totals.totalTokens ?? usage.inputTokens + usage.outputTokens;
+  }
+  yield {
+    type: "finish",
+    usage,
+    // R131-T: the cached tier follows the same split — the LAST
+    // usage-bearing step's cached tokens on multi-step calls (the newest
+    // request's own cache line, what the meter's `actual` block renders),
+    // the call-wide SUM on turnUsage for the usage row. Single-step legs
+    // keep the pre-R131 max-of-both-sources number verbatim.
+    cachedInputTokens: multiStepCall ? (lastStepCached ?? 0) : turnCachedInputTokens,
+    turnUsage: {
+      inputTokens: turnUsage.inputTokens,
+      outputTokens: turnUsage.outputTokens,
+      cachedInputTokens: turnCachedInputTokens,
+    },
+  };
 };

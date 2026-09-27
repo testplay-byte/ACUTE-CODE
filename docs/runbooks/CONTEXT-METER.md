@@ -1,8 +1,18 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-23 round-131 (R131-T) -->
 # CONTEXT METER — estimate vs measured, one budget
 
 **Status:** normative · **Established:** round-83 (the "highly misleading"
-metering round)
+metering round) · **Amended:** round-131 Wave T — the TWO-TRUTHS split:
+the live measured number is the NEWEST provider request's input+output
+(never the turn's cumulative input); the cumulative sum is billing-only
+and lives in the usage row. Retired defect: the owner's v0.123.0 device
+pass — "even though the context was, like roughly 200K… the actual which
+it was showing me on the context window itself was like around 900K… as
+soon as the context message session ended, it properly started showing
+me the correct, accurate one" (an SDK tool loop re-sends the whole
+history every step; the SUMMED per-step usage was masquerading as
+"context at last request" mid-turn, and the same inflated anchor fed the
+compaction gate).
 **Audience:** anyone touching token counts, the context donut, compaction,
 usage accounting, or any new metering surface
 **Companion specs:** `agent-ctx/research/token-counting-robustness.md` (the
@@ -18,6 +28,21 @@ kinds:
   `message.assistant` stats carriers; the turn's `usage_events` row). The
   donut's "N measured at last request" line, the reply chips, the usage
   screens.
+  R131-T: the measured number has TWO jobs and they are NEVER the same
+  number —
+  · the CONTEXT truth (the live headline `usedTokens`, the `actual`
+    block, the compaction gate's `providerUsageAnchor`) is the NEWEST
+    provider request's own input+output: the last step of the in-flight
+    SDK call, exactly what a follow-up request would re-send;
+  · the BILLING truth (the turn's `usage_events` row, its
+    `totalInputTokens`, every cost/cache aggregate) is the turn's
+    cumulative spend — an SDK tool loop RE-SENDS the whole history every
+    internal step, so the real spend sums to N_steps × context.
+  The seam: chat.ts's finish frame carries both (`usage` = the last
+  step's numbers; the additive `turnUsage` = the call's sum) and the
+  runtime persists the context truth on the stats carriers while
+  accumulating the billing sum into the usage row. Never let one
+  masquerade as the other — the 900K headline was exactly that.
 - **Estimated** — our GPT-style BPE approximation (`context.ts
   estimateTokens`, ±15% of cl100k). The donut's ring fill, the breakdown
   slices. Always rendered with a `~` or an "estimated" label, and the wire
@@ -25,7 +50,8 @@ kinds:
 
 Never present one as the other. The pre-R83 donut showed the estimate as
 fact while the provider's own number sat unrendered in the same response —
-the exact complaint that started R83.
+the exact complaint that started R83. The pre-R131 carrier showed the
+BILLING sum as the live context — the exact complaint that started R131-T.
 
 ## 2. ONE budget (resolveTurnBudget)
 
@@ -54,12 +80,20 @@ that is the truth of a shared input+output window, not a bug.
 Additive wire shape (see IMPLEMENTED-API for the full contract):
 
 - `actual: {inputTokens, outputTokens, cachedInputTokens|null, at, model} |
-  null` — the provider's own prompt size for the LAST request, from the
-  newest `message.assistant` stats carrier. Null before the first reply.
-  The `at` + `model` ride along so a per-send model switch can never
-  silently mix numbers.
+  null` — the provider's own prompt size for the NEWEST provider request
+  (R131-T: the LAST STEP of the last SDK call — never the call's
+  cumulative input; a multi-step call whose final step reported no
+  per-step numbers is UNKNOWN and the scan keeps the last REAL
+  measurement), from the newest `message.assistant` stats carrier. Null
+  before the first reply. The `at` + `model` ride along so a per-send
+  model switch can never silently mix numbers.
 - `contextWindowSource` / `maxOutputTokens` / `available` — §2.
-- `usedTokensBasis: "estimated"`.
+- `usedTokensBasis: "estimated" | "provider-anchored"` — "provider-anchored"
+  when the R127-W4 anchor exists (the newest provider request's own input
+  + the estimated post-anchor tail); "estimated" only before the first
+  provider reply. R131-T: the anchored headline is the newest REQUEST's
+  truth by construction — the carriers it scans carry the last step's
+  numbers, not the turn's cumulative spend.
 - `compaction: {throughSeq, droppedMessages, tokensSaved}` — present iff a
   `context.compact` event exists; the messages estimate APPLIES it (the
   model receives summary + tail, not the raw log).
@@ -90,6 +124,13 @@ Additive wire shape (see IMPLEMENTED-API for the full contract):
   numbers in the persisted turn.error. The pre-R83 800K constant fired
   before compaction could on big-window models and pointed at a
   nonexistent command.
+- The compaction gate's token anchor is the SAME newest-request truth
+  (R131-T): `providerUsageAnchor` reads the newest usage-bearing stats
+  carrier, which carries the last step's input — so a 200K-context tool
+  turn presents ~200K to the gate, never N_steps × 200K. Pre-R131 the
+  summed carrier could fire a premature auto-compaction mid-turn over a
+  context that was never actually over budget (pinned in
+  context-compaction.test.ts's R131-T block).
 - `POST /sessions/:id/compact` forces a compaction NOW (the same
   `assembleWithCompaction` machinery; summarizer failure degrades to the
   hard trim, never a 500). A single-message session declines honestly
@@ -111,3 +152,8 @@ Additive wire shape (see IMPLEMENTED-API for the full contract):
 6. Pin every claim in a test: context-report.test.ts's ROUND-83 block,
    r83-budget.test.ts, r83-compact-route.test.ts, and the live battery
    `scripts/battery-r83.mjs` (the real-key oracle).
+7. Ask WHICH truth a new number is (R131-T): the newest request's own
+   numbers for anything the owner reads as "context used" or anything a
+   gate thresholds on; the cumulative sum for anything billing-shaped
+   (usage rows, cost, cache hit-rate). The two meet nowhere except this
+   doc.

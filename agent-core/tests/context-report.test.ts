@@ -40,7 +40,8 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 
-import { assembleHistory, getModelContextWindow } from "../src/agents/runtime";
+import { assembleHistory, getModelContextWindow, runStreamedAgentTurn } from "../src/agents/runtime";
+import type { ChatFn, StreamChatFn, StreamChatEvent } from "../src/agents/chat";
 import { buildProjectSystemPrompt, buildSystemPromptSections } from "../src/agents/prompts";
 import { readCustomRules } from "../src/agents/prompts";
 import { estimateMessageTokens } from "../src/context";
@@ -697,5 +698,170 @@ describe("prompt efficiency rework (ROUND-51 R51-d, consolidated ROUND-70 R70-c)
     expect(full).not.toContain("research → save findings to a file → research the next sub-topic → append → repeat");
     // The parallel delegate_task guidance.
     expect(full).toContain("call delegate_task multiple times in one message to run sub-agents concurrently");
+  });
+});
+
+/* ── R131-T (Wave T): the LIVE report's headline — mid-turn truth, settle truth ─
+ *
+ * The owner's v0.123.0 device pass: "even though the context was, like
+ * roughly 200K… the actual which it was showing me on the context window
+ * itself was like around 900K… as soon as the context message session
+ * ended, it properly started showing me the correct, accurate one."
+ *
+ * The live meter (the donut's 2.5s poll) reads THIS route, which reads the
+ * event log — so the honest way to pin the live number is to query the route
+ * MID-TURN, at the exact moment the poll would fire: between the 2nd and
+ * 3rd iterations of a 3-iteration tool turn (the deterministic seam is the
+ * 3rd chatStream invocation itself — the runtime is awaiting the generator,
+ * so the query runs with the log exactly as the live poll would see it).
+ * Iterations 1-2 are MULTI-STEP SDK calls (3 internal steps each,
+ * compressed into the finish frame's dual numbers — usage: the LAST step's
+ * input; turnUsage: the call's cumulative 3-step sum, pinned at the adapter
+ * seam in chat-format.test.ts). Pre-R131 the persisted carrier carried the
+ * SUM → the headline read ~600K on a ~200K context. R131-T: the carrier
+ * carries the LAST step's own input.
+ */
+describe("R131-T (Wave T): GET /sessions/:id/context mid-turn — the 2nd iteration's LAST-step input, not the sums", () => {
+  it("mid-turn the headline + actual anchor on the newest request's input; after settle the single-step reply's — the 200K story, never 600K", async () => {
+    upsertModel(db, "openrouter", { modelId: "test/r131t-route", contextWindow: 256_000, maxOutputTokens: 1_000 });
+    const agent = createAgent(db, { name: "R131T Route Agent", providerId: "openrouter", model: "test/r131t-route" });
+    const sessionId = createSession(db, { agentId: agent.id, mode: "single", projectId: null }).id;
+    // The prior settled turn: a REAL ~200K context.
+    appendSessionEvent(db, sessionId, {
+      type: "message.user",
+      agentId: agent.id,
+      payload: { role: "user", content: "the original task for this session" },
+    });
+    appendSessionEvent(db, sessionId, {
+      type: "message.assistant",
+      agentId: agent.id,
+      payload: {
+        role: "assistant",
+        content: "the prior turn's reply",
+        usage: { inputTokens: 200_000, outputTokens: 2_000 },
+      },
+    });
+    // An UNFINISHED todo plan — the continuation evidence that carries the
+    // turn past its text+tools iteration into the final reply.
+    appendSessionEvent(db, sessionId, {
+      type: "todo.update",
+      agentId: agent.id,
+      payload: {
+        todos: [
+          { content: "Read the notes file", status: "completed" },
+          { content: "Write the summary", status: "in_progress" },
+        ],
+      },
+    });
+
+    // R131-T: the report is captured through a BOX — a bare `let` capture
+    // stays flow-narrowed to its null initializer at the read site (TS
+    // cannot see the closure assignment), which types the post-null-check
+    // read as `never`. A property read re-narrows honestly at the guard.
+    const midTurnReport: { value: Record<string, unknown> | null } = { value: null };
+    let calls = 0;
+    const chatStream: StreamChatFn = async function* (): AsyncGenerator<StreamChatEvent> {
+      calls += 1;
+      if (calls === 3) {
+        // THE LIVE METER'S MOMENT: iterations 1-2 are persisted, iteration 3
+        // has not started — exactly what the donut's 2.5s poll would read.
+        midTurnReport.value = (await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}/context` })).json() as Record<
+          string,
+          unknown
+        >;
+      }
+      if (calls === 1) {
+        // Iteration 1: a 3-step tool call (tools only, no text) — the
+        // mid-work shape that continues the outer loop.
+        yield { type: "tool-call", toolCallId: "c1", toolName: "read_file", argsSummary: "path: notes.txt" };
+        yield {
+          type: "tool-result",
+          toolCallId: "c1",
+          toolName: "read_file",
+          argsSummary: "path: notes.txt",
+          ok: true,
+          outputSummary: "the notes",
+        };
+        yield {
+          type: "finish",
+          usage: { inputTokens: 200_100, outputTokens: 1_000, totalTokens: 201_100 },
+          turnUsage: { inputTokens: 600_300, outputTokens: 3_000, cachedInputTokens: 0 },
+        };
+      } else if (calls === 2) {
+        // Iteration 2: narration → tool → the 3-step call's dual numbers.
+        // Its empty-content stats carrier is what the mid-turn anchor reads.
+        yield { type: "text-delta", delta: "Reading the project files now." };
+        yield { type: "tool-call", toolCallId: "c2", toolName: "read_file", argsSummary: "path: a.txt" };
+        yield {
+          type: "tool-result",
+          toolCallId: "c2",
+          toolName: "read_file",
+          argsSummary: "path: a.txt",
+          ok: true,
+          outputSummary: "the file",
+        };
+        yield {
+          type: "finish",
+          usage: { inputTokens: 200_200, outputTokens: 1_100, totalTokens: 201_300 },
+          turnUsage: { inputTokens: 600_600, outputTokens: 3_300, cachedInputTokens: 0 },
+        };
+      } else {
+        // Iteration 3: the single-step conversational conclusion — the
+        // settled path (usage === turnUsage, byte-identical numbers).
+        yield { type: "text-delta", delta: "All done — the summary is written." };
+        yield {
+          type: "finish",
+          usage: { inputTokens: 200_900, outputTokens: 400, totalTokens: 201_300 },
+          turnUsage: { inputTokens: 200_900, outputTokens: 400, cachedInputTokens: 0 },
+        };
+      }
+    };
+    const summarizer: ChatFn = async () => ({
+      text: "SUMMARY: the original task and the prior reply.",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      toolCalls: [],
+    });
+
+    const outcome = await runStreamedAgentTurn(
+      {
+        db,
+        keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: "sk-test-r131t-route" }),
+        chat: summarizer,
+        chatStream,
+      },
+      sessionId,
+      "finish the remaining work",
+      () => undefined,
+    );
+    expect(outcome.ok).toBe(true);
+    expect(calls).toBe(3);
+
+    // ── MID-TURN (the owner's 900K complaint dies here) ──
+    if (midTurnReport.value === null) {
+      throw new Error("the mid-turn context report was never captured");
+    }
+    const mid = midTurnReport.value;
+    // The headline is provider-anchored on the 2nd iteration's LAST-step
+    // input (200_200) + a zero post-carrier tail — NOT the iteration's
+    // 600_600 cumulative input, and NOT the turn's running sums.
+    expect(mid.usedTokensBasis).toBe("provider-anchored");
+    expect(mid.usedTokens).toBe(200_200);
+    // The popover's `actual` block reads the same newest request.
+    expect(mid.actual).toMatchObject({ inputTokens: 200_200, outputTokens: 1_100 });
+
+    // ── SETTLE (the owner's "as soon as the session ended, it properly
+    //    started showing me the correct, accurate one") ──
+    const settled = (await authInject({ method: "GET", url: `/api/v1/sessions/${sessionId}/context` })).json() as Record<
+      string,
+      unknown
+    >;
+    expect(settled.usedTokensBasis).toBe("provider-anchored");
+    expect(settled.usedTokens).toBe(200_900);
+    expect(settled.actual).toMatchObject({ inputTokens: 200_900, outputTokens: 400 });
+
+    // ── BILLING keeps the sums (the route's sessionTotals read usage_events):
+    //    600_300 + 600_600 + 200_900 — the real spend of 7 provider requests,
+    //    kept while NEVER masquerading as "context at last request".
+    expect(settled.sessionTotals).toMatchObject({ inputTokens: 600_300 + 600_600 + 200_900 });
   });
 });

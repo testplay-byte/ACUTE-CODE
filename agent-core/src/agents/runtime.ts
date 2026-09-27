@@ -3137,7 +3137,19 @@ export async function runSingleAgentTurn(
       payload: {
         role: "assistant",
         content: result.text,
-        usage: { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens },
+        // R131-T (Wave T): the stats carrier persists the CONTEXT truth —
+        // the LAST step's own input+output (chat.ts's additive
+        // result.contextUsage) when the call ran multiple internal steps,
+        // falling back to the call's aggregated usage otherwise (single-step
+        // calls: byte-identical to pre-R131). Pre-R131 this row carried the
+        // call's cumulative input (N_steps × context), which
+        // providerUsageAnchor read mid-turn for the context meter AND the
+        // compaction gate — the sync twin of the owner's 200K-shown-as-900K
+        // defect. The turn's usage_events row below keeps the SUM (billing).
+        usage: {
+          inputTokens: (result.contextUsage ?? result.usage).inputTokens,
+          outputTokens: (result.contextUsage ?? result.usage).outputTokens,
+        },
         ms,
         model,
       },
@@ -3844,6 +3856,16 @@ export async function runStreamedAgentTurn(
   let sawCachedReport = false;
   let lastAssistantEvent: { seq: number; ts: string; content: string } | null = null;
   let lastText = "";
+  // R131-T (Wave T): the LAST completed iteration's CONTEXT usage — the
+  // newest provider request's own numbers (the finish frame's usage block).
+  // The post-loop empty-marker fallback below persists THESE (never the
+  // turn's cumulative billing totals) so a tool-only multi-step turn's
+  // final carrier anchors the meter + the compaction gate on the truth,
+  // exactly like every per-iteration carrier.
+  let lastIterContextInputTokens = 0;
+  let lastIterContextOutputTokens = 0;
+  let lastIterContextCachedInputTokens = 0;
+  let lastIterSawCached = false;
   // R77 (the live-battery find): TURN-level tool-call count — the blank-
   // output guard below needs "did ANY tool run this turn", not the
   // per-iteration count the conversational-break rule reads.
@@ -4128,6 +4150,19 @@ export async function runStreamedAgentTurn(
     // value; absence = not reported, the meter's actual block reads NULL).
     let iterCachedInputTokens = 0;
     let iterSawCached = false;
+    // R131-T (Wave T): this iteration's BILLING usage — the SDK call's
+    // cumulative spend across ALL its internal steps (the finish frame's
+    // ADDITIVE turnUsage; the pre-R131 read of the usage block when a stub
+    // adapter omits the field). Kept SEPARATE from iterInputTokens because
+    // the two are different truths now: iterInput/iterOutput are the LAST
+    // step's own numbers (the context truth the stats carriers persist for
+    // the meter + the compaction anchor), while THESE accumulate into
+    // totalInputTokens → the turn's usage_events row (billing keeps the
+    // SUM — the owner's 900K complaint was never that the spend was
+    // miscounted, only that it masqueraded as "context at last request").
+    let iterTurnInputTokens = 0;
+    let iterTurnOutputTokens = 0;
+    let iterTurnCachedInputTokens = 0;
     let iterToolCalls = 0;
     // ROUND-120 (R120-H, item 43): the truncation witnesses — every tool-call
     // event must resolve to a tool-result event (and every tool-input-start
@@ -4508,17 +4543,42 @@ export async function runStreamedAgentTurn(
             });
           }
         } else if (event.type === "finish") {
+          // R131-T (Wave T): the finish frame's usage block is the CONTEXT
+          // truth since chat.ts's split — the LAST step's own input+output
+          // (the newest provider request, what a follow-up request would
+          // re-send). These feed the iteration's stats carriers (the context
+          // meter's `actual` + the compaction gate's providerUsageAnchor),
+          // NOT the billing totals below.
           iterInputTokens = event.usage.inputTokens;
           iterOutputTokens = event.usage.outputTokens;
           // ROUND-50 (R50-c1): cached prompt tokens ride the finish frame
           // (0 when the provider didn't report a cached tier).
           // ROUND-83 (R83): the ABSENCE of the field is the "not reported"
           // signal — track it for the usage row's NULL-vs-0 honesty.
+          // R131-T: on multi-step calls this is the LAST step's cached tier
+          // (the same newest-request truth); the call-wide SUM rides
+          // turnUsage below.
           iterCachedInputTokens = event.cachedInputTokens ?? 0;
           if (typeof event.cachedInputTokens === "number") {
             sawCachedReport = true;
             iterSawCached = true;
           }
+          // R131-T (Wave T): the BILLING truth for THIS SDK call — its
+          // cumulative spend across all internal steps, on the frame's
+          // ADDITIVE turnUsage. Stub/legacy adapters without the field fall
+          // back to the usage block's own numbers (the pre-R131 semantics
+          // exactly — a stub's usage IS its whole call).
+          iterTurnInputTokens = event.turnUsage?.inputTokens ?? event.usage.inputTokens;
+          iterTurnOutputTokens = event.turnUsage?.outputTokens ?? event.usage.outputTokens;
+          iterTurnCachedInputTokens =
+            event.turnUsage?.cachedInputTokens ?? (event.cachedInputTokens ?? 0);
+          // R131-T: remember the newest request's own numbers for the
+          // post-loop empty-marker fallback (a tool-only turn's only
+          // carrier — it must anchor on the truth, not the billing sum).
+          lastIterContextInputTokens = iterInputTokens;
+          lastIterContextOutputTokens = iterOutputTokens;
+          lastIterContextCachedInputTokens = iterCachedInputTokens;
+          lastIterSawCached = iterSawCached;
         }
       }
       // ROUND-120 (R120-H, item 43): the MID-TOOL truncation invariant. A
@@ -5155,9 +5215,14 @@ export async function runStreamedAgentTurn(
       };
     }
 
-    totalInputTokens += iterInputTokens;
-    totalOutputTokens += iterOutputTokens;
-    totalCachedInputTokens += iterCachedInputTokens;
+    // R131-T (Wave T): the BILLING accumulation keeps the SUM — each SDK
+    // call's cumulative spend (iterTurn*), not the last step's context
+    // number. The usage_events row + every recordUsage site below read
+    // THESE totals; the stats carriers above already read the context
+    // truth. Two numbers for two purposes.
+    totalInputTokens += iterTurnInputTokens;
+    totalOutputTokens += iterTurnOutputTokens;
+    totalCachedInputTokens += iterTurnCachedInputTokens;
     lastText = iterAllText;
 
     // ROUND-35: flush the iteration's FINAL segment (with stats). Interim
@@ -5313,11 +5378,27 @@ export async function runStreamedAgentTurn(
       payload: {
         role: "assistant",
         content: lastText,
-        usage: {
-          inputTokens: totalInputTokens,
-          outputTokens: totalOutputTokens,
-          ...(sawCachedReport ? { cachedInputTokens: totalCachedInputTokens } : {}),
-        },
+        // R131-T (Wave T): the fallback carrier carries the LAST completed
+        // iteration's CONTEXT usage — the newest provider request's own
+        // numbers — never the turn's cumulative billing totals. Pre-R131 it
+        // persisted totalInputTokens (N_iterations × N_steps × context on a
+        // tool-only turn), so the meter + the compaction gate anchored on the
+        // inflated sum even AFTER the turn ended. A 0/0 pair (the final
+        // iteration's finish frame never reported usage) omits the block
+        // entirely — the R130-C1 absence encoding, mirrored from
+        // flushSegment: the meter keeps the last REAL measurement instead of
+        // a fabricated zero.
+        ...(lastIterContextInputTokens > 0 || lastIterContextOutputTokens > 0
+          ? {
+              usage: {
+                inputTokens: lastIterContextInputTokens,
+                outputTokens: lastIterContextOutputTokens,
+                ...(lastIterSawCached
+                  ? { cachedInputTokens: lastIterContextCachedInputTokens }
+                  : {}),
+              },
+            }
+          : {}),
         ms,
         model,
       },

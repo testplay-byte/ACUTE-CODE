@@ -940,3 +940,178 @@ describe("ROUND-125 (R125-C): runStreamedAgentTurn builds + threads the provider
     expect((reply?.payload as { content?: string }).content).toContain("all remaining work is done");
   });
 });
+
+/* ── R131-T (Wave T): the compaction gate reads the CONTEXT truth ──────────
+ *
+ * The owner's v0.123.0 verdict: "even though the context was, like roughly
+ * 200K… the actual which it was showing me on the context window itself was
+ * like around 900K." ONE chatStream() call runs the SDK's internal tool loop
+ * — every step RE-SENDS the whole history — and pre-R131 the finish frame
+ * carried the ACCUMULATED input, which the runtime persisted as the stats
+ * carrier providerUsageAnchor reads. The SAME inflated number fed the
+ * COMPACTION GATE: a 200K-context session whose tool turn ran 4 steps
+ * presented ~800K to a 256K window and compacted MID-TURN. R131-T's law:
+ * the carrier carries the LAST step's own input (chat.ts's finish-frame
+ * split, pinned in chat-format.test.ts); the turn's usage_events row keeps
+ * the SUM (billing). These pins prove the gate's side of that law.
+ */
+describe("R131-T (Wave T): the compaction gate anchors on the newest request, never the turn's cumulative input", () => {
+  /** Pure event literals — the R125-C helper's shape. */
+  const ev = (
+    seq: number,
+    type: "message.user" | "message.assistant",
+    content: string,
+    usage?: { inputTokens: number; outputTokens: number },
+  ): SessionEvent => ({
+    seq,
+    type,
+    agentId: null,
+    payload: { role: type === "message.user" ? "user" : "assistant", content, ...(usage !== undefined ? { usage } : {}) },
+    ts: `2026-01-01T00:01:${String(seq % 60).padStart(2, "0")}Z`,
+  });
+
+  it("pure anchor: a mid-turn carrier carrying the 3rd step's input anchors at THAT number — not the 3-step sum", () => {
+    // The event log as the runtime persists it DURING a multi-step tool
+    // call's following iteration: an interim text segment (no stats), the
+    // tool work, then the empty-content stats carrier with the finish
+    // frame's usage — the LAST step's own input (200_400), never the
+    // call's cumulative 600_600.
+    const events: SessionEvent[] = [
+      ev(1, "message.user", "the original task"),
+      ev(2, "message.assistant", "reading the files first"),
+      ev(3, "message.assistant", "", { inputTokens: 200_400, outputTokens: 1_500 }),
+    ];
+    const messages: SeqMessage[] = [
+      { role: "user", content: "the original task", throughSeq: 1 },
+      { role: "assistant", content: "reading the files first", throughSeq: 2 },
+    ];
+    // Nothing after the carrier → the anchor is EXACTLY the newest
+    // request's input — the meter's 200K story, not the 900K one.
+    expect(providerUsageAnchor(events, messages)).toBe(200_400);
+    // The arithmetic control (the pre-R131 death): the call's cumulative
+    // input was 600_600 — had the carrier carried the SUM (the pre-R131
+    // law), the anchor would have been 3× the real context.
+    expect(600_600).toBeGreaterThan(200_400 * 2);
+  });
+
+  it("planCompaction control: the 200K truth SKIPS on a 256K window while the pre-R131 800K sum would have COMPACTED", () => {
+    // A realistic ~200K-context session on a 256K-window model: available =
+    // 256_000 − 1_000 − 8_000 = 247_000; the auto threshold is 0.9 × that.
+    const budget = { contextWindow: 256_000, maxOutputTokens: 1_000, margin: 8_000 };
+    const messages: SeqMessage[] = [
+      { role: "user", content: "the original task", throughSeq: 1 },
+      { role: "assistant", content: "the work so far", throughSeq: 2 },
+    ];
+    // The R131-T truth (the last step's input + a small tail): SKIP.
+    expect(planCompaction(messages, budget, false, { tokenOverride: 200_400 }).decision).toBe("skip");
+    // The pre-R131 summed carrier (4 steps × ~200K): COMPACT — the exact
+    // premature auto-compaction this wave exists to kill.
+    expect(planCompaction(messages, budget, false, { tokenOverride: 800_000 }).decision).toBe("compact");
+  });
+
+  it("the runtime gate: a 4-step 200K tool turn does NOT compact mid-turn; the usage row still keeps the SUM (billing)", async () => {
+    // The owner's scenario end-to-end: a 256K-window model, a prior settled
+    // turn at a real ~200K context, then a tool turn whose SDK call runs 4
+    // internal steps (compressed here as the finish frame's dual numbers —
+    // usage: the LAST step's input; turnUsage: the call's 4-step sum).
+    upsertModel(db, "openrouter", { modelId: "test/r131t-1", contextWindow: 256_000, maxOutputTokens: 1_000 });
+    const agent = createAgent(db, { name: "R131T Agent", providerId: "openrouter", model: "test/r131t-1" });
+    const sid = createSession(db, { agentId: agent.id, mode: "single", projectId: null }).id;
+    addMessage(sid, "message.user", "the original task for this session");
+    appendSessionEvent(db, sid, {
+      type: "message.assistant",
+      agentId: agent.id,
+      payload: { role: "assistant", content: "the prior turn's reply", usage: { inputTokens: 200_000, outputTokens: 2_000 } },
+    });
+    // An UNFINISHED todo plan — the agentic continuation evidence that
+    // makes the streamed runner start iteration 2 after a text+tools
+    // iteration (the shape whose stats carrier the iteration-2 gate reads).
+    appendSessionEvent(db, sid, {
+      type: "todo.update",
+      agentId: agent.id,
+      payload: {
+        todos: [
+          { content: "Read the notes file", status: "completed" },
+          { content: "Write the summary", status: "in_progress" },
+        ],
+      },
+    });
+
+    const summarizer: ChatFn = async () => ({
+      text: "SUMMARY: the original task and the prior reply.",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      toolCalls: [],
+    });
+    let calls = 0;
+    const chatStream: StreamChatFn = async function* (): AsyncGenerator<StreamChatEvent> {
+      calls += 1;
+      if (calls === 1) {
+        // Iteration 1: narration → tool call → result → the finish frame.
+        // The 4 internal SDK steps are compressed into the frame's dual
+        // numbers: usage = the LAST (4th) step's own input; turnUsage = the
+        // call's cumulative spend (4 × ~200K).
+        yield { type: "text-delta", delta: "Reading the project files now." };
+        yield { type: "tool-call", toolCallId: "c1", toolName: "read_file", argsSummary: "path: notes.txt" };
+        yield {
+          type: "tool-result",
+          toolCallId: "c1",
+          toolName: "read_file",
+          argsSummary: "path: notes.txt",
+          ok: true,
+          outputSummary: "the notes",
+        };
+        yield {
+          type: "finish",
+          usage: { inputTokens: 200_400, outputTokens: 1_800, totalTokens: 202_200 },
+          turnUsage: { inputTokens: 800_000, outputTokens: 6_000, cachedInputTokens: 0 },
+        };
+      } else {
+        // Iteration 2: the single-step conversational conclusion (the
+        // settled path — usage === turnUsage, byte-identical numbers).
+        yield { type: "text-delta", delta: "All done — the summary is written." };
+        yield {
+          type: "finish",
+          usage: { inputTokens: 200_900, outputTokens: 400, totalTokens: 201_300 },
+          turnUsage: { inputTokens: 200_900, outputTokens: 400, cachedInputTokens: 0 },
+        };
+      }
+    };
+
+    const outcome = await runStreamedAgentTurn(
+      { db, keyring: new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER: "sk-test-r131t" }), chat: summarizer, chatStream },
+      sid,
+      "finish the remaining work",
+      () => undefined,
+    );
+    expect(outcome.ok).toBe(true);
+    expect(calls).toBe(2);
+
+    // THE GATE PIN: NO compaction fired. Iteration 2's gate anchored on
+    // iteration 1's carrier — 200_400 (the last step's input), far under
+    // the 222_300 auto line. Pre-R131 the carrier carried 800_000 and the
+    // same gate compacted MID-TURN over a ~200K real context (the
+    // planCompaction control above proves the number trips the gate).
+    expect(listSessionEvents(db, sid).some((e) => e.type === "context.compact")).toBe(false);
+
+    // THE CARRIER PIN: the persisted stats carriers carry the context truth.
+    const carriers = listSessionEvents(db, sid)
+      .filter((e) => e.type === "message.assistant")
+      .map((e) => (e.payload as { usage?: { inputTokens?: number; outputTokens?: number } }).usage);
+    // The iteration-1 empty-content carrier: the 4th step's own numbers.
+    expect(carriers).toContainEqual({ inputTokens: 200_400, outputTokens: 1_800 });
+    // The iteration-2 final segment: the single-step reply's numbers.
+    expect(carriers).toContainEqual({ inputTokens: 200_900, outputTokens: 400 });
+    // NO carrier anywhere carries the 800_000 billing sum.
+    expect(carriers.some((u) => u?.inputTokens === 800_000)).toBe(false);
+
+    // THE BILLING PIN: the turn's usage_events row keeps the SUM —
+    // 800_000 + 200_900 (the real spend of 5 provider requests), never the
+    // context-truth numbers.
+    const usageRows = db
+      .prepare("SELECT input_tokens, output_tokens FROM usage_events WHERE session_id = ?")
+      .all(sid) as Array<{ input_tokens: number; output_tokens: number }>;
+    expect(usageRows).toHaveLength(1);
+    expect(usageRows[0]?.input_tokens).toBe(800_000 + 200_900);
+    expect(usageRows[0]?.output_tokens).toBe(6_000 + 400);
+  });
+});
