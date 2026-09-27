@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import { deriveThemeStyles, getTheme, syncThemeCssVars, THEMES } from "./themes";
+import { deriveThemeStyles, getContrastText, getTheme, syncThemeCssVars, THEMES } from "./themes";
 
 /**
  * R107-g (the clay/chrome round) — the Clay Studio theme's contract:
@@ -70,10 +70,13 @@ describe("Clay Studio theme (R107-g)", () => {
     expect(light.bg).toBe("#ECEEE8");
     expect(light.card).toBe("#FDFDFB");
     expect(light.text).toBe("#2A2018");
-    // (isMono is deliberately NOT asserted here: happy-dom ships no canvas
-    // 2d context, so parseColor degrades to [0,0,0] and achromaticAccent
-    // reads every accent as achromatic under the test runner. In a real
-    // browser #C4653F's chroma is 0.68 — far off the 0.08 mono line.)
+    // (isMono is deliberately NOT asserted here: the claim that happy-dom
+    // ships no canvas 2d context and parseColor degrades to [0,0,0] was
+    // TRUE only for NON-HEX color spellings — R126 moved the hex parser to
+    // the always-available FIRST leg, so hex accents parse identically in
+    // every environment (verified by the R131-TH pins: mono reads isMono
+    // TRUE, clay/nova FALSE under this very runner). Only rgb()/named-color
+    // inputs still need the canvas and degrade to honest black without it.)
 
     const dark = deriveThemeStyles("clay", true);
     expect(dark.accent).toBe("#D98A63"); // accentDark lifts for dark-mode legibility
@@ -280,5 +283,106 @@ describe("R126: the Clay Companion surface ladder + status grammar", () => {
     expect(root.getPropertyValue("--ac-badge-success-bg")).toBe("#E3F6E8");
     expect(root.getPropertyValue("--ac-badge-accent-bg")).toBe("#B45330");
     expect(root.getPropertyValue("--ac-badge-neutral-fg")).toBe("rgba(0,0,0,0.62)");
+  });
+});
+
+// ── ROUND-131 (R131-TH, TH2 — the mono-stone truth): the mono palette's
+// recessed surfaces derive from the NEUTRAL ink ramp, not the clay warm
+// taupe — the owner's v0.123.0 "not well planned" verdict on warm-taupe
+// wells over a pure-stone palette. The switch is DATA-derived
+// (achromaticAccent), never an id check (the file's anti-drift rule), and
+// the neutral inks are luminance-matched to their warm twins so every
+// recess keeps its DEPTH. Also TH1b's helper contract: getContrastText is
+// the letter-tile ink picker (amber/lime take dark ink; dark hues keep
+// white). ──
+describe("R131-TH: the mono neutral derivation + the contrast ink picker", () => {
+  /** Parse a #RRGGBB literal into channels. */
+  function channels(hex: string): [number, number, number] {
+    const n = parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  it("mono's recessed surfaces are ACHROMATIC (equal RGB channels) at the warm law's own depth", () => {
+    const light = deriveThemeStyles("mono", false);
+    expect(light.isMono).toBe(true);
+    // The well: the warm law mixes 8% clay taupe into card; mono mixes the
+    // luminance-matched gray #717171 (taupe 0.4438 vs gray 0.4431) — the
+    // result is one unit off the warm #F6F3F1's depth with zero chroma.
+    expect(light.surfaceWell).toBe("#F4F4F4");
+    const [wr, wg, wb] = channels(light.surfaceWell);
+    expect(wr).toBe(wg);
+    expect(wg).toBe(wb);
+    // The mono block: the warm law's 6% #2A2018 becomes 6% #222222 (0.1336
+    // vs 0.1333) — same recess depth, achromatic.
+    expect(light.monoBg).toBe("#F2F2F2");
+    const [mr, mg, mb] = channels(light.monoBg);
+    expect(mr).toBe(mg);
+    expect(mg).toBe(mb);
+    // The recessed-surface family's ink legs go neutral too: the block's
+    // own border/ink and the header/rim recesses.
+    expect(light.monoBorder).toBe("rgba(34,34,34,0.10)");
+    expect(light.monoText).toBe("#303030"); // luminance twin of #3A2E22
+    expect(light.clayRim).toBe("#E9E9E9");
+    // surfaceHeader mixes into the theme's OWN bg (#F5F5F0 — 5 units of
+    // warmth in the theme data itself); the neutral ink zeroes the
+    // DERIVED warmth, the bg's own residue stays (b=240 vs r=245).
+    expect(light.surfaceHeader).toBe("#E8E8E4");
+    // Dark mode: the recesses were already neutral (white/black mixes); the
+    // one warm leg — the cream mono ink — gets its neutral twin.
+    const dark = deriveThemeStyles("mono", true);
+    expect(dark.monoText).toBe("rgba(236,236,236,0.92)"); // twin of rgba(242,235,225,…)
+  });
+
+  it("a warm theme's surfaces stay WARM byte-identically (the non-mono law)", () => {
+    const clay = deriveThemeStyles("clay", false);
+    expect(clay.isMono).toBe(false);
+    expect(clay.surfaceWell).toBe("#F4F1EE"); // the existing R126 pin, restated as the warm law
+    const [r, g, b] = channels(clay.surfaceWell);
+    expect(r).toBeGreaterThan(g);
+    expect(g).toBeGreaterThan(b);
+    expect(clay.monoText).toBe("#3A2E22");
+    expect(clay.monoBorder).toBe("rgba(42,32,24,0.10)");
+  });
+
+  it("the switch is DATA-derived — a synthetic achromatic-accent theme with a foreign id derives neutral (never an id check)", () => {
+    // A clay palette whose accent is swapped for a gray, under a FOREIGN id:
+    // the neutral well is the luminance-matched-gray derivation on clay's
+    // own card (#FDFDFB — r===g exactly; the 2-unit b residue is the card's
+    // own warmth, theme data, not derivation drift).
+    const synthetic = deriveThemeStyles(
+      { ...getTheme("clay"), id: "probe-not-mono", accent: "#777777", accentDark: "#DDDDDD" },
+      false,
+    );
+    expect(synthetic.isMono).toBe(true);
+    expect(synthetic.surfaceWell).toBe("#F2F2F0");
+    const [sr, sg] = channels(synthetic.surfaceWell);
+    expect(sr).toBe(sg);
+    expect(synthetic.surfaceWell).not.toBe(deriveThemeStyles("clay", false).surfaceWell);
+    // The chroma line itself: the clay/nova accents are far off the 0.08 line.
+    expect(deriveThemeStyles("nova", false).isMono).toBe(false);
+  });
+
+  it("the mono neutral derivation rides the CSS-var bridge", () => {
+    syncThemeCssVars(deriveThemeStyles("mono", false));
+    const root = document.documentElement.style;
+    expect(root.getPropertyValue("--ac-surface-well")).toBe("#F4F4F4");
+    expect(root.getPropertyValue("--ac-mono-bg")).toBe("#F2F2F2");
+    expect(root.getPropertyValue("--ac-mono-text")).toBe("#303030");
+  });
+
+  it("getContrastText is the letter-tile ink picker (TH1b): light hues take dark ink, dark hues keep white", () => {
+    // The PROJECT_PALETTE's own hues (agent-core storage/projects.ts).
+    expect(getContrastText("#F59E0B")).toBe("#111111"); // amber — the owner's failing case
+    expect(getContrastText("#84CC16")).toBe("#111111"); // lime
+    expect(getContrastText("#FF6B2C")).toBe("#111111"); // flame orange (the palette default)
+    expect(getContrastText("#3B82F6")).toBe("#FFFFFF"); // blue
+    expect(getContrastText("#8B5CF6")).toBe("#FFFFFF"); // violet
+    expect(getContrastText("#F43F5E")).toBe("#FFFFFF"); // rose
+    expect(getContrastText("#EC4899")).toBe("#FFFFFF"); // pink
+    expect(getContrastText("#14B8A6")).toBe("#FFFFFF"); // teal
+    // The mono-stone pair law (TH1's engine): the near-white dark accent
+    // takes dark ink, the near-black light accent keeps white.
+    expect(getContrastText("#E0E0E0")).toBe("#111111");
+    expect(getContrastText("#111111")).toBe("#FFFFFF");
   });
 });

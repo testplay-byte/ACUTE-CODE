@@ -26,6 +26,8 @@ import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react
 import { useStreamStore } from "../../lib/stream-store";
 import type { StreamSessionState } from "../../lib/stream-store";
 import { resetTestState, renderWithProviders } from "../../test-utils";
+// R131-TH (TH1): the Save CTA's §1d pair pin drives the theme store.
+import { useThemeStore } from "../../lib/theme-store";
 import { saveSessionTodo, toLatestTodo } from "../../lib/api";
 import { TodoFloat, useTodoFloatState } from "./TodoFloat";
 
@@ -221,6 +223,31 @@ describe("TodoFloat (ROUND-88) — the manual editor", () => {
     fireEvent.click(screen.getByTestId("todo-float-save"));
     await waitFor(() => expect(screen.getByTestId("todo-float-save-error").textContent).toContain("route down"));
     expect(screen.getByTestId("todo-float-edit-rows")).toBeTruthy(); // draft intact
+  });
+});
+
+// ── ROUND-131 (R131-TH, TH1): the Save CTA rides the §1d pair — the exact
+// owner's white-on-white scenario pinned: Mono Stone DARK resolves the
+// accent to the near-white #E0E0E0, and the pre-TH Save button painted
+// "#fff" ink on it (white-on-white). The pair law: accentDeep fill +
+// accentText ink (the R93-A4 toggle precedent). ──
+describe("TodoFloat (ROUND-131 R131-TH TH1) — the Save CTA's §1d pair", () => {
+  it("Mono Stone dark: near-white accentDeep fill carries DARK ink — the white-on-white dies", () => {
+    useThemeStore.setState({ themeId: "mono", mode: "dark" });
+    mockSession([todoEvent(1, [{ content: "pair probe", status: "pending" }])]);
+    renderWithProviders(<TodoFloat sessionId="ses_r88" />);
+    fireEvent.click(screen.getByTestId("todo-float-pill"));
+    fireEvent.click(screen.getByRole("button", { name: "Edit the to-do list" }));
+
+    const save = screen.getByTestId("todo-float-save") as HTMLElement;
+    // The fill: mono dark collapses the deep tier into the resolved dark
+    // accent #E0E0E0 (near-white — the defect's own fill).
+    expect(save.style.background).toBe("#E0E0E0");
+    // The ink: the accentText pair — DARK ink on the near-white fill (the
+    // pre-TH hardcoded "#fff" would have vanished on it).
+    expect(["#111111", "rgb(17, 17, 17)"]).toContain(save.style.color);
+    expect(save.style.color).not.toBe("#fff");
+    expect(save.className).not.toContain("text-white");
   });
 });
 

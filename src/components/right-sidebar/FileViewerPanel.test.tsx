@@ -29,6 +29,10 @@ import { FileViewerPanel } from "./FileViewerPanel";
 
 const mocks = vi.hoisted(() => ({
   file: vi.fn(),
+  // R131-TH (TH3): the bytes-route fetch, mocked so the image leg's door is
+  // observable (the REAL isDisplayableImageAttachment stays — the branch
+  // decision itself is under test).
+  bytes: vi.fn(),
 }));
 
 vi.mock("../../lib/api", async (importOriginal) => {
@@ -36,6 +40,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
   return {
     ...actual,
     getProjectsBackend: () => mocks,
+    fetchAttachmentBytes: mocks.bytes,
   };
 });
 
@@ -156,5 +161,85 @@ describe("FileViewerPanel (ROUND-99 R99-A)", () => {
     );
     expect(screen.getByText("No file bound to this tab.")).toBeTruthy();
     expect(mocks.file).not.toHaveBeenCalled();
+  });
+});
+
+// ── ROUND-131 (R131-TH, TH3 — the right-sidebar image viewer): the owner's
+// v0.123.0 verdict ("it renders the image as raw text") dies here. A
+// displayable image path takes the PIXELS branch — the bytes route
+// (fetchAttachmentBytes) + an object URL, never the text route, never a
+// <pre>; the lifecycle mirrors the R121-b AttachmentImageThumb pins (the
+// placeholder frame stands on failure; the object URL is revoked on
+// unmount). The binary guard covers the OTHER binaries: a NUL byte in the
+// text content renders the honest notice, not mojibake. ──
+describe("FileViewerPanel (ROUND-131 R131-TH TH3 — the image branch + the binary guard)", () => {
+  const SLOW = { timeout: 5000 };
+  // happy-dom implements neither — the object-URL lifecycle is this pair.
+  const createObjectURL = vi.fn(() => "blob:file-viewer");
+  const revokeObjectURL = vi.fn();
+
+  beforeEach(() => {
+    URL.createObjectURL = createObjectURL as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL as unknown as typeof URL.revokeObjectURL;
+    createObjectURL.mockClear();
+    revokeObjectURL.mockClear();
+    mocks.bytes.mockReset().mockResolvedValue(new Blob(["\x89PNG-file-bytes"], { type: "image/png" }));
+    mocks.file.mockReset().mockResolvedValue({ content: "text" });
+  });
+
+  it("an image path renders the PIXEL pane — the bytes route, an object-URL <img>, no <pre>, no text-route fetch", async () => {
+    renderWithProviders(
+      <FileViewerPanel projectId={PROJECT_ID} tab={makeFileTab("shots/screen.png")} />,
+    );
+
+    // The bytes route is the door (the R67/R121 law — images never ride the
+    // text route; the text query is disabled for them).
+    await waitFor(() => {
+      expect(mocks.bytes).toHaveBeenCalledWith(PROJECT_ID, "shots/screen.png");
+    });
+    expect(mocks.file).not.toHaveBeenCalled();
+
+    // The pixel <img> takes over with the object URL.
+    const img = await screen.findByTestId("file-image-preview", {}, SLOW);
+    expect(img.getAttribute("src")).toBe("blob:file-viewer");
+    expect(img.getAttribute("alt")).toBe("screen.png");
+    // Never the raw-text leg: no <pre>, no line numbers.
+    expect(document.querySelector("pre")).toBeNull();
+    expect(document.body.textContent).not.toContain("1");
+  });
+
+  it("a bytes-route failure keeps the honest placeholder frame — never a crash, never a fabricated photo", async () => {
+    mocks.bytes.mockRejectedValue(new Error("404 — no attachment at 'shots/missing.png'"));
+    renderWithProviders(
+      <FileViewerPanel projectId={PROJECT_ID} tab={makeFileTab("shots/missing.png")} />,
+    );
+
+    const frame = await screen.findByTestId("file-image-frame", {}, SLOW);
+    expect(frame.textContent).toContain("could not load");
+    expect(frame.textContent).toContain("missing.png");
+    expect(screen.queryByTestId("file-image-preview")).toBeNull();
+    expect(document.querySelector("pre")).toBeNull();
+  });
+
+  it("unmounting the viewer REVOKES the object URL (the AttachmentImageThumb lifecycle law)", async () => {
+    renderWithProviders(
+      <FileViewerPanel projectId={PROJECT_ID} tab={makeFileTab("shots/screen.png")} />,
+    );
+    expect(await screen.findByTestId("file-image-preview", {}, SLOW)).toBeTruthy();
+    cleanup();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:file-viewer");
+  });
+
+  it("NUL-bearing text content renders the BINARY notice — the honest guard, not mojibake", async () => {
+    mocks.file.mockResolvedValue({ content: "PK\u0000\u0003\u0004-binary-garbage" });
+    renderWithProviders(
+      <FileViewerPanel projectId={PROJECT_ID} tab={makeFileTab("assets/archive.zip")} />,
+    );
+
+    const notice = await screen.findByTestId("file-binary-notice", {}, SLOW);
+    expect(notice.textContent).toContain("Binary file");
+    // The raw-text leg never mounts — no <pre>, no line numbers, no mojibake.
+    expect(document.querySelector("pre")).toBeNull();
+    expect(document.body.textContent).not.toContain("PK");
   });
 });

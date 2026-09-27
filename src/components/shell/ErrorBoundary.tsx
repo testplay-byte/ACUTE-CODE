@@ -151,8 +151,20 @@ function RenderErrorFallback({
           <button
             type="button"
             onClick={onRetry}
-            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-            style={{ backgroundColor: "var(--ac-accent)" }}
+            /* R131-TH (TH1): the Retry CTA rides the §1d pair on the PURE
+               CSS-VAR leg — `bg-accent-deep` (the Tailwind mapping of
+               --ac-accent-deep) + the ink via var(--ac-accent-text). NO
+               store/hook dependency ON PURPOSE: this fallback renders when
+               the app is BROKEN, so it must never depend on state that
+               might be the crash cause — the :root vars are written
+               pre-paint by the theme bridge (with the index.css clay/light
+               fallbacks underneath), independent of any React store. The
+               pre-TH `text-white` on var(--ac-accent) painted
+               white-on-white on Mono Stone dark (accent #E0E0E0 — the
+               owner's v0.123.0 verdict); the failure-isolation property is
+               kept byte-for-byte. */
+            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold transition-opacity hover:opacity-90 bg-accent-deep"
+            style={{ color: "var(--ac-accent-text)" }}
           >
             Retry
           </button>

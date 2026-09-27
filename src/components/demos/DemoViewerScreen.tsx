@@ -4,6 +4,10 @@ import { ExternalLink, FileCode2, X } from "lucide-react";
 import { useProjects } from "../../hooks/use-projects";
 import { useProjectDemos } from "../../hooks/use-demos";
 import { useThemeStyles } from "../../lib/use-theme-styles";
+// R131-TH (TH1b): the identity tile's ink derives from the project color's
+// own luminance (getContrastText) — hardcoded white dies on the palette's
+// amber/lime hues.
+import { getContrastText } from "../../lib/themes";
 import { ease } from "../../lib/motion";
 
 /**
@@ -179,7 +183,8 @@ function ProjectDemosSection({
           // (rounded-md 6px ≈ 30% of the 20px tile — TOKENS §4; the
           // arbitrary rounded-[6px] spelling dies).
           className="w-5 h-5 rounded-md grid place-items-center text-[10px] font-black"
-          style={{ background: projectColor, color: "#fff" }}
+          /* R131-TH (TH1b): luminance-derived ink over the flat hue. */
+          style={{ background: projectColor, color: getContrastText(projectColor) }}
         >
           {projectName.charAt(0).toUpperCase()}
         </span>

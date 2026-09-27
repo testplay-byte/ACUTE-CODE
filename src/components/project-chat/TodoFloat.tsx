@@ -405,7 +405,13 @@ export function TodoFloat({ sessionId }: { sessionId: string | null }) {
                   onClick={() => void save()}
                   disabled={saving}
                   className="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-60"
-                  style={{ background: styles.accent, color: "#fff" }}
+                  /* R131-TH (TH1): the §1d pair kills the white-on-white —
+                     the pre-TH fill was styles.accent + "#fff" ink, which
+                     on Mono Stone DARK painted white text on the near-white
+                     #E0E0E0 accent (the owner's v0.123.0 verdict). The CTA
+                     family's law: accentDeep fill + accentText ink (the
+                     R93-A4 toggle precedent — TOKENS §1d). */
+                  style={{ background: styles.accentDeep, color: styles.accentText }}
                   data-testid="todo-float-save"
                 >
                   {saving ? <Loader2 size={11} className="animate-spin" /> : null}

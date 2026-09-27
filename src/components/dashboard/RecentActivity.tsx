@@ -1,6 +1,9 @@
 import type { Agent, Session } from "../../lib/api";
 import { formatWhen } from "../../lib/format";
-import type { ThemeStyles } from "../../lib/themes";
+// R131-TH (TH1b): the tile ink derives from the hue's own luminance
+// (getContrastText — live, the canvas leg parses the hsl() chip hues; the
+// amber/lime-ish hues flip to dark ink, the dark hues keep white).
+import { getContrastText, type ThemeStyles } from "../../lib/themes";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 import { Kicker } from "../ui/Kicker";
 import { SectionCard } from "../ui/SectionCard";
@@ -34,7 +37,8 @@ import { chipColor, initialOf, timelineDayLabel, utcDayKeyOf, withAlpha } from "
  *   copied locally — never imported from shell/Sidebar): the rounded-square
  *   identity mark, FLAT deterministic hue (helpers' chipColor, keyed on the
  *   agent id — same agent, same color) + the clay small shadow for its edge,
- *   white initial.
+ *   luminance-derived initial (R131-TH: getContrastText — never hardcoded
+ *   white; the amber/lime-ish chip hues take dark ink).
  * · The metadata line rides `text-muted` (the 0.62 secondary step of the
  *   R126 ink ladder — the VLM flagged the old tertiary-tier metadata as
  *   low-contrast; TOKENS §1a) and clamps to ONE line (the copy-length law).
@@ -91,10 +95,12 @@ function RecentSessionRow({
             + the flat hue + the clay small shadow for its edge. */}
         <span
           aria-hidden
-          className="grid h-6 w-6 shrink-0 select-none place-items-center rounded-lg font-semibold text-white"
+          className="grid h-6 w-6 shrink-0 select-none place-items-center rounded-lg font-semibold"
           style={{
             fontSize: 12,
             background: tileHue,
+            // R131-TH (TH1b): luminance-derived ink over the flat hue.
+            color: getContrastText(tileHue),
             boxShadow: "var(--ac-clay-shadow-sm)",
           }}
         >

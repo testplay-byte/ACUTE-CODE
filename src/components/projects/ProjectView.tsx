@@ -7,6 +7,10 @@ import { useCreateSession, useSessions } from "../../hooks/use-sessions";
 import { useActiveStreams } from "../../lib/active-streams";
 import { formatWhen } from "../../lib/format";
 import { useThemeStyles } from "../../lib/use-theme-styles";
+// R131-TH (TH1b): the letter-avatar's ink derives from the project color's
+// own luminance (getContrastText) — hardcoded white dies on the palette's
+// amber/lime hues.
+import { getContrastText } from "../../lib/themes";
 import { cn } from "../../lib/utils";
 // R126 (the Clay Companion redesign): the session-row STATE law is the
 // sidebar's own derivation (deriveSessionRowState — the R58-cf stop-flow
@@ -424,16 +428,19 @@ export function ProjectView() {
  * never lands here). A deliberate local copy: the sidebar's tile is
  * file-private, and the identity row only needs the 20-line mark, not the
  * whole shell module's worth of props (size/radius/fontSize knobs it never
- * varies). */
+ * varies). R131-TH (TH1b): the letter ink is getContrastText(color) — the
+ * luminance-derived pair, not hardcoded white. */
 function ProjectTile({ color, name }: { color: string; name: string }) {
   return (
     <span
       data-project-tile
-      className="shrink-0 grid h-6 w-6 place-items-center font-semibold text-white select-none"
+      className="shrink-0 grid h-6 w-6 place-items-center font-semibold select-none"
       style={{
         borderRadius: 8,
         fontSize: 12,
         background: color,
+        // R131-TH (TH1b): luminance-derived ink over the flat hue.
+        color: getContrastText(color),
         boxShadow: "var(--ac-clay-shadow-sm)",
       }}
       aria-hidden

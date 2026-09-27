@@ -25,6 +25,9 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   tree: vi.fn(),
   file: vi.fn(),
+  // R131-TH (TH3): the bytes-route fetch — mocked so the image leg's door
+  // is observable (the REAL isDisplayableImageAttachment stays).
+  bytes: vi.fn(),
 }));
 
 vi.mock("../../lib/api", async (importOriginal) => {
@@ -32,6 +35,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
   return {
     ...actual,
     getProjectsBackend: () => mocks,
+    fetchAttachmentBytes: mocks.bytes,
   };
 });
 
@@ -47,6 +51,10 @@ const PROJECT: Project = {
 
 const TREE: TreeNode[] = [
   { name: "README.md", type: "file", path: "README.md", size: 1204 },
+  // R131-TH (TH3): the image + binary probe files (the pixels branch and
+  // the NUL-sniff guard's own pins).
+  { name: "screen.png", type: "file", path: "shots/screen.png", size: 2048 },
+  { name: "data.bin", type: "file", path: "assets/data.bin", size: 512 },
   {
     name: "src",
     type: "folder",
@@ -67,6 +75,8 @@ const FILES: Record<string, string> = {
   "README.md": "# ACUTE-CODE\n\nAgent-native coding workspace.\n\n- item one\n",
   "src/index.ts": 'import { createRoot } from "react-dom/client";\n\ncreateRoot(el).render(<App />);\n',
   "src/components/Button.tsx": "export function Button() {\n  return <button />;\n}\n",
+  // R131-TH (TH3): a NUL-bearing "text" payload — the binary guard's probe.
+  "assets/data.bin": "PK\u0000\u0003\u0004-binary-garbage",
 };
 
 const tab = { id: "tab-files", type: "files" as const, title: "Files", createdAt: Date.now() };
@@ -195,5 +205,78 @@ describe("FilesExplorerPanel (ROUND-48 R48-c)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Try again/i }));
     await waitFor(() => expect(screen.getByText("Agent-native coding workspace.")).toBeTruthy());
+  });
+});
+
+// ── ROUND-131 (R131-TH, TH3): the explorer pane mirrors the viewer tab's
+// image law — a displayable image NEVER rides the text route (the bytes
+// route + an object URL instead), and NUL-bearing content renders the
+// honest binary notice instead of mojibake. ──
+describe("FilesExplorerPanel (ROUND-131 R131-TH TH3 — the image branch + the binary guard)", () => {
+  const SLOW = { timeout: 5000 };
+  // happy-dom implements neither — the object-URL lifecycle is this pair.
+  const createObjectURL = vi.fn(() => "blob:explorer");
+  const revokeObjectURL = vi.fn();
+
+  beforeEach(() => {
+    URL.createObjectURL = createObjectURL as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL as unknown as typeof URL.revokeObjectURL;
+    createObjectURL.mockClear();
+    revokeObjectURL.mockClear();
+    vi.mocked(mocks.bytes).mockReset().mockResolvedValue(
+      new Blob(["\x89PNG-explorer-bytes"], { type: "image/png" }),
+    );
+  });
+
+  it("clicking an image file renders the PIXEL pane — the bytes route, an object-URL <img>, no text-route fetch, no <pre>", async () => {
+    renderPanel();
+    await waitFor(() => treeRow("shots/screen.png"));
+
+    fireEvent.click(treeRow("shots/screen.png"));
+    await waitFor(() => {
+      expect(mocks.bytes).toHaveBeenCalledWith("prj_1", "shots/screen.png");
+    });
+    // The text route never fires for the image (and would have thrown the
+    // "no such file" error card — the implicit backstop).
+    expect(mocks.file).not.toHaveBeenCalledWith("prj_1", "shots/screen.png");
+
+    const img = await screen.findByTestId("file-image-preview", {}, SLOW);
+    expect(img.getAttribute("src")).toBe("blob:explorer");
+    expect(img.getAttribute("alt")).toBe("screen.png");
+    expect(document.querySelector("pre")).toBeNull();
+  });
+
+  it("a bytes-route failure keeps the honest placeholder frame (no fabricated photo, no error card)", async () => {
+    vi.mocked(mocks.bytes).mockRejectedValue(new Error("404 — no attachment at 'shots/screen.png'"));
+    renderPanel();
+    await waitFor(() => treeRow("shots/screen.png"));
+
+    fireEvent.click(treeRow("shots/screen.png"));
+    const frame = await screen.findByTestId("file-image-frame", {}, SLOW);
+    expect(frame.textContent).toContain("could not load");
+    expect(frame.textContent).toContain("screen.png");
+    expect(screen.queryByTestId("file-image-preview")).toBeNull();
+  });
+
+  it("unmounting the panel REVOKES the object URL (the lifecycle law)", async () => {
+    renderPanel();
+    await waitFor(() => treeRow("shots/screen.png"));
+
+    fireEvent.click(treeRow("shots/screen.png"));
+    expect(await screen.findByTestId("file-image-preview", {}, SLOW)).toBeTruthy();
+    cleanup();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:explorer");
+  });
+
+  it("clicking a NUL-bearing file renders the BINARY notice — the honest guard, not mojibake", async () => {
+    renderPanel();
+    await waitFor(() => treeRow("assets/data.bin"));
+
+    fireEvent.click(treeRow("assets/data.bin"));
+    const notice = await screen.findByTestId("file-binary-notice", {}, SLOW);
+    expect(notice.textContent).toContain("Binary file");
+    // The raw-text leg never mounts — no <pre>, no mojibake.
+    expect(document.querySelector("pre")).toBeNull();
+    expect(document.body.textContent).not.toContain("PK");
   });
 });

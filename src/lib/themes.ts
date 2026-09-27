@@ -468,6 +468,27 @@ export function deriveThemeStyles(
   const theme =
     typeof themeIdOrTheme === "string" ? getTheme(themeIdOrTheme) : themeIdOrTheme;
 
+  // ── R131-TH (TH2 — the mono-stone truth): the neutral ink ramp for the
+  // recessed-surface derivations below. The warm legs (the clay TAUPE well
+  // ink + the warm dark-brown recess ink) are the CLAY material's language;
+  // painted over a theme whose accent carries no chroma they read as
+  // warm-taupe drift on a pure-stone palette — the owner's v0.123.0 "not
+  // well planned" verdict. When achromaticAccent(theme) is true (the DATA
+  // check — never an id check, per the anti-drift rule above), the mono leg
+  // mixes from the LUMINANCE-MATCHED grays instead: #717171 is the
+  // perceptual twin of the clay taupe #8A6A55 (0.4438 vs 0.4431 on the
+  // getContrastText ladder) and #222222 the twin of the warm ink #2A2018
+  // (0.1336 vs 0.1333) — every recess keeps its DEPTH, just achromatic.
+  // Non-mono themes keep the warm derivations byte-identically. Audited and
+  // deliberately untouched: the clay SHADOW ink (inkWarm) + the
+  // liquid-chrome ramp stay theme-independent by their own constitutions
+  // (mode-aware material signature, TOKENS §8/§9 — they layer AROUND
+  // surfaces, they are not recessed-surface fills); accentTint + sidebarBg
+  // follow the theme's own accent, already achromatic for a mono accent. ──
+  const mono = achromaticAccent(theme);
+  const wellInk = mono ? "#717171" : "#8A6A55";
+  const recessInk = mono ? "#222222" : "#2A2018";
+
   // ── R126: the Clay Companion resolution prologue (mobile tokens.ts
   // resolveTheme:425-469, ported verbatim) — every new token below is
   // computed from the SAME inputs the mobile app uses, so the phone and the
@@ -499,8 +520,9 @@ export function deriveThemeStyles(
   const textTertiary = isDark ? "rgba(255,255,255,0.52)" : "rgba(0,0,0,0.57)";
   // The recessed well + the accent's tinted container (mobile R117-g1 §2.1
   // — #8A6A55 is the clay TAUPE, the material's constant well ink, same
-  // for every theme exactly like mobile).
-  const surfaceWell = isDark ? mixHex(card, "#FFFFFF", 0.05) : mixHex(card, "#8A6A55", 0.08);
+  // for every theme exactly like mobile). R131-TH: mono themes mix the
+  // luminance-matched gray instead (see the neutral ink ramp above).
+  const surfaceWell = isDark ? mixHex(card, "#FFFFFF", 0.05) : mixHex(card, wellInk, 0.08);
   const accentTint = mixHex(card, accent, isDark ? 0.18 : 0.12);
   // The Badge tinted containers (deep-on-tint, mobile R117-g1 §2.2): 12% of
   // the flat hue into the card light / 20% dark, deep (light) / bright
@@ -518,7 +540,7 @@ export function deriveThemeStyles(
   return {
     theme,
     isDark,
-    isMono: achromaticAccent(theme),
+    isMono: mono,
     // Core
     bg,
     card,
@@ -615,19 +637,37 @@ export function deriveThemeStyles(
     // ── R126: the Clay Companion surface ladder + status grammar (computed
     // in the prologue above; mobile tokens.ts verbatim) ──
     surfaceWell,
-    surfaceHeader: isDark ? mixHex(bg, "#000000", 0.30) : mixHex(bg, "#2A2018", 0.06),
+    // R131-TH: the mono leg of every warm-ink recess derivation switches to
+    // the neutral ramp (recessInk) — same ratios, same lightness targets.
+    surfaceHeader: isDark ? mixHex(bg, "#000000", 0.30) : mixHex(bg, recessInk, 0.06),
     accentTint,
     // AMENDMENT 1 (mobile round-117): the warm hairline rim on all four
     // sides — the default card edge in light mode; the matte top edge
     // becomes a dark-mode-only device at 14% white.
-    clayRim: isDark ? "rgba(255,255,255,0.10)" : mixHex(card, "#2A2018", 0.10),
+    clayRim: isDark ? "rgba(255,255,255,0.10)" : mixHex(card, recessInk, 0.10),
     clayTopEdge: isDark
       ? mixHex(card, "#FFFFFF", 0.14)
       : mixHex(card, "#FFFFFF", 0.55),
     // Mono surfaces (terminal/output blocks) — recessed + their own ink.
-    monoBg: isDark ? "rgba(0,0,0,0.22)" : mixHex(card, "#2A2018", 0.06),
-    monoBorder: isDark ? "rgba(255,255,255,0.08)" : "rgba(42,32,24,0.10)",
-    monoText: isDark ? "rgba(242,235,225,0.92)" : "#3A2E22",
+    // R131-TH: the mono theme's own blocks go fully neutral — the light fill
+    // mixes the gray recess ink, the border's alpha ink is the neutral twin
+    // (rgba(34,34,34,…) vs the warm rgba(42,32,24,…)), and the light ink
+    // #303030 is the luminance match of the clay brown #3A2E22 (0.1891 vs
+    // 0.1882); dark's cream ink rgba(242,235,225,…) has its neutral twin in
+    // rgba(236,236,236,…) (0.9255 vs 0.9255).
+    monoBg: isDark ? "rgba(0,0,0,0.22)" : mixHex(card, recessInk, 0.06),
+    monoBorder: isDark
+      ? "rgba(255,255,255,0.08)"
+      : mono
+        ? "rgba(34,34,34,0.10)"
+        : "rgba(42,32,24,0.10)",
+    monoText: isDark
+      ? mono
+        ? "rgba(236,236,236,0.92)"
+        : "rgba(242,235,225,0.92)"
+      : mono
+        ? "#303030"
+        : "#3A2E22",
     // The deep/bright semantic pairs (status TEXT + badge ink).
     successDeep: isDark ? "#4ADE80" : "#15803D",
     warningDeep: isDark ? "#FBBF24" : "#B45309",

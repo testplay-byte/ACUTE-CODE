@@ -22,6 +22,14 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
 import { getFileColor, highlightLine } from "../project-chat/highlight";
 import { isMarkdown, Markdown } from "./FileViewerPanel";
+// R131-TH (TH3): the image branch + the binary guard's shared pieces, and
+// (TH1b) the header chip's luminance-derived icon ink.
+import {
+  BinaryFileNotice,
+  FileImagePreview,
+  isDisplayableImageAttachment,
+} from "./FileImagePreview";
+import { getContrastText } from "../../lib/themes";
 
 /**
  * ROUND-48 (R48-c) — the right-sidebar file EXPLORER tab. Owner spec: "The
@@ -308,7 +316,12 @@ export function FilesExplorerPanel({
   const project = projectsQuery.data?.find((p) => p.id === projectId) ?? null;
   const treeQuery = useProjectTree(projectId);
   const selectedPath = ui.selectedPath;
-  const fileQuery = useProjectFile(projectId, selectedPath);
+  const fileName = selectedPath !== null ? selectedPath.split("/").pop() ?? selectedPath : "";
+  // R131-TH (TH3): the image branch mirrors the viewer tab's law — a
+  // displayable image never rides the text route (the bytes route is the
+  // door, the R67/R121-b law); the text query is disabled for it.
+  const isImage = selectedPath !== null && isDisplayableImageAttachment(selectedPath, fileName);
+  const fileQuery = useProjectFile(projectId, isImage ? null : selectedPath);
 
   const treeScrollRef = useRef<HTMLDivElement>(null);
   const contentScrollRef = useRef<HTMLDivElement>(null);
@@ -328,8 +341,13 @@ export function FilesExplorerPanel({
   }, [treeQuery.data, projectId, seedExpanded]);
 
   const content = fileQuery.data?.content ?? "";
-  const fileName = selectedPath !== null ? selectedPath.split("/").pop() ?? selectedPath : "";
+  // R131-TH (TH3): the NUL sniff — binary content never hits the <pre>.
+  const isBinary = content.includes("\u0000");
   const fileColor = getFileColor(fileName);
+  // R131-TH (TH1b): the header chip's icon ink derives from the chip fill's
+  // own luminance (the accent fallback is hex; the project color is hex) —
+  // hardcoded white dies on the palette's amber/lime hues.
+  const chipInk = getContrastText(project?.color ?? styles.accent);
 
   return (
     <div className="h-full flex flex-col min-h-0" data-testid="files-explorer-panel">
@@ -344,8 +362,10 @@ export function FilesExplorerPanel({
           style={{ backgroundColor: project?.color ?? styles.accent }}
           title={project?.rootPath ?? projectId}
         >
-          {/* white icon reads on the project's own color chip, not a theme surface */}
-          <FolderTree size={11} color="#fff" />
+          {/* R131-TH (TH1b): the icon ink follows the chip fill's luminance
+              (was a hardcoded "#fff" — white-on-white on the light project
+              hues, the letter-tile defect's twin on this owned file). */}
+          <FolderTree size={11} color={chipInk} />
         </div>
         <span
           // R126-3e tightening (the panel-header spelling): the title snaps
@@ -447,6 +467,10 @@ export function FilesExplorerPanel({
                 }
                 onRetry={() => void fileQuery.refetch()}
               />
+            ) : isImage ? (
+              // R131-TH (TH3): the image pane — BEFORE the markdown check
+              // (an image is pixels, never text legs).
+              <FileImagePreview projectId={projectId} filePath={selectedPath} />
             ) : isMarkdown(selectedPath) ? (
               <div className="px-2.5 py-2.5">
                 {/* R99-A: pass the project through so markdown links in the
@@ -454,6 +478,9 @@ export function FilesExplorerPanel({
                     browser by default), same as the file-viewer tab. */}
                 <Markdown content={content} projectId={projectId} />
               </div>
+            ) : isBinary ? (
+              // R131-TH (TH3): the honesty guard — binary content, no mojibake.
+              <BinaryFileNotice />
             ) : (
               <pre className="p-2 font-mono text-[11px] leading-[1.6]">
                 {content.split("\n").map((line, idx) => (
