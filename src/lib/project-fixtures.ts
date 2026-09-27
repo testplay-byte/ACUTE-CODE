@@ -42,17 +42,24 @@ const SEED: Project[] = [
   // for fixture parity — same id, same neutral slate color, NAME
   // "Scratchpad" (the R129 rename; the backend migrates the row at boot),
   // rootPath under the fixture "data dir"'s scratchpad root.
-  // Seeded LAST deliberately: the fixture list() keeps insertion order, and
-  // every existing `projects[0]` call site (AgentChatPanel tests, the
-  // dashboard's newest-project quick action) must keep resolving to
-  // ACUTE-CODE — the SIDEBAR renders it in its own separated bottom
-  // section (R129-S), never mixed into the normal rows.
+  // R131-P (the honesty flip): createdAt is now the NEWEST row in the
+  // fixture — matching REAL installs, where the boot seed ran AFTER the
+  // owner's projects so the Scratchpad is the newest and (pre-R131-P) sat
+  // FIRST under the backend's created_at DESC order. The pre-R131 fixture
+  // deliberately made it the OLDEST row, which made the rail tests pin the
+  // WRONG world (the seed-last accident). The fixture's list() keeps
+  // INSERTION order (the Map), so every existing `projects[0]` call site
+  // (AgentChatPanel tests, the dashboard's newest-project quick action)
+  // still resolves to ACUTE-CODE — only the timestamp tells the truth now,
+  // and the SIDEBAR renders the row in its own separated bottom section +
+  // the rail's dedicated bottom tile (the filters do the work, not the
+  // order).
   {
     id: "general",
     name: "Scratchpad",
     rootPath: "/home/dev/.acute/scratchpad",
     color: "#64748B",
-    createdAt: "2026-08-19T00:00:00Z",
+    createdAt: "2026-08-22T09:00:00Z",
   },
 ];
 

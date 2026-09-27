@@ -603,9 +603,9 @@ export function Composer({
         aria-label="Message composer"
         placeholder={`Message ${agent?.name ?? "Acute"}…`}
         // R89-D2: the input's horizontal padding shrinks with the box (the
-        // 240px chat floor gets 12px instead of 16 — every pixel of typing
-        // room counts down there). R100-D (§C4.6): px-4 pt-3 pb-1 per the
-        // composer spec (13px/1.5 body).
+        // R131-P 400px chat floor gets 12px instead of 16 — every pixel of
+        // typing room counts down there). R100-D (§C4.6): px-4 pt-3 pb-1 per
+        // the composer spec (13px/1.5 body).
         className="w-full min-w-0 bg-transparent outline-none resize-none text-[13px] leading-[1.5] px-4 pt-3 pb-1 @max-[420px]:px-2.5"
         style={{ color: styles.text }}
       />
@@ -773,7 +773,15 @@ export function Composer({
                   appear when I have typed some message in the search bar"):
                   the button is GONE until there is text — the pre-R91
                   disabled-but-visible ghost next to Stop read as a second
-                  send button doing nothing. */}
+                  send button doing nothing.
+                  R131-P (the floor round's belt-and-braces audit): the queue
+                  button is ALREADY icon-only at 28px (w-7 h-7 — no label
+                  tier to collapse, unlike Continue's label), so its
+                  shrink-0 never pushes a wider anchor state than Continue's
+                  own @max-[460px] icon-only pattern; the ONE-LINE guarantee
+                  is the layout floor itself (ChatFocusLayout's 400px
+                  CHAT_MIN_WIDTH — see its measurement comment). No new tier
+                  was missing; none was added. */}
               {onQueue !== undefined && input.trim() !== "" ? (
                 <button
                   type="button"

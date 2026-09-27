@@ -111,7 +111,24 @@ export function createProject(db: SqliteDatabase, input: ProjectInput): Project 
 }
 
 export function listProjects(db: SqliteDatabase): Project[] {
-  const rows = db.prepare("SELECT * FROM projects ORDER BY created_at DESC, id DESC").all() as ProjectRow[];
+  // R131-P (SCREENS.md §2 law #9, the backend half — the owner's collapsed-
+  // rail verdict: "the scratch pad shows at the very top… and also the
+  // scratch pad gets combined in with the other ones"): the Scratchpad
+  // sorts LAST, ALWAYS — the plain created_at DESC the R129 world relied on
+  // put the boot-seeded row FIRST on real installs (the seed runs at boot,
+  // so its created_at is NEWER than any project the owner made before the
+  // R128 upgrade — the exact wrong-world the fixture used to pin). The
+  // CASE leg pins the row last regardless of its timestamp; within each
+  // band the previous created_at DESC, id DESC order is preserved
+  // verbatim (newest-first among the normal projects, stable tiebreak).
+  // Every consumer (the rail + the expanded panel via their own filters,
+  // skills-files' iteration, prompts' rootPath lookup) sees the same truth.
+  const rows = db
+    .prepare(
+      `SELECT * FROM projects
+       ORDER BY CASE WHEN id = ? THEN 1 ELSE 0 END, created_at DESC, id DESC`,
+    )
+    .all(GENERAL_PROJECT_ID) as ProjectRow[];
   return rows.map(toProject);
 }
 

@@ -1499,7 +1499,7 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
     expect(footer!.textContent).not.toContain("test/model-9");
   });
 
-  it("the user bubble caps at min(65%, 640px) of the reading column (a bubble, never a full-width document)", async () => {
+  it("R131-P: the user bubble owns its width tier ALONE — min(65%, 640px) cap when wide, full width at the narrow tier; the hover actions row sits BELOW the bubble, never beside it", async () => {
     await renderHeaderConversation();
     // R100-D re-pin (§C4.3 — the input-row idiom): the messenger tail is
     // DELETED (uniform rounded-xl 12px — the lookup below matches the
@@ -1508,15 +1508,50 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
     // 16px + the 5px br tail hint (rounded-2xl + rounded-br-[5px] — the
     // scale utilities, never arbitrary px), so the lookup matches the new
     // combo. The cap/padding/typography are structure and stay pinned.
+    // R131-P re-pin (the owner's width verdict): the cap wrapper is a
+    // COLUMN now — [bubble, actions-row] — and the BUBBLE owns the width
+    // tier alone (the old beside-the-bubble cluster's opacity-0 legs
+    // occupied real layout width and ate the bubble's cap at the narrow
+    // tier).
     const bubble = Array.from(document.querySelectorAll("div")).find((el) =>
       el.className.includes("rounded-2xl rounded-br-[5px] px-3.5 py-2.5 text-[13px]"),
     );
     expect(bubble).toBeTruthy();
-    const row = bubble!.parentElement;
-    expect(row).not.toBeNull();
-    expect(row!.className).toContain("max-w-[min(65%,640px)]");
-    // The squish tier keeps its wider relative room (R89-D2).
-    expect(row!.className).toContain("@max-[420px]:max-w-[92%]");
+    const wrapper = bubble!.parentElement;
+    expect(wrapper).not.toBeNull();
+    // The column grammar: the wrapper stacks the bubble + the actions row
+    // and right-aligns both (items-end).
+    expect(wrapper!.className).toContain("flex-col");
+    expect(wrapper!.className).toContain("items-end");
+    expect(wrapper!.className).toContain("max-w-[min(65%,640px)]");
+    // The narrow tier (the panel's own @container ≤ 420px — the band that
+    // now covers the R131-P 400px chat floor): FULL width; the reading
+    // column's own pl-11/pr-2.5 padding provides the margins. The old
+    // 92% compromise — which existed to share the row with the invisible
+    // actions cluster — is retired.
+    expect(wrapper!.className).toContain("@max-[420px]:max-w-full");
+    expect(wrapper!.className).not.toContain("92%");
+    // THE ACTIONS ROW — BELOW the bubble: the wrapper's LAST child (the
+    // bubble is the first), a right-aligned flex row with the same hover
+    // reveal and the same gap grammar. The copy affordance lives IN it.
+    const actionsRow = wrapper!.lastElementChild as HTMLElement;
+    expect(actionsRow).not.toBe(bubble);
+    expect(wrapper!.firstElementChild).toBe(bubble);
+    expect(actionsRow.className).toContain("flex");
+    expect(actionsRow.className).toContain("justify-end");
+    expect(actionsRow.className).toContain("gap-1");
+    expect(actionsRow.className).toContain("opacity-0");
+    expect(actionsRow.className).toContain("group-hover:opacity-100");
+    const copies = screen.getAllByRole("button", { name: "Copy message" }) as HTMLElement[];
+    const copy = copies.find((c) => actionsRow.contains(c));
+    expect(copy).toBeTruthy();
+    expect(bubble!.contains(copy!)).toBe(false);
+    // DOM order: the actions row renders AFTER the bubble (below it
+    // visually — the column wrapper is the bubble's parent, so FOLLOWING
+    // here means a sibling line, not a side-by-side slot).
+    expect(
+      bubble!.compareDocumentPosition(actionsRow) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     // R126-3d-2: the clay mix fill — mix(card, accent, 0.16) on the
     // color-mix CLASS leg (the shell wave's arbitrary-utility spelling) +
     // the 0.34 accent edge on the JS withAlpha leg (the mobile recipe).

@@ -592,6 +592,13 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     // tier ladder) so the row keeps shrinking smoothly instead of wrapping
     // the whole cluster onto a second line. The flex-wrap on the wrapping
     // area stays as the R51-c absurd-width emergency fallback ONLY.
+    // R131-P (the floor round): the ONE-LINE contract is now owned by the
+    // LAYOUT FLOOR — ChatFocusLayout's CHAT_MIN_WIDTH rose 240 → 400 (the
+    // measured widest-anchor fit; see its geometry suite), so above the
+    // floor the wrapping area can NEVER be tight enough to wrap: the wrap
+    // exists for the sub-floor physics band + the freeform mini windows,
+    // never for a draggable PC session window. This structure pin (anchor
+    // outside the wrap area + the wrap fallback) is the floor's belt.
     expect(right.className).toContain("min-w-0");
     expect(right.className).not.toContain("shrink-0");
     // The model selector's wrapper is THE sponge (the donut + thinking
@@ -2650,6 +2657,14 @@ describe("Composer: the action anchor + queue-send (ROUND-78 R78-B/R78-D)", () =
     expect(toolbar.className).not.toContain("flex-wrap");
     // The busy composer shows NO Send button (Stop owns that state).
     expect(screen.queryByRole("button", { name: "Send message" })).toBeNull();
+    // R131-P (the belt-and-braces audit): the QUEUE button is ICON-ONLY at
+    // 28px (w-7 h-7, two glyphs, NO label span) — the widest anchor state
+    // (Continue icon-only + Stop + Queue) is exactly the state the 400px
+    // floor was measured against, so no anchor state exceeds the idle
+    // width and no additional collapse tier was needed on the queue leg.
+    expect(queue.className).toContain("w-7");
+    expect(queue.className).toContain("h-7");
+    expect(queue.querySelector("span")).toBeNull();
   });
 
   it("the queue-send button is GONE while the input is empty and appears with text (R91-F — the owner: only when a message is typed)", async () => {

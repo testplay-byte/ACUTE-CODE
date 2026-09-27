@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-24 round-126 -->
+<!-- last-reviewed: 2026-09-27 round-131 -->
 # Screens — the PC archetypes + the navigation grammar
 
 **ROUND-126 (the Clay Companion redesign):** the PC's screen vocabulary,
@@ -85,10 +85,17 @@ Workspace ── chat card ⇄ right sidebar (files/browser/terminal/…)
    their own workspace folders with their records (law #9). The
    Scratchpad project itself stays delete-protected.
 9. **The Scratchpad — ROUND-129 (rewritten from R128's General
-   conversation)**: the no-folder conversation section sits at the very
-   BOTTOM of the projects list, SEPARATED from the normal projects by
-   space + a hairline + its own "SCRATCHPAD" kicker row (never mixed
-   into the project list, never pinned first). It is named **Scratchpad**
+   conversation); ROUND-131 (R131-P, the rail half)**: the no-folder
+   conversation section sits at the very BOTTOM of the projects list,
+   SEPARATED from the normal projects by space + a hairline + its own
+   "SCRATCHPAD" kicker row (never mixed into the project list, never
+   pinned first) — **AND at the bottom of the collapsed rail as its own
+   DEDICATED tile** (after the project tiles + the +N overflow tile, with
+   its own hairline separator, never mixed into the project tiles, never
+   counted in the rail's 10-tile project cap, never sorted first by any
+   consumer — the backend's `listProjects` orders the `general` row LAST
+   explicitly, so the boot-seeded row cannot ride its NEWEST timestamp to
+   the top the way it did on real installs). It is named **Scratchpad**
    (not "General" — the owner: "it will also not be called general, but
    it will be something else so that it looks proper"). **Every
    Scratchpad session is INDEPENDENT**: each gets its own dedicated
@@ -97,7 +104,9 @@ Workspace ── chat card ⇄ right sidebar (files/browser/terminal/…)
    and deleting a Scratchpad session removes its folder with its
    records. The section is seeded by the backend (stable row id),
    delete-protected as a whole, never a folder picker, and carries its
-   own "New chat" affordance on the kicker row.
+   own "New chat" affordance on the kicker row. The rail's dedicated
+   tile presses like a project tile: expand the sidebar + toggle the
+   Scratchpad's session tree.
 
 ## 3. Archetype recipes (the materials)
 
@@ -144,6 +153,18 @@ Workspace ── chat card ⇄ right sidebar (files/browser/terminal/…)
 ### Workspace (chat)
 - The chat card (`rounded-2xl` + rim + `.ac-clay`) + the 4px seam + the
   right sidebar column.
+- **THE CHAT COLUMN'S FLOOR — ROUND-131 (R131-P, the owner: "we should set
+  a limit to the minimum width of the session window on the PC" — the
+  pre-R131 240px floor let the toolbar's R51-c emergency wrap fire, moving
+  the upload button + the operating-mode pill to a second line): the floor
+  is 400px, the measured ONE-LINE width for the composer toolbar's WIDEST
+  anchor state (busy + queue ≈ 308px of pills inside the ≈ 358px composer
+  box a 400px column buys — ≥24px daylight; the idle state ~90px). Above
+  the floor the toolbar NEVER wraps; the sidebar yields first (the cap
+  formula), and only when the container cannot fit floor + chrome + the
+  sidebar's collapse sliver does the floor itself soften (physics, never
+  a draggable window). The R51-c flex-wrap stays as the absurd-width
+  emergency only — the freeform mini windows, never a PC session window.**
 - The reading column (max-w-[1080px], graduated padding) + the composer
   dock + the live overlay grammar — §7 of COMPONENTS.md is the binding
   anatomy (R119/R120 owner-approved); R126 re-skins MATERIALS only:
