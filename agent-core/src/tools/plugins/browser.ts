@@ -58,10 +58,16 @@ import { jsonSchema } from "ai";
 // R95-C: file:// URLs — Node's battle-tested URL→path conversion for the
 // read action's disk branch (the frontend twin is src/lib/local-url.ts).
 import { fileURLToPath } from "node:url";
+// R131-B (defect 8): the download action's disk leg — the attachments-style
+// mkdir/dedupe/write pattern (routes/attachments.ts is READ-ONLY this wave;
+// the tiny suffix helper is mirrored here, never imported).
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   VIEWPORT_PRESETS,
   agentTabIdForChatSession,
   bindChatSession,
+  browserFetchForDownload,
   browserGetStateCommand,
   browserListSessionsCommand,
   browserNavigateCommand,
@@ -70,6 +76,9 @@ import {
   isTextualLocalContentType,
   readLocalBrowserFile,
 } from "../../browser-proxy.js";
+// R131-B (defect 8): the download lands inside the CHAT's project root —
+// getProject is the same resolver every route uses (routes/projects.ts).
+import { getProject } from "../../storage/projects.js";
 import { sendBrowserCommand } from "../../browser-command.js";
 // ROUND-89 (R89-E): the AGENT HANDS — the visible, human-like input engine
 // (browser-hands.ts: the in-page cursor/typing/scroll runtime + drivers).
@@ -129,6 +138,160 @@ import type { PluginDefinition, ToolDefinition } from "../registry.js";
 
 /** A relative path that names a local page-ish file (`demo.html`). */
 const RELATIVE_LOCAL_FILE_RE = /^[^?#]*\.(?:html?|xhtml|svg|md|txt|json|css|js|mjs)(?:[?#]|$)/i;
+
+// ── ROUND-131 (R131-B, defect 6): the action vocabulary + nearest-match ────
+//
+// The ledger's unknown-action complaint: a typo'd action answered a BARE list
+// (which even omitted `mouse`) with no hint of what was meant. The list below
+// is the ONE source of truth for the refusal messages — kept in lockstep with
+// the inputSchema's action enum + SEQUENCE_STEP_ACTIONS (the browser-tool
+// pins assert all three carry the same vocabulary).
+export const BROWSER_CONTROL_ACTIONS: readonly string[] = [
+  "navigate",
+  "back",
+  "forward",
+  "reload",
+  "set_viewport",
+  "read",
+  "read_dom",
+  "source",
+  "click",
+  "type",
+  "press_key",
+  "mouse",
+  "eval",
+  "download",
+  "wait",
+  "sequence",
+  "screenshot",
+  "get_state",
+  "wait_for_verification",
+];
+
+/** Levenshtein edit distance (the classic DP; inputs are short action ids). */
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i += 1) {
+    const row = [i];
+    for (let j = 1; j <= n; j += 1) {
+      row[j] = Math.min(
+        prev[j] + 1, // deletion
+        row[j - 1] + 1, // insertion
+        prev[j - 1] + (a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1), // substitution
+      );
+    }
+    prev = row;
+  }
+  return prev[n];
+}
+
+/**
+ * R131-B (defect 6): the pure nearest-match over the action vocabulary —
+ * a prefix hit in either direction wins ("get_state>" starts with
+ * "get_state"); else an edit distance ≤ 2 ("navigte" → "navigate"); else
+ * null (a far-off garbage action gets the plain list, never a forced hint).
+ * Pure — unit-pinned directly (browser-tool.test.ts, R131-B).
+ */
+export function nearestBrowserAction(candidate: string): string | null {
+  const cleaned = candidate.trim().toLowerCase();
+  if (cleaned === "") return null;
+  for (const action of BROWSER_CONTROL_ACTIONS) {
+    if (action.startsWith(cleaned) || cleaned.startsWith(action)) return action;
+  }
+  let best: string | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const action of BROWSER_CONTROL_ACTIONS) {
+    const distance = editDistance(cleaned, action);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = action;
+    }
+  }
+  return bestDistance <= 2 ? best : null;
+}
+
+// ── ROUND-131 (R131-B, defect 8): the download action's disk discipline ────
+//
+// The save location is the ROUND-115 pinned one: <projectRoot>/downloads/
+// (the twin of uploads = <root>/attachments/). The naming follows the
+// attachments-style dedupe law: a name collision NEVER overwrites — an
+// existing byte-identical file is REUSED (re-downloading the same bytes is a
+// no-op, reported honestly), a different file under the same name mints the
+// -2/-3 suffix form. The suffix cap mirrors attachments'
+// ATTACHMENT_SUFFIX_CAP = 100.
+
+/** R131-B: how many -2/-3… dedupe variants one download name may mint. */
+const DOWNLOAD_SUFFIX_CAP = 100;
+
+/**
+ * R131-B (defect 8): the dedupe-suffixed form of a download name — the
+ * attachments route's attachmentSuffixName mirrored (never imported — routes
+ * are read-only this wave): "photo.png" → "photo-2.png" (the EXTENSION
+ * survives); extension-less names just append.
+ */
+export function downloadSuffixName(name: string, counter: number): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? `${name.slice(0, dot)}-${counter}${name.slice(dot)}` : `${name}-${counter}`;
+}
+
+/**
+ * R131-B (defect 8): sanitize a model-supplied or URL-derived file name —
+ * the basename only (path separators die, so "../evil.png" cannot escape the
+ * downloads folder), control chars and reserved glyphs stripped, leading
+ * dots dropped (no ".gitignore" minting), capped at 120 chars. Empty result
+ * → null (the caller refuses honestly — never a guessed name).
+ */
+export function sanitizeDownloadFilename(raw: string): string | null {
+  const base = raw.split(/[/\\]/).pop() ?? "";
+  const cleaned = base
+    .replace(/[\u0000-\u001f\u007f<>:"|?*]/g, "")
+    .replace(/^\.+/, "")
+    .trim();
+  if (cleaned === "" || cleaned === "." || cleaned === "..") return null;
+  return cleaned.slice(0, 120);
+}
+
+/**
+ * R131-B (defect 8): the magic-byte sniff — PNG / JPEG / GIF / WEBP markers
+ * on the first bytes. "png" for the 8-byte PNG signature, "jpeg" for
+ * FF D8 FF, "gif" for GIF8, "webp" for RIFF…WEBP; null when nothing matches
+ * (the caller reports the mismatch honestly — the content-type says one
+ * thing, the bytes say another, the AGENT decides what to trust).
+ */
+export function sniffMagicBytes(bytes: Buffer): "png" | "jpeg" | "gif" | "webp" | null {
+  if (bytes.length >= 8) {
+    if (
+      bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+      bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+    ) {
+      return "png";
+    }
+    if (bytes.subarray(0, 4).toString("latin1") === "RIFF" && bytes.subarray(8, 12).toString("latin1") === "WEBP") {
+      return "webp";
+    }
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpeg";
+  if (bytes.length >= 6 && bytes.subarray(0, 6).toString("latin1").startsWith("GIF8")) return "gif";
+  return null;
+}
+
+/** R131-B (defect 8): does the payload LOOK like HTML/text (the 200-that-
+ * lied shape — an error page served where a file was promised)? Honest
+ * signal for the mismatch note, never a refusal. */
+export function looksLikeTextPayload(bytes: Buffer): boolean {
+  const head = bytes.subarray(0, 512);
+  for (const byte of head) {
+    if (byte === 0x00) return false; // a NUL in the head is binary, full stop
+    if (byte === 0x09 || byte === 0x0a || byte === 0x0d || byte === 0x0c) continue;
+    if (byte < 0x20) return false; // other control chars = binary
+  }
+  return true;
+}
 
 /**
  * ROUND-98 (R98-G1, bug b): the degenerate-region floor for the screenshot
@@ -298,6 +461,23 @@ return { error: "part must be html, css or scripts" };`;
  * top level). Cheap by design: one querySelectorAll, no layout reads —
  * the model calls read_dom again after clicking a section, compares
  * pageState, and re-clicks when the app reverted.
+ *
+ * ROUND-131 (R131-B, defect 3): the two read_dom truths.
+ *  · (3a) RENDERED text, never serialized text — the ledger's CONFIRMED
+ *    "read_dom surfaced a <button> whose text was a CSS blob": textContent
+ *    serializes <style>/<script> subtree CODE into element text and the
+ *    paragraph TreeWalker walked those code text nodes too. The fix mirrors
+ *    the WALL_PROBE's own discipline (document.body.innerText): innerText
+ *    is what the page PAINTS, so unrendered style/script content never
+ *    leaks (SVG/other non-HTMLElement shapes have no innerText — the
+ *    textContent fallback covers them), and the walker now skips
+ *    style/script/noscript/template ancestors outright.
+ *  · (3b) the OFFSET/RANGE element-count cursor — a numeric `offset` pages
+ *    the INTERACTIVE list (skip N elements, return the next `range`, count
+ *    them ALL) instead of one byte-sliced payload that dies mid-element.
+ *    The unpaged script stays byte-identical to the pre-R131 shape (the
+ *    120-element cap); the paged one emits `interactiveCount` so the tool
+ *    can answer "showing elements N..M of T".
  */
 /** A structural DOMRect subset — the pure visibility predicate's input. */
 export interface DomRectLike {
@@ -335,9 +515,44 @@ export function domRectIntersectsViewport(
   );
 }
 
-function buildReadDomScript(include: "interactive" | "all"): string {
+function buildReadDomScript(include: "interactive" | "all", offset: number | null, range: number): string {
+  // R131-B (defect 3b): the two loop shapes — unpaged keeps the capped
+  // collection byte-identically; paged counts EVERY visible interactive and
+  // collects only the [offset, offset+range) window.
+  const paged = offset !== null;
+  const collectEntry = `const r = el.getBoundingClientRect();
+  interactive.push({
+    tag: el.tagName.toLowerCase(),
+    type: el.getAttribute("type") || undefined,
+    text: clip(textOf(el), 60) || undefined,
+    ariaLabel: clip(el.getAttribute("aria-label"), 60) || undefined,
+    value: (el.value !== undefined ? clip(el.value, 60) : undefined) || undefined,
+    placeholder: clip(el.getAttribute("placeholder"), 60) || undefined,
+    selector: shortPath(el),
+    rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+  });`;
+  const interactiveLoop = paged
+    ? `let interactiveCount = 0;
+for (const el of nodes) {
+  if (!visible(el)) continue;
+  if (interactiveCount >= ${JSON.stringify(offset)} && interactive.length < ${JSON.stringify(range)}) {
+    ${collectEntry}
+  }
+  interactiveCount += 1;
+}`
+    : `for (const el of nodes) {
+  if (!visible(el)) continue;
+  ${collectEntry}
+  if (interactive.length >= 120) break;
+}`;
   return `const include = ${JSON.stringify(include)};
 const clip = (s, n) => { const t = String(s || "").replace(/\\s+/g, " ").trim(); return t.length > n ? t.slice(0, n) : t; };
+// R131-B (defect 3a): RENDERED text (el.innerText — the WALL_PROBE's own
+// document.body.innerText discipline), so a <style>/<script> subtree inside
+// an interactive element or heading never serializes its CODE into the text
+// (the ledger's "a button whose text was raw CSS"). SVG/non-HTMLElement
+// shapes have no innerText — textContent covers them.
+const textOf = (el) => { try { var t = el.innerText; return t !== undefined && t !== null ? t : (el.textContent || ""); } catch (e) { return el.textContent || ""; } };
 const seg = (node) => {
   let n = 1;
   let sib = node.previousElementSibling;
@@ -364,27 +579,13 @@ const shortPath = (el) => {
 const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < window.innerWidth && r.top < window.innerHeight; };
 const headings = [];
 for (const h of document.querySelectorAll("h1, h2, h3, h4, h5, h6")) {
-  const text = clip(h.textContent, 80);
+  const text = clip(textOf(h), 80);
   if (text !== "") headings.push({ tag: h.tagName.toLowerCase(), text: text });
   if (headings.length >= 40) break;
 }
 const interactive = [];
 const nodes = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="tab"], [role="combobox"], [role="option"], [onclick], [contenteditable="true"]');
-for (const el of nodes) {
-  if (!visible(el)) continue;
-  const r = el.getBoundingClientRect();
-  interactive.push({
-    tag: el.tagName.toLowerCase(),
-    type: el.getAttribute("type") || undefined,
-    text: clip(el.textContent, 60) || undefined,
-    ariaLabel: clip(el.getAttribute("aria-label"), 60) || undefined,
-    value: (el.value !== undefined ? clip(el.value, 60) : undefined) || undefined,
-    placeholder: clip(el.getAttribute("placeholder"), 60) || undefined,
-    selector: shortPath(el),
-    rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
-  });
-  if (interactive.length >= 120) break;
-}
+${interactiveLoop}
 const forms = [];
 for (const form of Array.from(document.forms)) {
   const fields = [];
@@ -404,8 +605,12 @@ if (include === "all") {
     const parent = node.parentElement;
     if (parent !== null && !seen.has(parent)) {
       seen.add(parent);
-      const text = clip(parent.textContent, 160);
-      if (text !== "") paragraphs.push(text);
+      // R131-B (defect 3a): style/script/noscript/template text is CODE, not
+      // page content — the innerText discipline's twin for the text pass.
+      if (parent.closest("style, script, noscript, template") === null) {
+        const text = clip(parent.textContent, 160);
+        if (text !== "") paragraphs.push(text);
+      }
     }
     node = walker.nextNode();
   }
@@ -421,11 +626,11 @@ if (Object.keys(query).length > 0) pageState.query = query;
 const selected = [];
 try {
   for (const el of Array.from(document.querySelectorAll('[aria-selected="true"], [aria-current]')).slice(0, 12)) {
-    selected.push({ tag: el.tagName.toLowerCase(), role: el.getAttribute("role") || undefined, ariaCurrent: el.getAttribute("aria-current") || undefined, text: clip(el.textContent, 40) || undefined, href: (el.getAttribute && el.getAttribute("href")) || undefined });
+    selected.push({ tag: el.tagName.toLowerCase(), role: el.getAttribute("role") || undefined, ariaCurrent: el.getAttribute("aria-current") || undefined, text: clip(textOf(el), 40) || undefined, href: (el.getAttribute && el.getAttribute("href")) || undefined });
   }
 } catch (e) {}
 if (selected.length > 0) pageState.selected = selected;
-return { title: clip(document.title, 120), url: location.href, headings: headings, interactive: interactive, forms: forms, paragraphs: paragraphs, pageState: pageState };`;
+return { title: clip(document.title, 120), url: location.href, headings: headings,${paged ? " interactiveCount: interactiveCount," : ""} interactive: interactive, forms: forms, paragraphs: paragraphs, pageState: pageState };`;
 }
 
 /**
@@ -478,7 +683,9 @@ function buildWaitProbeScript(selector: string): string {
 /** The step actions a sequence may chain (R94-F) — every action except
  * "sequence" itself (no nesting) and except the tool-level plumbing that
  * must not run mid-chain. Kept in sync with the action enum + the schema's
- * steps description. */
+ * steps description. R131-B: `download` is deliberately NOT a step action
+ * (a file save is a terminal side effect, not a page-driving step — call it
+ * directly; BROWSER_CONTROL_ACTIONS remains the full vocabulary). */
 const SEQUENCE_STEP_ACTIONS: ReadonlySet<string> = new Set([
   "navigate",
   "back",
@@ -512,9 +719,13 @@ function condenseSequenceLine(output: string): string {
 export const browserPlugin: PluginDefinition = {
   id: "core-browser",
   name: "Embedded Browser",
-  version: "1.2.0",
+  // R131-B: 1.3.0 — the download action joins the surface (defect 8) + the
+  // seven tool-truth fixes (click re-probe, navigation-aware wait, read_dom
+  // offset + rendered-text, eval null diagnostics, type submit echo,
+  // nearest-match refusals, the redirect-collapse history).
+  version: "1.3.0",
   description:
-    "Drives the user's embedded browser panel (navigate/history/viewport/read_dom/source/click/type/press_key/eval/wait/sequence/wait_for_verification/screenshot/state).",
+    "Drives the user's embedded browser panel (navigate/history/viewport/read_dom/source/click/type/press_key/eval/download/wait/sequence/wait_for_verification/screenshot/state).",
   category: "browser",
   createTools: (ctx): ToolDefinition[] => {
     const toolDeps = ctx.toolDeps;
@@ -539,7 +750,7 @@ export const browserPlugin: PluginDefinition = {
             action: {
               type: "string",
               description:
-                "navigate (open an absolute http(s) URL or a local HTML file — a file:// URL or an absolute local path; docs/source hosts like github.com navigate freely, other hosts ask the owner for permission first) | back | forward | reload (walk that tab's history) | set_viewport (resize the display the user sees — responsive-layout testing) | read (fresh server-side text of the current page; local file:// pages read from disk; works in every mode) | read_dom (structured JSON outline of the LIVE page — title, headings, every visible interactive element with a short CSS selector + text/label/value + x/y/w/h, form field names, and pageState: the URL hash/query + the aria-selected/aria-current tab, so after clicking a section or tab you can re-read and confirm it stuck; include 'all' adds the first 80 text paragraphs) | source (the live page's raw material: html/css/scripts) | click (the cursor visibly travels, hovers, then a full real pointer sequence fires at the element; the result reports where focus moved — a cheap effect check; native desktop mode only) | type (human word-by-word typing with real per-character events — React/Vue inputs register it, a ~1s beat after the focusing click; newlines become real Shift+Enter newlines, never an implicit submit; capped at 600 chars per call — split longer texts; native desktop mode only) | press_key (Enter inside a form triggers native form submission) | mouse (pointer ops at exact page coordinates from read_dom — the cursor visibly travels every path; native desktop mode only) | eval (run JavaScript inside the live page and get the value back — the page's own state, logins and JS included; native desktop mode only) | wait (probe the live page until its conditions hold — always call it after navigate before clicking/typing) | sequence (atomic multi-step chain in ONE call — steps settle automatically between) | screenshot (captures the page at a FIXED 1280×720 capture resolution — independent of the visible browser panel's size, and works even while the tab is hidden or the user is elsewhere in the app; the vision description needs a vision model, the capture alone does not — pass describe:false for the raw image with no vision pass: use that when you only need the image for the user, or when the vision analysis contradicts DOM evidence, since vision output is advisory, never ground truth; prefer read/read_dom unless pixels are the question; native desktop mode only) | get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab) | wait_for_verification (bot-wall pause: a countdown card opens in the owner's chat while they solve it, then the page is re-checked honestly)",
+                "navigate (open an absolute http(s) URL or a local HTML file — a file:// URL or an absolute local path; docs/source hosts like github.com navigate freely, other hosts ask the owner for permission first) | back | forward | reload (walk that tab's history) | set_viewport (resize the display the user sees — responsive-layout testing) | read (fresh server-side text of the current page; local file:// pages read from disk; works in every mode) | read_dom (structured JSON outline of the LIVE page — title, headings, every visible interactive element with a short CSS selector + text/label/value + x/y/w/h, form field names, and pageState: the URL hash/query + the aria-selected/aria-current tab, so after clicking a section or tab you can re-read and confirm it stuck; include 'all' adds the first 80 text paragraphs; offset/range page the interactive elements on huge pages — the result says 'showing elements N..M of T') | source (the live page's raw material: html/css/scripts) | click (the cursor visibly travels, hovers, then a full real pointer sequence fires at the element; the result reports where focus moved — a cheap effect check; native desktop mode only) | type (human word-by-word typing with real per-character events — React/Vue inputs register it, a ~1s beat after the focusing click; newlines become real Shift+Enter newlines, never an implicit submit; capped at 600 chars per call — split longer texts; native desktop mode only) | press_key (Enter inside a form triggers native form submission) | mouse (pointer ops at exact page coordinates from read_dom — the cursor visibly travels every path; native desktop mode only) | eval (run JavaScript inside the live page and get the value back — the page's own state, logins and JS included; native desktop mode only) | download (save a file into the project's downloads/ folder — fetched with the tab's cookies and the panel's user agent, dedupe-named so nothing is ever overwritten, with a content-type + magic-byte verdict in the result; works in every mode) | wait (probe the live page until its conditions hold — always call it after navigate before clicking/typing; a matched selector/urlContains succeeds even while readyState is still loading) | sequence (atomic multi-step chain in ONE call — steps settle automatically between) | screenshot (captures the page at a FIXED 1280×720 capture resolution — independent of the visible browser panel's size, and works even while the tab is hidden or the user is elsewhere in the app; the vision description needs a vision model, the capture alone does not — pass describe:false for the raw image with no vision pass: use that when you only need the image for the user, or when the vision analysis contradicts DOM evidence, since vision output is advisory, never ground truth; prefer read/read_dom unless pixels are the question; native desktop mode only) | get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab) | wait_for_verification (bot-wall pause: a countdown card opens in the owner's chat while they solve it, then the page is re-checked honestly)",
               enum: [
                 "navigate",
                 "back",
@@ -554,6 +765,7 @@ export const browserPlugin: PluginDefinition = {
                 "press_key",
                 "mouse",
                 "eval",
+                "download",
                 "wait",
                 "sequence",
                 "screenshot",
@@ -572,7 +784,12 @@ export const browserPlugin: PluginDefinition = {
             toY: { type: "number", description: "action=mouse op=drag: the end y" },
             dx: { type: "number", description: "action=mouse op=scroll: horizontal scroll pixels (positive = right)" },
             dy: { type: "number", description: "action=mouse op=scroll: vertical scroll pixels (positive = down)" },
-            url: { type: "string", description: "Absolute http(s) URL, or a local file (a file:// URL or an absolute local path like C:\\Users\\me\\page.html) — local HTML files open natively in the browser panel (action=navigate)" },
+            url: { type: "string", description: "Absolute http(s) URL, or a local file (a file:// URL or an absolute local path like C:\\Users\\me\\page.html) — local HTML files open natively in the browser panel (action=navigate); the file to fetch and save (action=download)" },
+            filename: {
+              type: "string",
+              description:
+                "action=download: the file name to save under (default: derived from the URL's last path segment; path separators and control characters are stripped). Saved into <projectRoot>/downloads/ — a name collision never overwrites: identical bytes are reused, different bytes get -2/-3 suffixes",
+            },
             preset: {
               type: "string",
               description: "Display-size preset (action=set_viewport)",
@@ -615,6 +832,19 @@ export const browserPlugin: PluginDefinition = {
               type: "string",
               description: "action=read_dom: 'interactive' (default — outline + interactive elements) or 'all' (also the first 80 text paragraphs)",
               enum: ["interactive", "all"],
+            },
+            // R131-B (defect 3b): the ELEMENT-COUNT cursor — page the
+            // interactive elements on huge pages instead of losing the tail
+            // to a mid-payload byte truncation.
+            offset: {
+              type: "number",
+              description:
+                "action=read_dom: skip the first N interactive elements and return the next batch (an element-count cursor for huge pages — the result reports 'showing elements N..M of T'; pass the returned end offset to page forward)",
+            },
+            range: {
+              type: "number",
+              description:
+                "action=read_dom with offset: how many interactive elements to return in this batch (default 120, max 500)",
             },
             script: {
               type: "string",
@@ -1133,20 +1363,50 @@ export const browserPlugin: PluginDefinition = {
                 typeof maxCharsRaw === "number" && Number.isFinite(maxCharsRaw)
                   ? Math.min(20000, Math.max(2000, Math.round(maxCharsRaw)))
                   : 12000;
-              const page = await runPageScript("read_dom", buildReadDomScript(include));
+              // ── R131-B (defect 3b): the ELEMENT-COUNT cursor ─────────────
+              // A numeric `offset` pages the INTERACTIVE list — skip N
+              // elements, return the next `range` (default 120, cap 500),
+              // with the page's total so the output can say "showing
+              // elements N..M of T". Never a byte slice: the window is cut
+              // in the PAGE script, element by element.
+              const offsetRaw = input.offset;
+              const offset =
+                typeof offsetRaw === "number" && Number.isFinite(offsetRaw) && offsetRaw >= 0
+                  ? Math.floor(offsetRaw)
+                  : null;
+              const rangeRaw = input.range;
+              const range =
+                typeof rangeRaw === "number" && Number.isFinite(rangeRaw) && rangeRaw >= 1
+                  ? Math.min(500, Math.floor(rangeRaw))
+                  : 120;
+              const page = await runPageScript("read_dom", buildReadDomScript(include, offset, range));
               if (!page.ok) return { ok: false, output: page.output };
               const miss = pageError("read_dom", page.value);
               if (miss !== null) return { ok: false, output: miss };
+              const outline = (page.value ?? {}) as { interactive?: unknown; interactiveCount?: unknown };
+              const interactiveCount =
+                typeof outline.interactiveCount === "number" ? Math.floor(outline.interactiveCount) : null;
+              const returned = Array.isArray(outline.interactive) ? outline.interactive.length : null;
+              // The count line rides ONLY the paged calls (unpaged keeps the
+              // pre-R131 output shape byte-identically).
+              let pageWindow = "";
+              if (offset !== null && interactiveCount !== null) {
+                pageWindow =
+                  returned === null || returned === 0
+                    ? `, offset ${offset} is beyond the end — the page has ${interactiveCount} interactive elements; pass a smaller offset`
+                    : `, showing elements ${offset + 1}..${offset + returned} of ${interactiveCount}`;
+              }
               // The outline is capped at the SERIALIZED level (the script
-              // already caps entries/strings — this bounds the total).
+              // already caps entries/strings — this bounds the total). The
+              // marker now names the offset/range escape hatch too.
               const serialized = JSON.stringify(page.value ?? null);
               const capped =
                 serialized.length > maxChars
-                  ? `${serialized.slice(0, maxChars)}…(truncated, ${serialized.length} chars total — raise maxChars up to 20000, or use include 'interactive' rather than 'all')`
+                  ? `${serialized.slice(0, maxChars)}…(truncated, ${serialized.length} chars total — raise maxChars up to 20000, use include 'interactive' rather than 'all', or page the elements with offset/range)`
                   : serialized;
               return {
                 ok: true,
-                output: `read_dom ok (tab '${sessionId}', include ${include}) → ${capped}`,
+                output: `read_dom ok (tab '${sessionId}', include ${include}${pageWindow}) → ${capped}`,
               };
             }
 
@@ -1185,8 +1445,52 @@ export const browserPlugin: PluginDefinition = {
                   output: "browser_control: click requires 'selector' (CSS) or 'text' (a substring of the clickable element's label)",
                 };
               }
+              // ── R131-B (defect 1): the PRE-CLICK URL ───────────────────────
+              // The ledger's CONFIRMED "the click's job vanished" confusion: the
+              // panel's job-poll answers 'the job vanished (the page navigated
+              // away)' BOTH when the click genuinely navigated (a link click —
+              // the INTENDED effect) and when the selector never existed (the
+              // job died on a page that never went anywhere). The store's URL
+              // before the click is the discriminator the re-probe below uses.
+              const preClickUrl = browserGetStateCommand(sessionId).currentUrl;
               const page = await runPageJob("click", buildHandsClickScript(selector, text, nth));
-              if (!page.ok) return { ok: false, output: page.output };
+              if (!page.ok) {
+                // ── R131-B (defect 1): the vanished-error re-probe ─────────
+                // ONE bounded location.href eval (the get_state reconcile
+                // pattern) — URL CHANGED ⇒ the click triggered the navigation
+                // itself: success with the landing URL. UNCHANGED ⇒ the honest
+                // selector-not-found failure (keep failing, but truthfully).
+                if (/the job vanished/i.test(page.output)) {
+                  if (toolDeps !== undefined && typeof toolDeps.emit === "function") {
+                    try {
+                      const data = await sendBrowserCommand(
+                        toolDeps.emit,
+                        sessionId,
+                        "eval",
+                        { script: "return location.href;" },
+                        5_000,
+                      );
+                      const probe = (data ?? {}) as { ok?: unknown; value?: unknown };
+                      if (probe.ok === true && typeof probe.value === "string" && probe.value !== "") {
+                        if (preClickUrl === null || probe.value !== preClickUrl) {
+                          return {
+                            ok: true,
+                            output: `clicked (tab '${sessionId}') — the click triggered a navigation → the page is now at ${probe.value} (the page job vanished because the page navigated mid-action; the navigation IS the click's effect — verify the landing with read_dom or get_state).`,
+                          };
+                        }
+                        return {
+                          ok: false,
+                          output: `${page.output} — and the page did not navigate (still at ${preClickUrl}), so the selector may not exist: re-check it against read_dom's live selectors.`,
+                        };
+                      }
+                    } catch {
+                      // The re-probe failed (no panel mounted / timeout) — the
+                      // original failure stands verbatim.
+                    }
+                  }
+                }
+                return { ok: false, output: page.output };
+              }
               const miss = pageError("click", page.value);
               if (miss !== null) return { ok: false, output: miss };
               // R93-B3: the light post-action verification — the hands' click
@@ -1222,15 +1526,28 @@ export const browserPlugin: PluginDefinition = {
               const miss = pageError("type", page.value);
               if (miss !== null) return { ok: false, output: miss };
               const value = (page.value ?? {}) as { submitted?: unknown; submitHow?: unknown };
+              // ── R131-B (defect 5): the REQUESTED-vs-OBSERVED echo ─────────
+              // The ledger's ambiguity: "type was called without submit:true
+              // yet returned submitted:true" was unresolvable from the output
+              // alone. The echo names BOTH sides — requested (what the call
+              // carried) and observed (what the page did) — so a
+              // page-initiated submission is distinguishable at a glance from
+              // an agent-commanded one.
+              const observed =
+                value.submitted === true
+                  ? `submitted (${typeof value.submitHow === "string" && value.submitHow !== "" ? value.submitHow : "form.requestSubmit()"})`
+                  : `not submitted${typeof value.submitHow === "string" && value.submitHow !== "" ? ` (${value.submitHow})` : " (no form found)"}`;
               const submitNote =
                 submit === false
-                  ? ""
+                  ? value.submitted === true
+                    ? " The page submitted the form on its own (a key listener or SPA router — typing alone never submits from THIS tool's side; if this was unintended, check the page's behavior)."
+                    : ""
                   : value.submitted === true
                     ? " The form was submitted (native requestSubmit)."
                     : ` The form was NOT submitted natively: ${typeof value.submitHow === "string" ? value.submitHow : "no form found"}.`;
               return {
                 ok: true,
-                output: `typed into ${selector} (tab '${sessionId}', input/change events dispatched so the page's framework sees it).${submitNote} → ${JSON.stringify(page.value)}`,
+                output: `typed into ${selector} (tab '${sessionId}', submit requested: ${submit} · observed: ${observed}, input/change events dispatched so the page's framework sees it).${submitNote} → ${JSON.stringify(page.value)}`,
               };
             }
 
@@ -1310,6 +1627,18 @@ export const browserPlugin: PluginDefinition = {
             // until readyState complete (default) and/or a selector appears
             // and/or the URL contains a substring, all within `ms` (250ms
             // floor, 15s cap, default 900ms).
+            //
+            // ── R131-B (defect 2): NAVIGATION-AWARE success ─────────────────
+            // The ledger's Google-SPA scenario: `wait {urlContains}` matched
+            // while readyState sat at 'loading' for 10s+ (SPAs keep the loader
+            // document alive), so the CONJUNCTION never held and the wait
+            // failed on a page that had already ARRIVED. When a substantive
+            // condition (selector / urlContains) is requested and MET, a
+            // non-complete readyState is now a NOTE on the success — not a
+            // blocker. The timeout report carries the CURRENT URL and names
+            // WHICH condition failed (the ledger's other ask), and the
+            // readyState line never embeds a quote-wrapped compound (the
+            // ledger's "the quote is never closed" malformation).
             if (action === "wait") {
               const msRaw = input.ms;
               const ms =
@@ -1340,6 +1669,9 @@ export const browserPlugin: PluginDefinition = {
               let lastReady: string | null = null;
               let lastUrl: string | null = null;
               let lastHas: boolean | null = null;
+              // A substantive condition (selector/urlContains) was requested —
+              // readyState is demoted to a NOTE once one of them matches.
+              const hasSubstantive = selector !== "" || urlContains !== "";
               // Probe → check → (not ready) sleep to the next 250ms tick,
               // until the conditions hold or the budget is spent. A probe
               // that FAILS (bridge error, page navigating) is simply not
@@ -1353,22 +1685,33 @@ export const browserPlugin: PluginDefinition = {
                     if (typeof value.ready === "string") lastReady = value.ready;
                     if (typeof value.url === "string") lastUrl = value.url;
                     if (typeof value.has === "boolean") lastHas = value.has;
-                    const readyOk = !readyStateNeeded || lastReady === "complete";
                     const selectorOk = selector === "" || lastHas === true;
                     const urlOk = urlContains === "" || (lastUrl ?? "").includes(urlContains);
+                    // R131-B: readyState only BLOCKS when no substantive
+                    // condition was requested (the pure readyState wait keeps
+                    // its pre-R131 meaning); when one was requested and every
+                    // requested one is MET, 'loading'/'interactive' is a note.
+                    const readyOk = !readyStateNeeded || lastReady === "complete" || (hasSubstantive && selectorOk && urlOk);
                     if (readyOk && selectorOk && urlOk) {
+                      const readyStateNote =
+                        readyStateNeeded && lastReady !== "complete"
+                          ? ` — note: readyState '${lastReady ?? "unknown"}' at match time (the page is still settling; the matched condition is the arrival signal)`
+                          : "";
                       return {
                         ok: true,
                         output: `wait ok (tab '${sessionId}') → ${JSON.stringify({
                           waited: true,
                           elapsedMs: Date.now() - started,
                           readyState: lastReady,
+                          ...(readyStateNeeded && lastReady !== "complete"
+                            ? { note: `readyState '${lastReady ?? "unknown"}' at match time` }
+                            : {}),
                           matched: {
                             readyState: readyStateNeeded || undefined,
                             selector: selector === "" ? undefined : true,
                             urlContains: urlContains === "" ? undefined : true,
                           },
-                        })}`,
+                        })}${readyStateNote}`,
                       };
                     }
                   }
@@ -1376,11 +1719,17 @@ export const browserPlugin: PluginDefinition = {
                 if (Date.now() >= deadline) break;
                 await new Promise((resolve) => setTimeout(resolve, Math.max(1, Math.min(250, deadline - Date.now()))));
               }
-              // The honest timeout — every unmet condition, named.
+              // The honest timeout — the CURRENT URL first (the ledger's
+              // "surface current URL/state for diagnosis"), then every unmet
+              // condition, named. The readyState line quotes only the simple
+              // value; the unknown case carries no quotes at all (the
+              // pre-R131 compound fallback rendered as an unclosed quote).
               const unmet: string[] = [];
               if (readyStateNeeded && lastReady !== "complete") {
                 unmet.push(
-                  `document.readyState is '${lastReady ?? "unknown — the page never answered a probe (it may be navigating)"}' (needs 'complete')`,
+                  lastReady === null
+                    ? "document.readyState is unknown — the page never answered a probe (it may be navigating); needs 'complete'"
+                    : `document.readyState is '${lastReady}' (needs 'complete')`,
                 );
               }
               if (selector !== "" && lastHas !== true) unmet.push(`the selector '${selector}' did not appear`);
@@ -1389,7 +1738,7 @@ export const browserPlugin: PluginDefinition = {
               }
               return {
                 ok: false,
-                output: `browser_control: wait — timed out after ${ms}ms: ${unmet.join("; ")}. Read the page state (read_dom) and decide: wait again, or investigate why the condition never held.`,
+                output: `browser_control: wait — timed out after ${ms}ms (currentUrl: ${lastUrl ?? "unknown"}): ${unmet.join("; ")}. Read the page state (read_dom) and decide: wait again, or investigate why the condition never held.`,
               };
             }
 
@@ -1518,6 +1867,22 @@ export const browserPlugin: PluginDefinition = {
                 const message = typeof result.error === "string" ? result.error : "the page rejected the script";
                 return { ok: false, output: `browser_control: eval — page error: ${message}` };
               }
+              // ── R131-B (defect 4): the NULL-payload diagnostics ───────────
+              // A null/empty value is the bridge's most ambiguous answer (the
+              // sibling decoder's "unexpected payload: null" class): the page
+              // may have navigated while the script ran, or the script itself
+              // returned undefined (JSON-serialized as null). The tool output
+              // carries the LAST KNOWN URL from the store + the honest hint so
+              // the model's next move is a get_state re-probe, not a guess.
+              if (result.value === null || result.value === undefined) {
+                const knownUrl = browserGetStateCommand(sessionId).currentUrl;
+                return {
+                  ok: true,
+                  output:
+                    `eval ok (tab '${sessionId}') → null — the page may have navigated while the script ran, or the script returned undefined (an undefined return serializes as null). ` +
+                    `Last known URL: ${knownUrl ?? "(no page open in this tab yet)"}. Re-probe with get_state (or read_dom) before deciding.`,
+                };
+              }
               const serialized = JSON.stringify(result.value ?? null);
               const capped =
                 serialized.length > 12_000
@@ -1527,6 +1892,179 @@ export const browserPlugin: PluginDefinition = {
                 ok: true,
                 output: `eval ok (tab '${sessionId}') → ${capped}`,
               };
+            }
+
+            // ── ROUND-131 (R131-B, defect 8): download — the file save ────────
+            // The owner's verdict on the panel's capability: "it is not able
+            // to right-click and then click save as and save to the download
+            // folder as it needs to be… a full-fledged browser." THIS action is
+            // the agent-side half: a first-class download that fetches the URL
+            // INSIDE THE PAGE'S CONTEXT — the tab's per-project cookie jar, the
+            // panel's user agent, the tab's current page as Referer — and
+            // writes the bytes to <projectRoot>/downloads/ (the ROUND-115
+            // pinned location; the native right-click "save as" pipeline is
+            // the sibling B3 wave and lands the SAME folder). Honesty laws:
+            // NEVER a silent overwrite (attachments-style -2/-3 dedupe, with
+            // byte-identical reuse reported as such), the magic-byte verdict
+            // rides the output (a mismatch is REPORTED, the requested filename
+            // is kept — the agent decides), the path is PROJECT-RELATIVE, and
+            // every failure names the HTTP status or the transport error.
+            if (action === "download") {
+              const url = typeof input.url === "string" ? input.url.trim() : "";
+              if (url === "") {
+                return { ok: false, output: "browser_control: download requires 'url' (an absolute http(s) URL)" };
+              }
+              if (!/^https?:\/\//i.test(url)) {
+                return {
+                  ok: false,
+                  output: `browser_control: download — only http(s) URLs can be downloaded ('${url.slice(0, 120)}'); local files are already on the owner's disk`,
+                };
+              }
+              if (toolDeps === undefined || toolDeps.db === null || toolDeps.db === undefined) {
+                return { ok: false, output: "browser_control: download unavailable — no database in this context" };
+              }
+              const projectId =
+                typeof toolDeps.projectId === "string" && toolDeps.projectId !== "" ? toolDeps.projectId : null;
+              if (projectId === null) {
+                return {
+                  ok: false,
+                  output:
+                    "browser_control: download unavailable — no project context in this session (downloads land in the project's downloads/ folder; a project-bound chat session is required)",
+                };
+              }
+              const project = getProject(toolDeps.db, projectId);
+              if (project === undefined) {
+                return {
+                  ok: false,
+                  output: `browser_control: download unavailable — project '${projectId}' was not found in the database`,
+                };
+              }
+              // The Referer: the tab's CURRENT page (an http(s) one) — the page
+              // the user is looking at is the honest referer, never fabricated.
+              const state = browserGetStateCommand(sessionId);
+              const referer =
+                state.currentUrl !== null && /^https?:\/\//i.test(state.currentUrl) ? state.currentUrl : null;
+              const fetched = await browserFetchForDownload(sessionId, url, referer);
+              if (!fetched.ok) {
+                return { ok: false, output: `browser_control: download — fetching ${url} failed: ${fetched.error}` };
+              }
+              // The file name: the model's `filename` param, else the URL's
+              // last path segment — sanitized to a bare, path-free name.
+              const rawName = typeof input.filename === "string" ? input.filename : "";
+              let name: string | null;
+              if (rawName.trim() !== "") {
+                name = sanitizeDownloadFilename(rawName);
+                if (name === null) {
+                  return {
+                    ok: false,
+                    output: `browser_control: download — '${rawName.slice(0, 120)}' is not a usable file name after sanitizing (path separators and control characters are stripped; a bare name like 'report.pdf' is required)`,
+                  };
+                }
+              } else {
+                let segment = "download";
+                try {
+                  const parsed = new URL(fetched.finalUrl);
+                  const last = parsed.pathname.split("/").filter((p) => p !== "").pop();
+                  if (last !== undefined) {
+                    try {
+                      segment = decodeURIComponent(last);
+                    } catch {
+                      segment = last;
+                    }
+                  }
+                } catch {
+                  /* the URL parsed moments ago — keep the default */
+                }
+                name = sanitizeDownloadFilename(segment);
+                if (name === null) name = "download";
+              }
+              // The magic-byte verdict — computed BEFORE the write so the
+              // output is one honest story (the mismatch never renames the
+              // file; the requested name stands and the note says why).
+              const magic = sniffMagicBytes(fetched.bytes);
+              const contentType = fetched.contentType.split(";")[0]?.trim() ?? "application/octet-stream";
+              const magicOk =
+                magic !== null
+                  ? contentType.startsWith(`image/${magic === "jpeg" ? "jpeg" : magic}`) || contentType === "image/jpg" && magic === "jpeg"
+                  : !/^image\//i.test(contentType);
+              let magicNote: string;
+              if (magic !== null && magicOk) {
+                magicNote = `magic ${magic.toUpperCase()} ✓`;
+              } else if (magic !== null && !magicOk) {
+                magicNote = `HONESTY NOTE: the content-type says ${contentType} but the magic bytes say ${magic.toUpperCase()} — saved under the requested name; verify before trusting it`;
+              } else if (/^image\//i.test(contentType) && magic === null) {
+                magicNote = `HONESTY NOTE: the content-type says ${contentType} but the bytes carry no known image signature${looksLikeTextPayload(fetched.bytes) ? " (they look like TEXT — likely an HTML error page served as a 'successful' download)" : ""} — saved under the requested name; verify before trusting it`;
+              } else {
+                magicNote = `magic: no sniffed signature (non-image content)`;
+              }
+              // The write: <root>/downloads/<name> with the attachments-style
+              // dedupe — identical bytes REUSE the incumbent, different bytes
+              // mint -2/-3, never a silent overwrite.
+              try {
+                const downloadsDir = join(project.rootPath, "downloads");
+                mkdirSync(downloadsDir, { recursive: true });
+                let finalName = name;
+                let reused = false;
+                for (let counter = 2; ; counter += 1) {
+                  const candidate = join(downloadsDir, finalName);
+                  if (!existsSync(candidate)) break;
+                  let identical = false;
+                  try {
+                    const existing = readFileSync(candidate);
+                    identical = existing.length === fetched.bytes.length && existing.equals(fetched.bytes);
+                  } catch {
+                    // Unreadable incumbent — treat as different (never a
+                    // silent reuse of something unverifiable).
+                  }
+                  if (identical) {
+                    reused = true;
+                    break;
+                  }
+                  if (counter > DOWNLOAD_SUFFIX_CAP) {
+                    return {
+                      ok: false,
+                      output: `browser_control: download — downloads/${name} already has ${DOWNLOAD_SUFFIX_CAP} different variants — refusing to mint more`,
+                    };
+                  }
+                  finalName = downloadSuffixName(name, counter);
+                }
+                const target = join(downloadsDir, finalName);
+                if (!reused) {
+                  writeFileSync(target, fetched.bytes);
+                }
+                const size = statSync(target).size;
+                const relativePath = `downloads/${finalName}`;
+                // The announcement frame — beside the browser-navigate emit
+                // pattern: turn-independent fields (tabId + chatSessionId +
+                // the project-relative path + the size) so the frontend
+                // (B-ui's stream-store handler) can toast/card it whenever it
+                // lands. Additive: an older frontend ignores the unknown type.
+                if (toolDeps !== undefined && typeof toolDeps.emit === "function") {
+                  try {
+                    toolDeps.emit({
+                      type: "browser-download",
+                      sessionId: chatSessionId ?? "",
+                      tabId: sessionId,
+                      path: relativePath,
+                      bytes: size,
+                    });
+                  } catch {
+                    // The frame is an enhancement — never break the download.
+                  }
+                }
+                return {
+                  ok: true,
+                  output:
+                    `download ok (tab '${sessionId}') → ${reused ? `already saved as ${relativePath} (byte-identical — nothing overwritten, nothing re-written)` : `saved ${relativePath}`} (${size} bytes, ${contentType}, ${magicNote}) from ${fetched.finalUrl}` +
+                    (referer !== null ? ` — fetched with the tab's cookies and the panel's user agent (referer: ${referer})` : " — fetched with the panel's user agent") +
+                    `. The file is in the project's downloads/ folder (project-relative path above); the owner can open it from the Files tree.`,
+                };
+              } catch (error) {
+                return {
+                  ok: false,
+                  output: `browser_control: download — writing the file failed: ${error instanceof Error ? error.message : String(error)}`,
+                };
+              }
             }
 
             // ── R62 (D8): screenshot — capture + describe the panel ─────────
@@ -1873,7 +2411,18 @@ export const browserPlugin: PluginDefinition = {
               // truth (the navigate wall-probe's 5s pattern) and OVERRIDES
               // the store's answer; on failure/timeout (no panel mounted, a
               // wedged page) the store's answer stands verbatim — today's
-              // behavior, never a hang.
+              // behavior, never a hang. R131-B (defect 7a) verified the
+              // loading-page robustness: the probe reads only location.href
+              // + document.title (both available on a LOADING page — the
+              // ledger's title:null-on-example.com shape is covered by the
+              // try/catch + this very override), and a REJECTED or
+              // malformed probe keeps the store's answer (pinned in
+              // browser-tool.test.ts — the non-string-url + bridge-error
+              // legs). The NATIVE title delivery (the panel posting titles
+              // on navigation) is the B-ui sibling's leg;
+              // browserNavigateCore's redirect-collapse branch
+              // (browser-proxy.ts) folds the panel's landed-url reports into
+              // the entry the tool commanded.
               let currentUrl = state.currentUrl;
               let title = state.title;
               if (currentUrl !== null && toolDeps !== undefined && typeof toolDeps.emit === "function") {
@@ -1916,10 +2465,18 @@ export const browserPlugin: PluginDefinition = {
               };
               return { ok: true, output: JSON.stringify(payload) };
             }
-            return {
-              ok: false,
-              output: `browser_control: unknown action '${action}' (navigate | back | forward | reload | set_viewport | read | read_dom | source | click | type | press_key | eval | wait | sequence | screenshot | get_state | wait_for_verification)`,
-            };
+            // ── R131-B (defect 6): the nearest-match refusal ─────────────────
+            // The bare list (which even omitted `mouse`) is now the vocabulary
+            // from BROWSER_CONTROL_ACTIONS, prefixed by the did-you-mean hint
+            // when the typo is close (prefix or ≤2 edits) — a far-off garbage
+            // action gets the plain list, never a forced hint.
+            {
+              const hint = nearestBrowserAction(action);
+              return {
+                ok: false,
+                output: `browser_control: unknown action '${action}'${hint !== null ? ` — did you mean '${hint}'?` : ""} (${BROWSER_CONTROL_ACTIONS.join(" | ")})`,
+              };
+            }
           };
 
           // ── ROUND-94 (R94-F): sequence — the multi-stage step chain ──
@@ -1964,9 +2521,13 @@ export const browserPlugin: PluginDefinition = {
                 };
               }
               if (!SEQUENCE_STEP_ACTIONS.has(stepAction)) {
+                // R131-B (defect 6): the same nearest-match discipline as the
+                // top-level refusal — a close typo gets the hint, garbage gets
+                // the plain list.
+                const hint = nearestBrowserAction(stepAction);
                 return {
                   ok: false,
-                  output: `browser_control: sequence — step action '${stepAction}' is not allowed (allowed step actions: ${[...SEQUENCE_STEP_ACTIONS].join(" | ")})`,
+                  output: `browser_control: sequence — step action '${stepAction}' is not allowed${hint !== null ? ` — did you mean '${hint}'?` : ""} (allowed step actions: ${[...SEQUENCE_STEP_ACTIONS].join(" | ")})`,
                 };
               }
               steps.push(step);

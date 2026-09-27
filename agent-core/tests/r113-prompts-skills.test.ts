@@ -270,7 +270,14 @@ describe("R113-f P4: the 24,000 budget holds without a bump", () => {
     // 25,000 recalibration). The floor keeps the retirements honest —
     // the additions survived as content.
     const composed = buildProjectSystemPrompt(ctxFor());
-    expect(composed.length).toBeLessThanOrEqual(24_900); // R127-W6: the agent-smarter additions measured 24,804
+    // R127-W6 measured 24,804; R131-B (the browser leap) adds exactly +265
+    // (the browser-panel Actions line's offset/range clause + the NEW
+    // download action, the Forms line's type requested-vs-observed echo —
+    // the round-131 three-file lockstep law) — measured 25,083. The bound
+    // moves with the same precedent (mirrors r71 D6's 25,200
+    // recalibration); the floor keeps the retirements honest — the
+    // additions survived as content.
+    expect(composed.length).toBeLessThanOrEqual(25_100); // R131-B: the browser-leap lockstep measured 25,083
     expect(composed.length).toBeGreaterThanOrEqual(23_000);
   });
 });

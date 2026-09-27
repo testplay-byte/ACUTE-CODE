@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-24 round-125 -->
+<!-- last-reviewed: 2026-09-27 round-131 -->
 # EMBEDDED BROWSER — the agent's in-app browser panel (owner's guide)
 
 **Status:** normative · **Established:** round-43 (the panel + the tool);
@@ -8,21 +8,27 @@ surface, the bot-wall checkpoint, the instant viewport apply), round-67
 decoder, the chat-session tab binding, per-project cookies), round-99
 (the central in-app link router) and round-100 (the honest engine rework:
 the evergreen runtime restored, the de-branded ACUTE user agent, the
-engine line in Settings/About — the fixedRuntime bundle RETIRED) ·
+engine line in Settings/About — the fixedRuntime bundle RETIRED), round-131
+(the browser leap: the `download` action + the eight tool truths — click's
+vanished-job re-probe, the navigation-aware wait, read_dom's rendered-text
+discipline + the offset/range cursor, eval's null diagnostics, type's
+requested-vs-observed echo, the nearest-match refusals, the
+redirect-collapse history window) ·
 **Audience:** the owner watching the panel and solving walls, and any agent
 maintaining the surface
 
 The embedded browser is a REAL web browser panel inside the app's right
 sidebar — you watch it live while the agent drives it with the
 `browser_control` tool. R66 grew it from a navigate/observe surface into a
-**15-action page driver**: the agent can identify elements and interact with
+**16-action page driver**: the agent can identify elements and interact with
 them (click, type, press keys) WITHOUT screenshots, submit forms the way a
-user does, read the page's DOM and source, and PAUSE for you when a bot wall
+user does, read the page's DOM and source, SAVE FILES the way a browser's
+save-as does, and PAUSE for you when a bot wall
 (captcha / Cloudflare / age gate) blocks the page. It is a separate surface
 from computer use: it never opens your real Edge/Chrome and never touches
 your desktop (the R65 SURFACE BOUNDARY prompt line enforces the narration).
 
-## The 15 actions (`browser_control`)
+## The 16 actions (`browser_control`)
 
 "Any mode" = works in web dev mode too (server-side state/fetch);
 "native bridge" = needs the desktop app's WebView2 page — the tool sends
@@ -35,12 +41,13 @@ answers an honest refusal, exactly like the raw `eval` action).
 | `back` / `forward` / `reload` | Walk that tab's history (honest "did nothing" at a boundary) | any mode |
 | `set_viewport` | Change the display size you see — presets (mobile-sm 375×667 … full-hd 1920×1080) or custom 200–3840 × 200–4320, zoom 0.25–3, rotate swaps w/h | any mode |
 | `read` | The current page's TEXT, fetched fresh server-side (the logins/JS of the live panel may differ — this is the clean fetch) | any mode |
-| `read_dom` | A STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element (tag, text, label, value, a short selector, size), forms with field names; `include:"all"` adds the first 80 text paragraphs — THE way to know the page without screenshots | native bridge |
+| `read_dom` | A STRUCTURED outline of the live page as JSON — title, headings, every visible interactive element (tag, text, label, value, a short selector, size), forms with field names; `include:"all"` adds the first 80 text paragraphs; `offset`/`range` page the interactive elements on huge pages ("showing elements N..M of T") — THE way to know the page without screenshots | native bridge |
 | `source` | The live page's raw material: `html` (outerHTML, whole page or one selector), `css` (stylesheets + the computed style of a selector), `scripts` (src list + inline bodies) | native bridge |
 | `click` | Click an element — by CSS selector, or by a case-insensitive substring of a clickable's visible text/aria-label/name/value/title (e.g. a button's label; `nth` picks among several matches) | native bridge |
 | `type` | Set an input's value with the NATIVE value setter + input/change events (React/Vue pages register it — a plain `el.value = x` is invisible to them); `submit:true` submits the form after typing | native bridge |
 | `press_key` | Dispatch a key (Enter, Tab, Escape, Backspace, Delete, arrows, Space, a character) to an element or the focused element; **Enter inside a form triggers REAL native form submission** | native bridge |
 | `eval` | Run JavaScript INSIDE the live page and get the value back (function-body semantics: end with `return value`; ≤20 000 chars) | native bridge |
+| `download` | Save a file into the project's `downloads/` folder — the panel's own save-as: fetched with the tab's cookies + the panel's user agent + the page as referer, dedupe-named (nothing is ever silently overwritten), with a content-type + magic-byte verdict in the result; a `browser-download` frame announces it | any mode |
 | `screenshot` | Capture what the panel shows + a vision-model description (needs Computer Use's capture engine enabled; the vision model is configured in Settings → Image Analysis) | bridge + capture engine |
 | `get_state` | currentUrl, title, viewport, canBack/canForward + THIS chat session's tab (R67: the list is scoped to the binding — never another session's tab) | any mode |
 | `wait_for_verification` | The page is blocked by a bot wall — opens the countdown card in YOUR chat and waits while you solve it (see below) | probe bridge-first, fetch fallback; the card rides the live turn's SSE |
@@ -71,6 +78,19 @@ WITHOUT creating the WebView2 child. The fix, in three legs:
   instead of silently adopting (covers frames missed while the panel was
   unmounted). The frame needs the turn's live SSE stream — outside a turn
   the poll (with the same create-on-adopt) is the only channel.
+
+R131-B addition, the **redirect-collapse window** (the history-drift fix):
+the tool's `navigate` pushes the COMMANDED url, then the panel reports the
+LANDED url (`POST /browser/navigate` from its location hook) — the old
+core pushed BOTH, so one navigation read as `index 1, historyLength 2,
+canBack true` (the ledger's recurring complaint). Now a location report
+landing within **2.5 s** of a TOOL-COMMANDED navigation REPLACES the
+pending entry (its url/title update, no new index — the answer's action is
+`"redirect-collapse"`), multi-hop chains all fold into the one entry, and
+the window is bounded: a report that arrives late, or after a back/
+forward, pushes honestly. The panel can arm the same window for its own
+address-bar commands by sending `commanded: true` (the route forwards the
+flag — a B-ui follow-up, never required).
 
 ## The binding model (R67 — one chat session, one tab)
 
@@ -144,6 +164,14 @@ the tool description + the prompt section now teach:
   trigger native submission on their own, so Enter inside a form ALSO calls
   `requestSubmit()` and reports `submitted:true`.
 - `click` the submit button by its visible text.
+
+R131-B addition, the **requested-vs-observed echo**: the `type` result now
+opens with `submit requested: false/true · observed: …` — BOTH sides of
+the story, because the field ledger caught a Google page whose own key
+listener submitted the form while the call carried `submit:false` and the
+bare `submitted:true` was unattributable. A `submitted:true` under
+`requested:false` means the PAGE submitted on its own (the note says so);
+the agent never claims it commanded what it merely observed.
 
 ## The bot-wall protocol (captcha / Cloudflare / age gates)
 
@@ -220,6 +248,62 @@ value + its size, forms with field names — capped at 12 000 chars
 into the raw HTML/CSS/JS when the outline is not enough. Both ride the
 same eval bridge as `eval` (one script per action; user input is embedded
 via `JSON.stringify` only — never string-concatenated into the script).
+
+R131-B, two laws the field ledger forced:
+
+- **RENDERED text, never serialized text.** Element text and paragraphs
+  come from the page's RENDERED text (`innerText` — the same discipline
+  the wall probe uses), and the paragraph walker skips
+  `style/script/noscript/template` ancestors outright. The confirmed
+  defect: a Google homepage `<button>` whose `text` was a raw CSS blob
+  (`.plR5qb.PHjFye .CbxW7b{display:none}…`) because `textContent`
+  serializes unrendered code into element text.
+- **The offset/range cursor.** On a huge page, pass `offset` (skip the
+  first N interactive elements) and optional `range` (default 120, max
+  500): the result says `showing elements N..M of T` — an ELEMENT-COUNT
+  cursor cut in the page script, never the old mid-payload byte
+  truncation that died mid-element (the ledger's ~3.4KB-truncated read).
+  `offset` beyond the end answers the honest empty + the count. The outer
+  `maxChars` cap stays and its marker now suggests the offset hatch.
+
+## Saving files — the download action (R131-B)
+
+The owner's verdict on the panel's capability: "it is not able to
+right-click and then click save as and save to the download folder as it
+needs to be… a full-fledged browser." The agent-side half is the
+**`download`** action — the tool's own save-as:
+
+- **Page-context fetch.** The sidecar fetches the URL through the same
+  guarded upstream walk every proxied page rides (`fetchUpstreamGuarded`):
+  the tab's PER-PROJECT cookie jar on every hop (login-gated downloads
+  work), the panel's user agent, and the tab's current page as the referer
+  — never a fabricated one. Redirects are followed and re-guarded per hop;
+  non-http(s) URLs are refused; the honest size cap is 50 MB.
+- **The pinned location.** Files land in `<projectRoot>/downloads/` (the
+  ROUND-115 pinned folder, the twin of `attachments/`), created on demand.
+  The output's path is PROJECT-RELATIVE (`downloads/report.pdf`).
+- **Never a silent overwrite.** The attachments law mirrored: a name
+  collision with DIFFERENT bytes mints `-2`/`-3` suffixes; byte-identical
+  content is REUSED and reported as such (re-downloading the same file is
+  a no-op). The model's `filename` is sanitized to a bare name (path
+  separators die — no `../` escapes); without one, the URL's last path
+  segment names the file.
+- **The magic-byte verdict rides the output.** PNG/JPEG/GIF/WEBP markers
+  are sniffed against the content-type: a mismatch is REPORTED ("the
+  content-type says image/png but the bytes carry no known image signature
+  — likely an HTML error page served as a 'successful' download") with the
+  requested filename KEPT — the agent decides what to trust, the tool
+  never silently renames.
+- **The announcement.** A **`browser-download`** SSE frame
+  `{tabId, sessionId, path, bytes}` rides the turn's stream beside the
+  `browser-navigate` pattern, so the frontend can toast/card the save.
+- **Honest failures.** Every miss names its cause: the HTTP status, the
+  transport error, the cap, or the missing project context (downloads
+  need a project-bound chat session — that is where the folder lives).
+
+The NATIVE right-click "save image as…" pipeline (WebView2's
+`DownloadStarting` handler writing to the same folder) is the B3 sibling
+wave — both halves land the same location.
 
 ## The monitor boundary
 
@@ -383,6 +467,19 @@ user can always reach the device's browser deliberately.
 - **The router's in-app leg needs a project context** — a link clicked
   on a global surface before any project is opened degrades honestly to the
   system browser (the result says so).
+- **`download` is fetched, not gated like a navigation** (R131-B's honest
+  scoping): the action reuses the tab's cookie context but is NOT routed
+  through the `web_fetch` host-approval gate — the brief's contract (the
+  page-context fetch, the scheme/private-net guard, the 50 MB cap, the
+  project-relative path) is the whole law. If downloads should carry the
+  same host gate as `navigate`/`web_fetch`, that is an owner-gated follow-up.
+  The magic-byte sniff covers PNG/JPEG/GIF/WEBP only (a mismatch is
+  reported, other formats ride on trust of the content-type).
+- **The redirect-collapse window is 2.5 s and tool-armed only** (R131-B):
+  a location report landing LATE (a slow redirect chain, a hung page) still
+  pushes a second entry — the drift returns for those shapes, honestly.
+  The panel's own address-bar commands do not arm the window until B-ui
+  sends `commanded: true` (the route already forwards it).
 
 ## See also
 
@@ -394,10 +491,13 @@ user can always reach the device's browser deliberately.
   ephemeral screenshot rasters the browser screenshot now publishes)
 - [EXTENSIBILITY](EXTENSIBILITY.md) — where `browser_control` sits in the
   tool vocabulary
-- Code map: the tool `agent-core/src/tools/plugins/browser.ts` (15 actions,
+- Code map: the tool `agent-core/src/tools/plugins/browser.ts` (16 actions,
   the page-script builders, the wall probe, the binding resolution + the
-  navigate/open frames + the screenshot thumbnail frame), the binding Map +
-  the bind route + the session mint `agent-core/src/browser-proxy.ts`, the
+  navigate/open/download frames + the screenshot thumbnail frame + the
+  nearest-match refusals), the binding Map +
+  the bind route + the session mint `agent-core/src/browser-proxy.ts` (the
+  redirect-collapse window + the download fetch
+  `browserFetchForDownload`), the
   checkpoint registry + detector `agent-core/src/browser-checkpoint.ts`, the
   resolve route + the wall probe wiring in `agent-core/src/server.ts`, the
   bridge answer channel `POST /api/v1/browser-commands/:id/result`

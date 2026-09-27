@@ -22,7 +22,13 @@ import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { ProviderKeyring } from "../src/providers/registry";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { buildServer } from "../src/server";
+// R131-B: browserNavigateCommand/browserGetStateCommand/browserFetchForDownload
+// are the tool-side entry points (they operate on the ACTIVE store the
+// booted server registered — the same one the routes use).
 import {
+  browserFetchForDownload,
+  browserGetStateCommand,
+  browserNavigateCommand,
   extendPrivateNetAllowlistForTest,
   resetPrivateNetAllowlistForTest,
 } from "../src/browser-proxy";
@@ -162,6 +168,10 @@ const upstreamHandler = (req: http.IncomingMessage, res: http.ServerResponse): v
           contentType: req.headers["content-type"] ?? null,
           cookie: req.headers.cookie ?? null,
           authorization: req.headers.authorization ?? null,
+          // R131-B: the download fetch's page-context contract (referer + UA)
+          // needs an honest echo.
+          referer: req.headers.referer ?? null,
+          userAgent: req.headers["user-agent"] ?? null,
         };
         // Guard against accidental credential forwarding in rewrites/tests.
         void res.writeHead(200, { "content-type": "application/json", "set-cookie": "leak=1; Path=/" });
@@ -169,6 +179,12 @@ const upstreamHandler = (req: http.IncomingMessage, res: http.ServerResponse): v
       });
       return;
     }
+    case "/huge-dl":
+      // R131-B: a DECLARED size over the download action's 50MB cap — the
+      // declared-content-length precheck refuses before any body is read
+      // (the wire only ever carries the few bytes below).
+      send(200, { "content-type": "application/octet-stream", "content-length": String(51 * 1024 * 1024) }, "x");
+      return;
     default:
       send(404, { "content-type": "text/plain" }, `unknown mock path ${url.pathname}`);
   }
@@ -1079,5 +1095,177 @@ describe("GET /browser/local-file (R95-C)", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain("<h1>Local page</h1>");
+  });
+});
+
+// ── ROUND-131 (R131-B, defect 7b): the REDIRECT-COLLAPSE history window ────
+// The ledger's recurring drift: "navigate reported history index 0, canBack
+// false, while the immediately following get_state answered index 1,
+// historyLength 2, canBack true for the same session" — the dual-writer bug
+// (the TOOL pushes the COMMANDED url; the panel's location report re-pushes
+// the LANDED url; one navigation becomes two entries). The fix: a location
+// report arriving within 2.5s of a TOOL-COMMANDED navigation REPLACES the
+// pending entry (url/title updated, no new index).
+
+describe("R131-B: the redirect-collapse window (the dual-writer history drift fix)", () => {
+  const COMMANDED = "https://google.com/";
+  const LANDED = "https://www.google.com/";
+
+  it("THE LEDGER PIN: command google.com → the panel reports the landed www url → get_state answers index 0, historyLength 1, canBack false", async () => {
+    // The Fastify scope plugin registers the route store LAZILY (first boot
+    // request/ready — the R67/E3 "route store registers as the active tool
+    // store" law): ready() first so the COMMAND and the ROUTE share one
+    // store, exactly like production's single booted server.
+    await app.ready();
+    // The TOOL's navigation is COMMANDED (browserNavigateCommand sets the
+    // internal flag that arms the window).
+    const command = browserNavigateCommand(SESSION, { url: COMMANDED });
+    expect(command.ok).toBe(true);
+    if (!command.ok) throw new Error("the commanded navigation failed"); // narrow for the field pins below
+    expect(command.action).toBe("push");
+    expect(command.index).toBe(0);
+    expect(command.canBack).toBe(false);
+
+    // The panel's handleLocationMessage report (POST /browser/navigate,
+    // no commanded flag) lands within the window.
+    const report = await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: LANDED, title: "Google" } });
+    expect(report.statusCode).toBe(200);
+    expect((report.json() as { action: string }).action).toBe("redirect-collapse");
+
+    // THE ledger's exact complaint, answered: one navigation, one entry.
+    const state = browserGetStateCommand(SESSION);
+    expect(state).toMatchObject({
+      currentUrl: LANDED,
+      title: "Google",
+      index: 0,
+      historyLength: 1,
+      canBack: false,
+      canForward: false,
+    });
+    // And the HTTP history view agrees (no second entry, no back affordance).
+    const history = (await inject({ method: "GET", url: `/api/v1/browser/history?sessionId=${SESSION}` })).json() as {
+      entries: Array<{ url: string; title: string | null }>;
+      index: number;
+      canBack: boolean;
+    };
+    expect(history.entries.map((e) => e.url)).toEqual([LANDED]);
+    expect(history.entries[0].title).toBe("Google");
+    expect(history).toMatchObject({ index: 0, canBack: false });
+  });
+
+  it("multi-hop chains all collapse into the ONE entry while the window is armed", async () => {
+    await app.ready();
+    browserNavigateCommand(SESSION, { url: COMMANDED });
+    await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: LANDED, title: "Google" } });
+    // A second hop (another landed url) inside the window replaces again.
+    const second = await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: "https://www.google.co.uk/", title: "Google UK" } });
+    expect((second.json() as { action: string }).action).toBe("redirect-collapse");
+    const state = browserGetStateCommand(SESSION);
+    expect(state).toMatchObject({ currentUrl: "https://www.google.co.uk/", title: "Google UK", index: 0, historyLength: 1, canBack: false });
+  });
+
+  it("a report OUTSIDE the window (or after a pointer move) pushes honestly — the collapse is bounded, never permanent", async () => {
+    await app.ready();
+    browserNavigateCommand(SESSION, { url: COMMANDED });
+    // (a) Too late: >2.5s after the command. Date.now is patched for the
+    // report's window check only (the entry's ts is cosmetic).
+    const realNow = Date.now;
+    const late = vi.spyOn(Date, "now").mockImplementation(() => realNow() + 10_000);
+    const pushed = await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: LANDED } });
+    late.mockRestore();
+    expect((pushed.json() as { action: string }).action).toBe("push");
+    expect(browserGetStateCommand(SESSION)).toMatchObject({ index: 1, historyLength: 2, canBack: true });
+
+    // (b) A back/forward between command and report invalidates the window:
+    // command again (arms at index 1), walk back, then report → PUSH.
+    browserNavigateCommand(SESSION, { url: "https://d.example/" }); // index 2, arms
+    await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, direction: "back" } }); // index 1
+    const honest = await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: "https://www.google.com/after-back" } });
+    expect((honest.json() as { action: string }).action).toBe("push");
+    expect(browserGetStateCommand(SESSION)).toMatchObject({ historyLength: 3, index: 2 });
+  });
+
+  it("the HTTP route forwards a panel-sent commanded:true — the B-ui address-bar door arms the same window", async () => {
+    // The panel's OWN address-bar command can opt into the collapse later by
+    // sending commanded:true (the route passes it through untouched).
+    const armed = await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: COMMANDED, commanded: true } });
+    expect((armed.json() as { action: string }).action).toBe("push");
+    const report = await inject({ method: "POST", url: "/api/v1/browser/navigate", payload: { sessionId: SESSION, url: LANDED, title: "Google" } });
+    expect((report.json() as { action: string }).action).toBe("redirect-collapse");
+    expect(browserGetStateCommand(SESSION)).toMatchObject({ index: 0, historyLength: 1, canBack: false });
+  });
+});
+
+// ── ROUND-131 (R131-B, defect 8): the download fetch engine ────────────────
+// browserFetchForDownload is the browser_control download action's fetch leg
+// (the tab's per-project cookie jar + the panel's UA + the page referer, via
+// the REAL fetchUpstreamGuarded walk — redirects re-guarded per hop).
+
+describe("R131-B: browserFetchForDownload (the page-context fetch)", () => {
+  it("fetches the bytes with the content type + final URL (redirect hops followed, re-guarded)", async () => {
+    const direct = await browserFetchForDownload("tab-r131-dl", `${upstreamBase}/img.png`, null);
+    expect(direct.ok).toBe(true);
+    if (!direct.ok) return;
+    expect(direct.bytes).toEqual(PNG_BYTES);
+    expect(direct.contentType).toBe("image/png");
+    expect(direct.finalUrl).toBe(`${upstreamBase}/img.png`);
+
+    // The redirect walk lands the FINAL url (and the guard survives a hop).
+    const hopped = await browserFetchForDownload("tab-r131-dl", `${upstreamBase}/redirect`, null);
+    expect(hopped.ok).toBe(true);
+    if (!hopped.ok) return;
+    expect(hopped.finalUrl).toBe(`${upstreamBase}/page.html`);
+    expect(hopped.contentType).toContain("text/html");
+  });
+
+  it("the tab's per-project cookie jar rides the fetch (logins survive a download)", async () => {
+    // A first same-session fetch ingests the cookie into the session's
+    // project jar (profile _default — the session's own binding).
+    const setter = await browserFetchForDownload("tab-r131-jar", `${upstreamBase}/set-cookie`, null);
+    expect(setter.ok).toBe(true);
+    // The echo answers what actually rode the second request.
+    const echoed = await browserFetchForDownload("tab-r131-jar", `${upstreamBase}/echo`, null);
+    expect(echoed.ok).toBe(true);
+    if (!echoed.ok) return;
+    const seen = JSON.parse(echoed.bytes.toString("utf8")) as { cookie: string | null; referer: string | null; userAgent: string | null };
+    expect(seen.cookie).toContain("victim=sess123");
+    expect(seen.referer).toBeNull(); // no page open — never a fabricated referer
+    // The panel's UA (the same one every proxied page fetch presents).
+    expect(seen.userAgent).toContain("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+  });
+
+  it("the referer is the page the user is looking at (sent whole, never guessed)", async () => {
+    const echoed = await browserFetchForDownload("tab-r131-ref", `${upstreamBase}/echo`, "https://board.example/pins/cat-girls");
+    expect(echoed.ok).toBe(true);
+    if (!echoed.ok) return;
+    const seen = JSON.parse(echoed.bytes.toString("utf8")) as { referer: string | null };
+    expect(seen.referer).toBe("https://board.example/pins/cat-girls");
+  });
+
+  it("failures are honest: upstream statuses named, the 50MB download cap, the SSRF guard, bad URLs", async () => {
+    const missing = await browserFetchForDownload("tab-r131-err", `${upstreamBase}/missing`, null);
+    expect(missing.ok).toBe(false);
+    if (missing.ok) return;
+    expect(missing.error).toContain("HTTP 404");
+    expect(missing.error).toContain(`${upstreamBase}/missing`);
+
+    // The DECLARED size over the 50MB cap — refused before the body is read
+    // (readCapped's declared-content-length precheck, renamed honestly).
+    const huge = await browserFetchForDownload("tab-r131-err", `${upstreamBase}/huge-dl`, null);
+    expect(huge.ok).toBe(false);
+    if (huge.ok) return;
+    expect(huge.error).toContain("51 MiB — over the 50 MiB download cap");
+
+    // The private-net SSRF guard (127.0.0.1:9 is NOT in the test allowlist).
+    const lan = await browserFetchForDownload("tab-r131-err", "http://127.0.0.1:9/private", null);
+    expect(lan.ok).toBe(false);
+    if (lan.ok) return;
+    expect(lan.error).toContain("refused private-network target 127.0.0.1:9");
+
+    // A garbage URL is refused before any socket opens.
+    const junk = await browserFetchForDownload("tab-r131-err", "not a url at all", null);
+    expect(junk.ok).toBe(false);
+    if (junk.ok) return;
+    expect(junk.error).toContain("not a valid absolute URL");
   });
 });

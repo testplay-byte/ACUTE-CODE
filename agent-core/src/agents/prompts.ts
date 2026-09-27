@@ -1392,12 +1392,21 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // five non-obvious roles — the section's own doctrine ("per-action
     // detail lives in the tool's own schema description") finally applies
     // to its longest line. The schema pointer keeps the parameters findable.
-    ident("- Actions: navigate, back/forward/reload, set_viewport, read (server-side text), read_dom (structured outline — the way to know the page without screenshots), click, type (submit:true submits), press_key (Enter = native form submit), source, eval (the fallback when selectors fail), wait, sequence (multi-step chain in one call), screenshot, get_state, wait_for_verification (bot-wall pause). Full parameters live in the browser_control schema.");
+    // ROUND-117 (R117-c, C1) trimmed head → the per-action detail lives in the
+    // tool's inputSchema. R131-B (B-core, defect 8): `download` joins the
+    // vocabulary (the agent-side save-as: the tab's cookies + the panel's UA
+    // → <projectRoot>/downloads/, dedupe-named, magic-byte verdict) — the
+    // three-file lockstep law (schema enum + this section + the browser-use
+    // skill body) all move together.
+    ident("- Actions: navigate, back/forward/reload, set_viewport, read (server-side text), read_dom (structured outline — the way to know the page without screenshots; offset/range pages huge pages), click, type (submit:true submits), press_key (Enter = native form submit), source, eval (the fallback when selectors fail), download (saves a file into the project's downloads/ folder — the panel's own save-as), wait, sequence (multi-step chain in one call), screenshot, get_state, wait_for_verification (bot-wall pause). Full parameters live in the browser_control schema.");
     // ROUND-94 (R94-G): the workflow discipline for the R94-F actions —
     // the owner's field report had the agent clicking into a page that
     // never settled. Navigate → wait → read_dom → verify BEFORE acting.
     ident("- **Navigation settles:** after navigate/back/forward/reload call wait, then read_dom and verify the element you need exists before interacting — never act on a page that may still be loading. Prefer sequence for known multi-step chains (fewer round-trips, one atomic failure report).");
-    ident("- **Forms:** typing alone never submits — type with submit:true, press_key key Enter (native requestSubmit), or click the submit button by text.");
+    // R131-B (defect 5): the requested-vs-observed echo — the type result
+    // names BOTH sides, so a page-initiated submission is distinguishable
+    // from an agent-commanded one at a glance (the ledger's ambiguity).
+    ident("- **Forms:** typing alone never submits — type with submit:true, press_key key Enter (native requestSubmit), or click the submit button by text. The type result echoes \"submit requested: false/true · observed: …\" — a submitted:true under requested:false means the PAGE submitted on its own.");
     // ROUND-66 (R66, A4): the bot-wall protocol — detect (⚠) →
     // wait_for_verification → honest re-probe result. (R94-G: tightened.)
     ident("- **Bot walls:** a navigate/read/click result warning '⚠ A verification wall' (CAPTCHA / Cloudflare / age gate) means stop retrying — call action wait_for_verification (the user solves it in the panel; you receive the honest re-probe result).");

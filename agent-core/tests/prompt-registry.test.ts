@@ -472,7 +472,19 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // extends the wait clause with the prefix/dependent-set shape; (3) the
     // TOOL USE descriptions block's read_file line gains the ~128KB
     // whole-file clause. NOTHING else moved.
-    const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r127.txt"), "utf8").replace(/\r\n/g, "\n");
+    // Re-pinned in R131-B (the browser-leap wave, defect 8's lockstep law)
+    // as a NEW fixture — fixtures/prompt-golden-r131.txt — per the SAME
+    // R117-c/R127-W6 fork precedent (the r127 file becomes history below).
+    // The verified diff (git diff of the fixture, read before regenerating
+    // — never blind) is EXACTLY two hunks, +2/−2 lines, both inside the
+    // EMBEDDED BROWSER PANEL section: (1) the Actions line gains read_dom's
+    // "offset/range pages huge pages" clause and the NEW download action
+    // ("download (saves a file into the project's downloads/ folder — the
+    // panel's own save-as)"); (2) the Forms line gains the requested-vs-
+    // observed echo clause ("The type result echoes \"submit requested:
+    // false/true · observed: …\" — a submitted:true under requested:false
+    // means the PAGE submitted on its own"). NOTHING else moved.
+    const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r131.txt"), "utf8").replace(/\r\n/g, "\n");
     const composed = buildProjectSystemPrompt(FULL_CTX).replace(/\r\n/g, "\n");
     expect(composed).toBe(golden);
   });
@@ -485,14 +497,33 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // then the BYTE-IDENTITY pin above holds the new composition. Without
     // the env var this is a no-op (normal runs never touch the fixture).
     if (process.env.UPDATE_GOLDEN !== "1") return;
-    writeFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r127.txt"), buildProjectSystemPrompt(FULL_CTX));
+    writeFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r131.txt"), buildProjectSystemPrompt(FULL_CTX));
+  });
+
+  it("R131-B: the R127-era golden stays in fixtures/ as HISTORY — superseded by prompt-golden-r131.txt, never byte-compared again", () => {
+    // The R117-c fork precedent, two eras later: the r127 fixture is the
+    // record of what the prompt WAS before the R131-B browser-leap
+    // lockstep additions; the r131 fixture is the live byte-identity
+    // anchor. The old file is pinned present-on-disk so it cannot be
+    // silently deleted.
+    expect(existsSync(join(import.meta.dirname, "fixtures", "prompt-golden-r127.txt"))).toBe(true);
+    const history = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r127.txt"), "utf8").replace(/\r\n/g, "\n");
+    // It is the pre-R131-B composition: its browser Actions line has no
+    // download action and no offset/range clause, and its Forms line has
+    // no requested-vs-observed echo — the markers that prove it is
+    // history, not live.
+    expect(history).toContain("source, eval (the fallback when selectors fail), wait, sequence (multi-step chain in one call)");
+    expect(history).not.toContain("download (saves a file into the project's downloads/ folder");
+    expect(history).not.toContain("offset/range pages huge pages");
+    expect(history).not.toContain("submit requested: false/true");
   });
 
   it("R127-W6: the R117-era golden stays in fixtures/ as HISTORY — superseded by prompt-golden-r127.txt, never byte-compared again", () => {
     // The R117-c fork precedent, one era later: the r117 fixture is the
     // record of what the prompt WAS before the R127-W6 agent-smarter
-    // additions; the r127 fixture is the live byte-identity anchor. The
-    // old file is pinned present-on-disk so it cannot be silently deleted.
+    // additions; the r127 fixture was the live anchor until R131-B forked
+    // the lineage again (see above). The old file is pinned present-on-disk
+    // so it cannot be silently deleted.
     expect(existsSync(join(import.meta.dirname, "fixtures", "prompt-golden-r117.txt"))).toBe(true);
     const history = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r117.txt"), "utf8").replace(/\r\n/g, "\n");
     // It is the pre-R127 composition: its BATCH DISCIPLINE bullet still

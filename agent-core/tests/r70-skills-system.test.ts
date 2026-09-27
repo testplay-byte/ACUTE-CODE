@@ -506,8 +506,13 @@ describe("R70-b D2: the seven new built-in skills", () => {
     ["git-workflow", "skill_builtin_git_workflow"],
     ["web-research", "skill_builtin_web_research"],
     ["project-init", "skill_builtin_project_init"],
-    ["browser-use", "skill_builtin_browser_use"],
-    // R71-e3: the four new ones ride the same house-format contract.
+    // R131-B: browser-use LEAVES this band — the browser-leap lockstep
+    // (the download discipline + the offset/range paging + the requested-
+    // vs-observed echo, round-131.md §1 Wave B's three-file law) grew its
+    // body 2,191 → 2,947 chars, over the 2,200 house band. Its OWN pin
+    // below re-calibrates the band with the measured number (the R96-D
+    // format-exception precedent + the R127-W6 budget precedent — the bound
+    // moves to hold owner-mandated content, never the reverse).
     ["focused-fix", "skill_builtin_focused_fix"],
     ["zero-hallucination", "skill_builtin_zero_hallucination"],
     ["self-eval", "skill_builtin_self_eval"],
@@ -578,6 +583,31 @@ describe("R70-b D2: the seven new built-in skills", () => {
       expect((skill?.description ?? "").length).toBeLessThanOrEqual(500);
     },
   );
+
+  it("browser-use: body 800–3,000 chars (R131-B re-calibration), ≤ 60 lines, description ≤ 500 — the browser-leap lockstep lives here", () => {
+    // R70-b measured 2,191 — riding the top of the 2,200 band for eleven
+    // rounds. R131-B (round-131.md §1 Wave B, defect 8's three-file law)
+    // adds the download discipline section + the read_dom offset/range
+    // paging sentence + the type requested-vs-observed echo — measured
+    // 2,947. The band moves to 3,000 (the R127-W6 budget precedent: the
+    // bound holds owner-mandated content, never degrades it); the ≤ 60
+    // LINE discipline is untouched (26 measured) — the growth is CONTENT,
+    // not sprawl.
+    const skill = getSkill(db, "skill_builtin_browser_use");
+    expect(skill).toBeDefined();
+    const body = skill?.body ?? "";
+    expect(body.length).toBeGreaterThanOrEqual(800);
+    expect(body.length).toBeLessThanOrEqual(3000);
+    expect(body.trim().split("\n").length).toBeLessThanOrEqual(60);
+    expect(body.startsWith("# Skill: browser-use")).toBe(true);
+    expect((skill?.description ?? "").length).toBeGreaterThan(60);
+    expect((skill?.description ?? "").length).toBeLessThanOrEqual(500);
+    // The R131-B teachings are IN the body (the lockstep the pin guards).
+    expect(body).toContain("download {url, filename?}");
+    expect(body).toContain("downloads/ folder");
+    expect(body).toContain("offset/range walks the interactive elements");
+    expect(body).toContain("submit requested: false/true");
+  });
 
   it("the bodies teach the intended disciplines (content pins)", () => {
     const bodies = new Map(listSkills(db).filter((s) => s.source === "builtin").map((s) => [s.name, s.body]));

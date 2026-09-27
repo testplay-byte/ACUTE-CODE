@@ -45,7 +45,13 @@
  *         navigation the panel observed (address bar / in-page link click —
  *         same URL twice = title update only) or {sessionId, direction:
  *         "back"|"forward"|"reload"} moves the pointer. → {sessionId, action,
- *         entry, index, canBack, canForward}.
+ *         entry, index, canBack, canForward}. ROUND-131 (R131-B): a url
+ *         report landing within 2.5s of a TOOL-COMMANDED navigation answers
+ *         action "redirect-collapse" — the pending entry's url/title is
+ *         REPLACED, no new index (the dual-writer history drift fix); the
+ *         panel may arm the same window for its OWN address-bar commands by
+ *         sending {commanded: true} (the B-ui follow-up — see
+ *         browserNavigateCore's R131-B note).
  *   GET/PUT /api/v1/browser/viewport      ?sessionId= / body {sessionId,
  *         width?, height?, preset?, zoom?, rotate?} → {sessionId, viewport}.
  *         This is the display-size state BOTH the panel and the future
@@ -163,6 +169,27 @@ const FETCH_DEADLINE_MS = 20_000;
 /** Generous but bounded: whole-response cap for HTML/CSS/binary alike. */
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_REDIRECT_HOPS = 10;
+
+// ── ROUND-131 (R131-B, defect 7b): the REDIRECT-COLLAPSE window ────────────
+//
+// The dual-writer history drift (the ledger's recurring "navigate reported
+// index 0, canBack false while the immediately following get_state answered
+// index 1, historyLength 2, canBack true"): a TOOL-COMMANDED navigation
+// pushes the COMMANDED url, then the panel's location report (POST
+// /browser/navigate from handleLocationMessage / the native on_navigation
+// hook) re-pushes the LANDED url — one navigation, two entries. The fix: a
+// location report arriving within this window of a COMMANDED navigation
+// REPLACES the pending entry (updates its url/title, same index) instead of
+// pushing. The window is measured from the COMMAND (never re-armed by a
+// report — bounded exposure), and the collapse requires the pointer to still
+// sit on the commanded entry (a back/forward in between disables it).
+const REDIRECT_COLLAPSE_WINDOW_MS = 2_500;
+
+// ── ROUND-131 (R131-B, defect 8): the DOWNLOAD fetch's honest size cap ─────
+// (50MB — deliberately generous vs the 25 MiB proxy cap: a download is the
+// user ASKING for the bytes, and 50MB covers every document/image/archive a
+// page serves while staying far from disk-exhaustion territory).
+const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 const TICKET_TTL_MS = 12 * 60 * 60 * 1000;
 
 /** Bounded per-tab state: ≤32 sessions (LRU), ≤50 history entries each. */
@@ -264,6 +291,15 @@ interface BrowserSession {
    * profiles.
    */
   projectId: string;
+  /**
+   * ROUND-131 (R131-B, defect 7b): the pending redirect-collapse window —
+   * the history index + timestamp of the last TOOL-COMMANDED url navigation
+   * (set by browserNavigateCore when body.commanded === true; see
+   * REDIRECT_COLLAPSE_WINDOW_MS above for the law). Absent on sessions that
+   * never received a commanded navigation, and deliberately NOT persisted
+   * anywhere (a restart re-arms on the next command).
+   */
+  commandedNav?: { entryIndex: number; at: number };
 }
 
 /** Control-flow error carrying the HTTP status + short reason for the page. */
@@ -1144,6 +1180,110 @@ function sharedBrowserStore(): SessionStore {
   return activeBrowserStore;
 }
 
+// ── ROUND-131 (R131-B, defect 8): the TOOL-side cookie-jar door ─────────────
+//
+// The per-project cookie jars live inside each route registration
+// (CookieJarStore per buildServer — the R46-d wiring). The download action
+// runs in the TOOL (no HTTP self-fetch), so it needs the same door the
+// sharedBrowserStore pattern gives the history: the most recently REGISTERED
+// jar store is the tool's target. In production exactly one server exists;
+// before any server boots (unit tests) the download fetches cookie-less
+// (honest — no session, no jar).
+let activeBrowserJarStore: CookieJarStore | null = null;
+
+/**
+ * ROUND-131 (R131-B, defect 8): fetch a download INSIDE THE PAGE'S CONTEXT —
+ * the browser_control `download` action's engine. The tab's per-project
+ * cookie jar rides every hop (logins survive), the request presents the
+ * PANEL's user agent (the same UA every proxied page fetch presents), and the
+ * optional `referer` is the tab's current page URL (an http(s) one; sites
+ * that gate downloads on referer see the page the user is looking at).
+ *
+ * Every failure is an honest error string the tool surfaces verbatim: the
+ * scheme/private-net guards (guardTarget), transport failures, upstream
+ * statuses (kept, named), and the 50MB cap. No HTML error pages here — the
+ * caller is the agent, not an iframe.
+ */
+export async function browserFetchForDownload(
+  sessionId: string,
+  rawUrl: string,
+  referer: string | null,
+): Promise<
+  | { ok: true; bytes: Buffer; contentType: string; finalUrl: string; status: number; usedCookies: boolean }
+  | { ok: false; error: string }
+> {
+  let target: URL;
+  try {
+    target = new URL(rawUrl);
+  } catch {
+    return { ok: false, error: `'${rawUrl}' is not a valid absolute URL` };
+  }
+  // The session resolves NON-rotating (getOrCreate): a download against a
+  // not-yet-minted tab id must not strand a live iframe's ticket. An unknown
+  // session simply has no jar yet (cookie-less, honest).
+  const session = sharedBrowserStore().getOrCreate(sessionId);
+  const jar = activeBrowserJarStore?.for(session.projectId) ?? undefined;
+  const headers: Record<string, string> = {
+    "user-agent": USER_AGENT,
+    accept: "*/*",
+  };
+  if (referer !== null && /^https?:\/\//i.test(referer)) {
+    try {
+      // A referer is a full origin+path in real browsers; the page URL is
+      // exactly that. Never fabricated.
+      headers.referer = new URL(referer).toString();
+    } catch {
+      /* unparseable referer — sent without one, never guessed */
+    }
+  }
+  let response: Response;
+  try {
+    response = await fetchUpstreamGuarded(target, { method: "GET", headers }, jar);
+  } catch (error) {
+    if (error instanceof ProxyFailure) {
+      const message =
+        error.code === "RESPONSE_TOO_LARGE"
+          ? error.message.replace(" proxy cap", " download cap")
+          : error.message;
+      return { ok: false, error: message };
+    }
+    return { ok: false, error: `fetching the file failed: ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    // Cookies the download's redirect chain set are real — persist them
+    // (swallowed inside the jar; a persist error must never fail a download).
+    jar?.persist();
+  }
+  if (response.status >= 400) {
+    return { ok: false, error: `HTTP ${response.status} from ${response.url === "" ? rawUrl : response.url}` };
+  }
+  let bytes: Buffer;
+  try {
+    bytes = await readCapped(response, MAX_DOWNLOAD_BYTES);
+  } catch (error) {
+    if (error instanceof ProxyFailure) {
+      // readCapped's RESPONSE_TOO_LARGE message says "proxy cap" (its own
+      // 25 MiB wording) — for the download the cap is 50MB, so the message
+      // is re-worded to name the DOWNLOAD cap honestly (never a nested
+      // "proxy cap" parenthetical inside a download error).
+      const message =
+        error.code === "RESPONSE_TOO_LARGE"
+          ? error.message.replace(" proxy cap", " download cap")
+          : error.message;
+      return { ok: false, error: message };
+    }
+    return { ok: false, error: `reading the download body failed: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const contentType = response.headers.get("content-type") ?? "application/octet-stream";
+  return {
+    ok: true,
+    bytes,
+    contentType,
+    finalUrl: response.url === "" ? target.toString() : response.url,
+    status: response.status,
+    usedCookies: jar !== undefined,
+  };
+}
+
 export interface BrowserNavigateOutcome {
   ok: true;
   sessionId: string;
@@ -1168,11 +1308,23 @@ export type BrowserNavigateResult = BrowserNavigateOutcome | { ok: false; error:
  * still refuses file: (guardTarget) — a file navigation renders through the
  * native webview (or, in web dev mode, the /browser/local-file route), never
  * through a server-side fetch.
+ *
+ * ROUND-131 (R131-B, defect 7b): `body.commanded === true` marks a
+ * TOOL-COMMANDED navigation (only browserNavigateCommand — the agent tool's
+ * own entry point — sets it in-process; the HTTP route passes the panel's
+ * body through untouched). A commanded url navigation ARMS the
+ * redirect-collapse window; a NON-commanded url navigation arriving inside
+ * that window REPLACES the pending entry instead of pushing (see
+ * REDIRECT_COLLAPSE_WINDOW_MS). The route deliberately forwards the flag so
+ * the PANEL's own address-bar commands can arm the same window later by
+ * sending `{commanded: true}` — a one-line frontend follow-up (B-ui), never
+ * required: without it, address-bar redirect chains keep the pre-R131 push
+ * behavior (the tool path is the ledger's confirmed defect).
  */
 export function browserNavigateCore(
   store: SessionStore,
   sessionId: string,
-  body: { url?: unknown; title?: unknown; direction?: unknown },
+  body: { url?: unknown; title?: unknown; direction?: unknown; commanded?: unknown },
 ): BrowserNavigateResult {
   const direction = body.direction;
   if (direction !== undefined && direction !== "back" && direction !== "forward" && direction !== "reload") {
@@ -1215,6 +1367,33 @@ export function browserNavigateCore(
         canForward: session.index < session.history.length - 1,
       };
     }
+    // ── R131-B (defect 7b): the REDIRECT-COLLAPSE branch ──────────────────
+    // A location REPORT (not a command) landing inside the armed window,
+    // with the pointer still on the commanded entry, REPLACES that entry —
+    // the commanded url becomes the landed url, one history index. The
+    // window stays armed until it expires (multi-hop redirect chains all
+    // collapse into the single entry); a back/forward between command and
+    // report (index mismatch) or a slow report (> window) falls through to
+    // the honest push below.
+    if (
+      body.commanded !== true &&
+      session.commandedNav !== undefined &&
+      session.commandedNav.entryIndex === session.index &&
+      Date.now() - session.commandedNav.at <= REDIRECT_COLLAPSE_WINDOW_MS &&
+      current !== undefined
+    ) {
+      current.url = url;
+      if (typeof title === "string" && title !== "") current.title = title;
+      return {
+        ok: true,
+        sessionId,
+        action: "redirect-collapse",
+        entry: current,
+        index: session.index,
+        canBack: session.index > 0,
+        canForward: session.index < session.history.length - 1,
+      };
+    }
     const entry: HistoryEntry = { url, title: typeof title === "string" && title !== "" ? title : null, ts: Date.now() };
     session.history = session.history.slice(0, session.index + 1);
     session.history.push(entry);
@@ -1222,6 +1401,14 @@ export function browserNavigateCore(
       session.history.shift();
     }
     session.index = session.history.length - 1;
+    // R131-B: only a COMMANDED navigation arms the window (a report must
+    // never re-arm it — otherwise chained reports would extend the exposure
+    // indefinitely). Recorded AFTER the push so entryIndex is the new entry.
+    if (body.commanded === true) {
+      session.commandedNav = { entryIndex: session.index, at: Date.now() };
+    } else {
+      session.commandedNav = undefined;
+    }
     return {
       ok: true,
       sessionId,
@@ -1239,6 +1426,10 @@ export function browserNavigateCore(
     else if (direction === "forward") nextIndex = Math.min(session.history.length - 1, session.index + 1);
     const changed = nextIndex !== session.index;
     session.index = nextIndex;
+    // R131-B: a pointer move invalidates any armed redirect-collapse window
+    // (the collapse requires the pointer to sit on the commanded entry; a
+    // back/forward report is a NEW navigation, pushed honestly).
+    if (changed) session.commandedNav = undefined;
     const entry = session.index >= 0 ? session.history[session.index] : undefined;
     return {
       ok: true,
@@ -1362,9 +1553,15 @@ export function browserGetStateCommand(sessionId: string): {
   };
 }
 
-/** The `browser_control` tool's navigate/back/forward/reload entry point. */
+/**
+ * The `browser_control` tool's navigate/back/forward/reload entry point.
+ * R131-B (defect 7b): the TOOL's navigations are COMMANDED — the internal
+ * `commanded: true` flag arms the redirect-collapse window (see
+ * browserNavigateCore's R131-B note) so the panel's landed-url report folds
+ * back into the entry this command pushed instead of drifting a second one.
+ */
 export function browserNavigateCommand(sessionId: string, body: { url?: unknown; title?: unknown; direction?: unknown }): BrowserNavigateResult {
-  return browserNavigateCore(sharedBrowserStore(), sessionId, body);
+  return browserNavigateCore(sharedBrowserStore(), sessionId, { ...body, commanded: true });
 }
 
 /** The `browser_control` tool's set_viewport entry point. */
@@ -1509,6 +1706,11 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
   // ROUND-46 (R46-d): per-registration cookie-jar store — profileId → jar,
   // backed by this server's db when one was passed.
   const jars = new CookieJarStore(db);
+  // R131-B (defect 8): the jar store registers beside the session store so
+  // the TOOL-side download fetch (browserFetchForDownload) cooks under the
+  // SAME per-project jars the panel's proxied page loads do — the download
+  // rides the page's cookie context, not a fresh anonymous one.
+  activeBrowserJarStore = jars;
 
   // iframe navigations cannot send Authorization headers — a valid `bt`
   // ticket is promoted to the real bearer header so the app-level wall
@@ -1830,13 +2032,17 @@ function registerBrowserRoutesInner(browser: FastifyInstance, token: string, db:
           .send(rewritten);
       }
       // Binary/media passthrough (Range results keep their 206 + headers).
-      // ROUND-115 note (the pinned round-115 table): there is NO file
-      // download path in this proxy today — bytes stream to the panel's
-      // iframe in memory and nothing is written to disk. When a "save this
-      // download" affordance lands, its save location is pinned:
+      // ROUND-115 note → ROUND-131 (R131-B, defect 8) LANDED: the download
+      // affordance is the browser_control `download` ACTION (agent-core/src/
+      // tools/plugins/browser.ts) — this proxy still streams bytes to the
+      // panel's iframe in memory, but the tool fetches through
+      // browserFetchForDownload (the tab's cookie jar + the panel's UA + the
+      // page's referer) and writes to the pinned location:
       // <projectRoot>/downloads/, created on demand (mkdirSync recursive —
       // the tools/fs-ops.ts writeFile pattern), the twin of uploads =
-      // <root>/attachments/ (routes/attachments.ts).
+      // <root>/attachments/ (routes/attachments.ts). The NATIVE right-click
+      // "save as" pipeline (the Rust DownloadStarting handler) is the B-ui/B3
+      // sibling wave and lands the SAME folder.
       reply.code(response.status).header("cache-control", "no-store").type(contentType);
       const contentRange = response.headers.get("content-range");
       if (contentRange !== null) reply.header("content-range", contentRange);

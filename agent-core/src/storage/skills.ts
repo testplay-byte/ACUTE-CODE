@@ -364,13 +364,16 @@ The embedded browser panel (browser_control) — a real webview the user watches
 
 ## Core loop
 1. navigate to the absolute http(s) URL — or a LOCAL FILE (file:// URL or an absolute local path like C:\Users\me\page.html — local HTML opens natively in the panel). Omit sessionId → it drives THIS session's own tab (auto-opened in the panel).
-2. read_dom — the structured page outline (headings, links, buttons, inputs, forms with short selectors + each element's x/y/w/h position). This is how you know the page — it gives you the full content and spatial layout; screenshots only for visual questions pixels alone can answer.
+2. read_dom — the structured page outline (headings, links, buttons, inputs, forms with short selectors + each element's x/y/w/h position). This is how you know the page — it gives you the full content and spatial layout; screenshots only for visual questions pixels alone can answer. On a HUGE page, page the outline: offset/range walks the interactive elements in batches ("showing elements N..M of T") — never lose the tail to truncation.
 3. Act on DOM IDENTITY, never pixel coordinates: click by the returned selector or visible text; type into the returned selector.
 4. VERIFY with get_state (currentUrl, title, canBack/canForward) — the navigation you expected, not the one you hoped for; read (fresh server text) or read_dom when the check must be about content.
 
 ## Forms
-- Submit deliberately: type {selector, submit:true}, or press_key Enter (native form submission), or click the submit button by text. Typing alone never submits.
+- Submit deliberately: type {selector, submit:true}, or press_key Enter (native form submission), or click the submit button by text. Typing alone never submits — the output echoes "submit requested: false/true · observed: …", so a page that submits on its own is visible at a glance.
 - Never eval a manual form click when the submit path above exists.
+
+## Files (download)
+- download {url, filename?} saves a file into the project's downloads/ folder — fetched with the tab's cookies and the panel's user agent, so login-gated downloads work. The result carries the project-relative path, byte size, and a content-type + magic-byte verdict; a mismatch is REPORTED with the requested filename kept — verify before trusting the bytes. Nothing is ever silently overwritten (identical bytes are reused, collisions get -2/-3 suffixes).
 
 ## Bot walls (CAPTCHA / Cloudflare / age gates)
 - A result warning of a verification wall → STOP retrying. Call wait_for_verification: the user gets a countdown card, solves the wall in the panel, marks it done; you receive the honest re-probe result.

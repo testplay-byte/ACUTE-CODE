@@ -433,7 +433,13 @@ describe("D6: the size budget (the hard bound + the section window)", () => {
     // precedent as R96-D/R99-G/R117-c: the bound moves to hold the owner's
     // explicit asks rather than degrading them under an arbitrary number;
     // the floor below still keeps the additions honest content.
-    expect(composed.length).toBeLessThanOrEqual(25_000);
+    // R131-B (the browser leap): 25,000 → 25,200 — the browser-panel
+    // section's lockstep lines (the Actions line gains read_dom's
+    // offset/range clause + the NEW download action; the Forms line gains
+    // the type requested-vs-observed echo — round-131.md §1 Wave B's
+    // three-file law) grew the composition exactly +265 over the R127-W6
+    // measured 24,804 — measured 25,069. Same precedent, one more turn.
+    expect(composed.length).toBeLessThanOrEqual(25_200);
     expect(composed.length).toBeGreaterThan(15_000); // the R71 delta is real content, not a gutting
   });
 

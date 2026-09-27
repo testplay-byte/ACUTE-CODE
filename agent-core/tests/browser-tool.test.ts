@@ -9,10 +9,12 @@
  * /browser/history route.
  */
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProjectTools } from "../src/tools/index";
 // R62 (D8): the read action calls webFetch — network-free tests mock the
 // fetcher (the real extractor has its own coverage in web-tool tests).
@@ -45,7 +47,15 @@ import {
   buildHandsPressKeyScript,
   buildHandsTypeScript,
 } from "../src/tools/plugins/browser-hands.js";
-import { domRectIntersectsViewport } from "../src/tools/plugins/browser.js";
+import {
+  BROWSER_CONTROL_ACTIONS,
+  domRectIntersectsViewport,
+  downloadSuffixName,
+  looksLikeTextPayload,
+  nearestBrowserAction,
+  sanitizeDownloadFilename,
+  sniffMagicBytes,
+} from "../src/tools/plugins/browser.js";
 // R128-W7a: the vision relay fake — the screenshot describe/advisory pins
 // need a CONTROLLED relay (a SUCCESSFUL vision pass is otherwise unreachable
 // without a real model call). The default reply is the honest no-key failure
@@ -113,7 +123,12 @@ import { buildServer } from "../src/server";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { setVisionSettings } from "../src/storage/vision.js";
 import { ProviderKeyring } from "../src/providers/registry";
-import { resetBrowserStoreForTest, browserSessionForChatSession } from "../src/browser-proxy";
+import {
+  resetBrowserStoreForTest,
+  browserSessionForChatSession,
+  extendPrivateNetAllowlistForTest,
+  resetPrivateNetAllowlistForTest,
+} from "../src/browser-proxy";
 import type { ToolSet } from "ai";
 
 // The AI SDK tool contract — narrow to what the tests call.
@@ -1165,7 +1180,9 @@ describe("browser_control — source / read_dom (R66: page content without scree
     await bc.execute({ action: "source", part: "scripts", sessionId: "tab-compile" });
     await bc.execute({ action: "read_dom", sessionId: "tab-compile" });
     await bc.execute({ action: "read_dom", include: "all", sessionId: "tab-compile" });
-    expect(scripts.length).toBeGreaterThanOrEqual(14); // 10+ scripts + the 4 evalJob installers
+    // R131-B (defect 3b): the PAGED read_dom script (offset/range) compiles too.
+    await bc.execute({ action: "read_dom", offset: 3, range: 25, sessionId: "tab-compile" });
+    expect(scripts.length).toBeGreaterThanOrEqual(15); // 11+ scripts + the 4 evalJob installers
     for (const script of scripts) {
       expect(() => new Function(script)).not.toThrow();
     }
@@ -2251,5 +2268,707 @@ describe("browser_control — R128-W7a: read_dom's viewport-aware visibility", (
     expect(scripts[0]).toContain("r.top < window.innerHeight");
     // The script still parses as a function body (the Rust wrap's contract).
     expect(() => new Function(scripts[0])).not.toThrow();
+  });
+});
+
+// ── ROUND-131 (R131-B): the browser tool truths + the download action ──────
+// The field ledger's 8 CONFIRMED defects (UPLOADED/Feedback-2.txt — every
+// claim re-verified against the code before this wave earned it): the click
+// "job vanished" ambiguity, the non-navigation-aware wait, read_dom's
+// style/script pollution + mid-payload truncation, the eval null-payload
+// dead end, the type auto-submit ambiguity, the bare-list unknown-action
+// refusal, get_state's title:null + the dual-writer history drift, and the
+// missing download capability. The redirect-collapse history pins live in
+// browser-proxy.test.ts (the mutation core's home); everything the TOOL
+// answers lives here.
+
+describe("R131-B (defect 6): nearestBrowserAction + the honest refusal", () => {
+  it("the pure matcher: a prefix or ≤2-edit typo gets the hint; far-off garbage gets null (never a forced guess)", () => {
+    // The ledger's exact shapes — "three of this turn's seven failures were
+    // one stray character away from valid actions".
+    expect(nearestBrowserAction("get_state>")).toBe("get_state"); // stray trailing char
+    expect(nearestBrowserAction("navigte")).toBe("navigate"); // edit distance 1
+    expect(nearestBrowserAction("clik")).toBe("click");
+    expect(nearestBrowserAction("downloa")).toBe("download");
+    expect(nearestBrowserAction("READ")).toBe("read"); // case-insensitive
+    expect(nearestBrowserAction("  wait  ")).toBe("wait"); // whitespace tolerated
+    // Garbage — the plain list, never a forced hint.
+    expect(nearestBrowserAction("flurbewizzle")).toBeNull();
+    expect(nearestBrowserAction("zzzzzzzz")).toBeNull();
+    expect(nearestBrowserAction("")).toBeNull();
+    expect(nearestBrowserAction("   ")).toBeNull();
+  });
+
+  it("the unknown-action refusal: a close typo gets the did-you-mean hint; garbage gets the FULL list (mouse + download included)", async () => {
+    expect(BROWSER_CONTROL_ACTIONS).toContain("mouse"); // the old bare list omitted it
+    expect(BROWSER_CONTROL_ACTIONS).toContain("download");
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+
+    const typo = await bc.execute({ action: "get_state>", sessionId: "tab-r131-act" });
+    expect(typo.ok).toBe(false);
+    expect(typo.output).toContain("unknown action 'get_state>'");
+    expect(typo.output).toContain("did you mean 'get_state'?");
+    // The list is the vocabulary, one source of truth.
+    expect(typo.output).toContain(`(${BROWSER_CONTROL_ACTIONS.join(" | ")})`);
+
+    const garbage = await bc.execute({ action: "flurbewizzle", sessionId: "tab-r131-act" });
+    expect(garbage.ok).toBe(false);
+    expect(garbage.output).not.toContain("did you mean");
+    expect(garbage.output).toContain("mouse");
+    expect(garbage.output).toContain("download");
+  });
+
+  it("the sequence step refusal carries the same nearest-match hint", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    const seq = await bc.execute({
+      action: "sequence",
+      sessionId: "tab-r131-act",
+      steps: [{ action: "get_state>" }],
+    });
+    expect(seq.ok).toBe(false);
+    expect(seq.output).toContain("step action 'get_state>' is not allowed");
+    expect(seq.output).toContain("did you mean 'get_state'?");
+    expect(seq.output).toContain("allowed step actions");
+  });
+
+  it("THE LOCKSTEP PIN: the schema's action enum IS BROWSER_CONTROL_ACTIONS, and SEQUENCE_STEP_ACTIONS is the same vocabulary minus {sequence, download}", async () => {
+    // The BROWSER_CONTROL_ACTIONS comment promises "kept in lockstep with the
+    // inputSchema's action enum + SEQUENCE_STEP_ACTIONS (the browser-tool
+    // pins assert all three carry the same vocabulary)" — this is that pin.
+    // One source of truth: the refusal message can never again omit an
+    // action (the defect-6 story: `mouse` was missing) nor the schema drift
+    // from the list.
+    const tools = await buildTools(tempDir);
+    // The AI SDK's jsonSchema() wrapper: the raw JSON Schema object rides the
+    // `.jsonSchema` field (_type/validate are the SDK's own plumbing).
+    const bc = (tools as unknown as Record<string, { inputSchema?: { jsonSchema?: unknown } }>)["browser_control"];
+    const schema = JSON.parse(JSON.stringify(bc?.inputSchema?.jsonSchema ?? {})) as {
+      properties?: { action?: { enum?: unknown } };
+    };
+    const enumActions = schema.properties?.action?.enum;
+    expect(Array.isArray(enumActions)).toBe(true);
+    // Exact order — the enum and the list are ONE source of truth.
+    expect(enumActions).toEqual([...BROWSER_CONTROL_ACTIONS]);
+    // The step vocabulary: everything except `sequence` (no nesting) and
+    // `download` (a terminal side effect, deliberately not a step action —
+    // pinned through the refusal's own list, the same string the model
+    // sees). Set insertion order differs, so the comparison is sorted.
+    const seq = await tool(tools, "browser_control").execute({
+      action: "sequence",
+      sessionId: "tab-r131-act",
+      steps: [{ action: "zzz-not-an-action" }],
+    });
+    expect(seq.ok).toBe(false);
+    const listMatch = /allowed step actions: (.+)\)/.exec(seq.output);
+    expect(listMatch).not.toBeNull();
+    const stepActions = (listMatch![1] ?? "").split(" | ").map((s) => s.trim()).sort();
+    expect(stepActions).toEqual(BROWSER_CONTROL_ACTIONS.filter((a) => a !== "sequence" && a !== "download").sort());
+  });
+});
+
+describe("R131-B (defect 1): click's vanished-job re-probe — the navigation truth", () => {
+  /** An emit that answers the bridge from a scripted reply per command. */
+  const makeClickEmit = (
+    replies: Array<{ match: (action: string, script: string) => boolean; data: unknown; reject?: boolean }>,
+    commands: Array<{ action: string; script: string }>,
+  ) => {
+    return (event: unknown) => {
+      const frame = event as { type?: string; action?: string; commandId?: string; payload?: { script?: string } };
+      if (frame.type !== "browser-command" || typeof frame.commandId !== "string") return;
+      const action = String(frame.action ?? "");
+      const script = String(frame.payload?.script ?? "");
+      commands.push({ action, script });
+      const reply = replies.find((r) => r.match(action, script));
+      queueMicrotask(() => {
+        if (reply === undefined) {
+          resolveBrowserCommand(frame.commandId!, { ok: true, data: { ok: true, value: { title: "Clean page", text: "", markers: [] } } });
+          return;
+        }
+        if (reply.reject === true) {
+          resolveBrowserCommand(frame.commandId!, { ok: false, error: "the bridge is dead" });
+          return;
+        }
+        resolveBrowserCommand(frame.commandId!, { ok: true, data: reply.data });
+      });
+    };
+  };
+
+  it("vanished + the URL CHANGED ⇒ ok:true with the landing URL (the click triggered the navigation itself)", async () => {
+    const commands: Array<{ action: string; script: string }> = [];
+    const emit = makeClickEmit(
+      [
+        {
+          // The panel's job-poll verdict, verbatim from the ledger.
+          match: (action) => action === "evalJob",
+          data: { ok: false, error: "the job vanished (the page navigated away)" },
+        },
+        {
+          // The ONE bounded re-probe: location.href after the vanished job.
+          match: (_action, script) => script === "return location.href;",
+          data: { ok: true, value: "https://en.wikipedia.org/wiki/Landing_page" },
+        },
+      ],
+      commands,
+    );
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/wiki/Start_page", sessionId: "tab-r131-click" });
+
+    const result = await bc.execute({ action: "click", selector: "#page5link", sessionId: "tab-r131-click" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("the click triggered a navigation");
+    expect(result.output).toContain("https://en.wikipedia.org/wiki/Landing_page");
+    expect(result.output).toContain("the navigation IS the click's effect");
+    // The re-probe really was ONE location.href eval (the get_state reconcile
+    // pattern), not a full state read.
+    const probes = commands.filter((c) => c.action === "eval" && c.script === "return location.href;");
+    expect(probes).toHaveLength(1);
+  });
+
+  it("vanished + the URL UNCHANGED ⇒ the truthful selector-not-found failure (still fails, but honestly)", async () => {
+    const commands: Array<{ action: string; script: string }> = [];
+    const emit = makeClickEmit(
+      [
+        { match: (action) => action === "evalJob", data: { ok: false, error: "the job vanished (the page navigated away)" } },
+        { match: (_action, script) => script === "return location.href;", data: { ok: true, value: "https://en.wikipedia.org/wiki/Start_page" } },
+      ],
+      commands,
+    );
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/wiki/Start_page", sessionId: "tab-r131-click2" });
+
+    const result = await bc.execute({ action: "click", selector: ".not-there", sessionId: "tab-r131-click2" });
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("the job vanished (the page navigated away)");
+    expect(result.output).toContain("the page did not navigate (still at https://en.wikipedia.org/wiki/Start_page)");
+    expect(result.output).toContain("the selector may not exist");
+  });
+
+  it("a NON-vanished failure passes through verbatim (no re-probe); a dead re-probe keeps the original failure", async () => {
+    // (a) A plain page error — no location probe at all.
+    let commands: Array<{ action: string; script: string }> = [];
+    let emit = makeClickEmit([{ match: (action) => action === "evalJob", data: { ok: false, error: "the page rejected the script" } }], commands);
+    let tools = await buildTools(tempDir, { emit });
+    let bc = tool(tools, "browser_control");
+    const plain = await bc.execute({ action: "click", selector: "#a", sessionId: "tab-r131-click3" });
+    expect(plain.ok).toBe(false);
+    expect(plain.output).toContain("the page rejected the script");
+    expect(commands.some((c) => c.script === "return location.href;")).toBe(false);
+
+    // (b) The vanished error + a re-probe that itself fails — the original
+    // failure stands verbatim (never a fabricated landing).
+    commands = [];
+    emit = makeClickEmit(
+      [
+        { match: (action) => action === "evalJob", data: { ok: false, error: "the job vanished (the page navigated away)" } },
+        { match: (_action, script) => script === "return location.href;", data: { ok: true, value: "https://en.wikipedia.org/wiki/Landing_page" }, reject: true },
+      ],
+      commands,
+    );
+    tools = await buildTools(tempDir, { emit });
+    bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/wiki/Start_page", sessionId: "tab-r131-click3" });
+    const deadProbe = await bc.execute({ action: "click", selector: "#a", sessionId: "tab-r131-click3" });
+    expect(deadProbe.ok).toBe(false);
+    expect(deadProbe.output).toContain("browser_control: click — page error: the job vanished (the page navigated away)");
+  });
+});
+
+describe("R131-B (defect 2): wait is navigation-aware", () => {
+  it("urlContains matched while readyState 'loading' ⇒ SUCCESS with the note (the ledger's Google-SPA shape)", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { type?: string; commandId?: string; payload?: { script?: string } };
+      if (frame.type === "browser-command" && typeof frame.commandId === "string") {
+        queueMicrotask(() =>
+          resolveBrowserCommand(frame.commandId!, {
+            ok: true,
+            data: { ok: true, value: { ready: "loading", has: null, url: "https://www.google.com/search?q=acute+code" } },
+          }),
+        );
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "wait", urlContains: "/search?q=acute", ms: 900, sessionId: "tab-r131-wait" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("wait ok");
+    expect(result.output).toContain("\"urlContains\":true");
+    // The note — in the JSON payload AND the trailing line.
+    expect(result.output).toContain("\"note\":\"readyState 'loading' at match time\"");
+    expect(result.output).toContain("note: readyState 'loading' at match time");
+  });
+
+  it("the timeout report carries the CURRENT URL + WHICH conditions failed", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { type?: string; commandId?: string };
+      if (frame.type === "browser-command" && typeof frame.commandId === "string") {
+        queueMicrotask(() =>
+          resolveBrowserCommand(frame.commandId!, {
+            ok: true,
+            data: { ok: true, value: { ready: "loading", has: false, url: "https://www.google.com/" } },
+          }),
+        );
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "wait", selector: "#results", urlContains: "/search", ms: 250, sessionId: "tab-r131-wait2" });
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("timed out after 250ms (currentUrl: https://www.google.com/)");
+    expect(result.output).toContain("document.readyState is 'loading' (needs 'complete')");
+    expect(result.output).toContain("the selector '#results' did not appear");
+    expect(result.output).toContain("the URL still doesn't contain '/search' (last seen: https://www.google.com/)");
+  });
+
+  it("an unanswering page reports the NO-QUOTES unknown form (the ledger's unclosed-quote malformation is dead)", async () => {
+    // The bridge never answers — the wait probe times out, lastReady stays
+    // null, and the unknown line carries no quote-wrapped compound.
+    const emit = vi.fn();
+    const tools = await buildTools(tempDir, { emit: emit as unknown as (event: unknown) => void });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "wait", urlContains: "/search", ms: 250, sessionId: "tab-r131-wait3" });
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("timed out after 250ms (currentUrl: unknown)");
+    expect(result.output).toContain(
+      "document.readyState is unknown — the page never answered a probe (it may be navigating); needs 'complete'",
+    );
+    // The old shape embedded the fallback INSIDE the quotes.
+    expect(result.output).not.toContain("is 'unknown");
+  });
+});
+
+describe("R131-B (defect 3): read_dom — rendered text + the offset/range cursor", () => {
+  it("the compiled script extracts RENDERED text (innerText) and skips style/script/noscript/template ancestors", async () => {
+    const scripts: string[] = [];
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload: { script?: string } };
+      scripts.push(String(frame.payload.script ?? ""));
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { title: "T", url: "https://example.com/", headings: [], interactive: [], forms: [] } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    await bc.execute({ action: "read_dom", include: "all", sessionId: "tab-r131-dom" });
+    expect(scripts).toHaveLength(1);
+    // The WALL_PROBE's own discipline, mirrored: innerText is what the page
+    // PAINTS (a <button> whose textContent was a CSS blob renders no CSS).
+    expect(scripts[0]).toContain("el.innerText");
+    // The paragraphs walker skips the code-bearing ancestors outright.
+    expect(scripts[0]).toContain('closest("style, script, noscript, template")');
+    // The unpaged loop keeps the 120-element cap (byte-identical shape).
+    expect(scripts[0]).toContain("interactive.length >= 120");
+    expect(() => new Function(scripts[0])).not.toThrow();
+  });
+
+  it("offset pages the interactive elements: 'showing elements N..M of T' (an element-count cursor, never a byte slice)", async () => {
+    const scripts: string[] = [];
+    const outline = {
+      title: "Big page",
+      url: "https://example.com/",
+      headings: [],
+      interactiveCount: 7,
+      interactive: [{ tag: "a", text: "link-3" }, { tag: "a", text: "link-4" }, { tag: "a", text: "link-5" }],
+      forms: [],
+      paragraphs: undefined,
+    };
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload: { script?: string } };
+      scripts.push(String(frame.payload.script ?? ""));
+      queueMicrotask(() => resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: outline } }));
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "read_dom", offset: 2, range: 3, sessionId: "tab-r131-dom2" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("showing elements 3..5 of 7");
+    // The paged script counts EVERY visible interactive and windows the
+    // collection in the PAGE (the cursor is element-count, not bytes).
+    expect(scripts[0]).toContain("let interactiveCount = 0;");
+    expect(scripts[0]).toContain("interactiveCount >= 2");
+    expect(scripts[0]).toContain("interactive.length < 3");
+    expect(scripts[0]).not.toContain("interactive.length >= 120");
+  });
+
+  it("offset beyond the end answers the honest empty + the count", async () => {
+    const outline = {
+      title: "Big page",
+      url: "https://example.com/",
+      headings: [],
+      interactiveCount: 5,
+      interactive: [],
+      forms: [],
+      paragraphs: undefined,
+    };
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string };
+      queueMicrotask(() => resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: outline } }));
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "read_dom", offset: 9, sessionId: "tab-r131-dom3" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("offset 9 is beyond the end — the page has 5 interactive elements; pass a smaller offset");
+  });
+
+  it("the outer truncation marker now suggests the offset/range escape hatch", async () => {
+    const big = "x".repeat(14_000);
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string };
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: { title: big, url: "https://example.com/", headings: [], interactive: [], forms: [] } } }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "read_dom", sessionId: "tab-r131-dom4" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("truncated");
+    expect(result.output).toContain("page the elements with offset/range");
+  });
+});
+
+describe("R131-B (defect 4): eval's null payload carries the diagnosis", () => {
+  it("a null value answers ok:true with the last-known URL + the re-probe hint (never a bare dead end)", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string; payload?: { script?: string } };
+      const script = String(frame.payload?.script ?? "");
+      queueMicrotask(() => {
+        if (script.includes("return location.href") || script.startsWith("const title")) {
+          // the navigate wall probe + the get_state reconcile shape
+          resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: { title: "Clean page", text: "", markers: [], url: "https://en.wikipedia.org/wiki/Eval" } } });
+          return;
+        }
+        resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: null } });
+      });
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/wiki/Eval", sessionId: "tab-r131-eval" });
+
+    const result = await bc.execute({ action: "eval", script: "return undefined_thing", sessionId: "tab-r131-eval" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("null — the page may have navigated while the script ran, or the script returned undefined");
+    expect(result.output).toContain("Last known URL: https://en.wikipedia.org/wiki/Eval");
+    expect(result.output).toContain("Re-probe with get_state");
+  });
+
+  it("with no page open the last-known URL says so honestly", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string };
+      queueMicrotask(() => resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: null } }));
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    // No navigation — the tab has no URL yet (the download action's tab
+    // state is the same store; only the addressed session matters).
+    const result = await bc.execute({ action: "eval", script: "return null", sessionId: "tab-r131-eval2" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("(no page open in this tab yet)");
+  });
+});
+
+describe("R131-B (defect 7a): the get_state reconcile's loading-page robustness", () => {
+  it("a REJECTED probe (bridge error / page navigating) keeps the store's answer — never a hang, never a guess", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { type?: string; commandId?: string };
+      if (frame.type === "browser-command" && typeof frame.commandId === "string") {
+        queueMicrotask(() => resolveBrowserCommand(frame.commandId!, { ok: false, error: "the page is navigating" }));
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/wiki/Loading", sessionId: "tab-r131-gs" });
+    const state = JSON.parse((await bc.execute({ action: "get_state", sessionId: "tab-r131-gs" })).output) as {
+      currentUrl: string;
+      title: string | null;
+    };
+    expect(state.currentUrl).toBe("https://en.wikipedia.org/wiki/Loading");
+    expect(state.title).toBeNull();
+  });
+});
+
+describe("R131-B (defect 5): type echoes the REQUESTED submit flag vs the OBSERVED outcome", () => {
+  it("requested:false + observed submitted (the page submitted on its own) — both sides named, the ambiguity dead", async () => {
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string };
+      queueMicrotask(() =>
+        resolveBrowserCommand(frame.commandId, {
+          ok: true,
+          data: { ok: true, value: { typed: "#ti6dpd", submitted: true, submitHow: "synthetic Enter + form.requestSubmit()" } },
+        }),
+      );
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "type", selector: "#ti6dpd", text: "cute anime cat girls", sessionId: "tab-r131-type" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("submit requested: false · observed: submitted (synthetic Enter + form.requestSubmit())");
+    expect(result.output).toContain("The page submitted the form on its own");
+  });
+
+  it("requested:true + submitted (the commanded path) and requested:false + not submitted (the plain path)", async () => {
+    const replies = [
+      { typed: "#q", submitted: true, submitHow: "form.requestSubmit()" },
+      { typed: "#search", submitted: false, submitHow: "" },
+    ];
+    let call = 0;
+    const emit = (event: unknown) => {
+      const frame = event as { commandId: string };
+      const reply = replies[Math.min(call, replies.length - 1)];
+      call += 1;
+      queueMicrotask(() => resolveBrowserCommand(frame.commandId, { ok: true, data: { ok: true, value: reply } }));
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+
+    const commanded = await bc.execute({ action: "type", selector: "#q", text: "acute", submit: true, sessionId: "tab-r131-type2" });
+    expect(commanded.ok).toBe(true);
+    expect(commanded.output).toContain("submit requested: true · observed: submitted (form.requestSubmit())");
+    expect(commanded.output).toContain("The form was submitted (native requestSubmit)");
+
+    const plain = await bc.execute({ action: "type", selector: "#search", text: "hello", sessionId: "tab-r131-type2" });
+    expect(plain.ok).toBe(true);
+    expect(plain.output).toContain("submit requested: false · observed: not submitted (no form found)");
+    expect(plain.output).not.toContain("The page submitted the form on its own");
+    expect(plain.output).not.toContain("The form was submitted");
+  });
+});
+
+// ── ROUND-131 (R131-B, defect 8): the download action ──────────────────────
+// The owner's headline verdict: "it is not able to right-click and then click
+// save as and save to the download folder as it needs to be… a full-fledged
+// browser." The tool-side half is pinned here against a REAL local upstream
+// (the fetch itself is the REAL fetchUpstreamGuarded walk — cookie jar, UA,
+// referer, redirects, caps — only the network is hermetic).
+
+describe("R131-B (defect 8): download — the pure helpers", () => {
+  it("sniffMagicBytes: PNG / JPEG / GIF / WEBP markers; text and short buffers answer null", () => {
+    expect(sniffMagicBytes(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]))).toBe("png");
+    expect(sniffMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2]))).toBe("jpeg");
+    expect(sniffMagicBytes(Buffer.from("GIF89a"))).toBe("gif");
+    expect(sniffMagicBytes(Buffer.from("RIFF____WEBPVP8 "))).toBe("webp");
+    expect(sniffMagicBytes(Buffer.from("<html>not an image</html>"))).toBeNull();
+    expect(sniffMagicBytes(Buffer.from([0x89, 0x50]))).toBeNull(); // truncated — no verdict
+  });
+
+  it("sanitizeDownloadFilename: the basename only (no traversal), control glyphs stripped, leading dots dropped, honest nulls", () => {
+    expect(sanitizeDownloadFilename("../evil.png")).toBe("evil.png");
+    expect(sanitizeDownloadFilename("a/b\\c.txt")).toBe("c.txt");
+    expect(sanitizeDownloadFilename("re\u0007port.png")).toBe("report.png");
+    expect(sanitizeDownloadFilename(".hidden")).toBe("hidden");
+    expect(sanitizeDownloadFilename("x".repeat(200))).toHaveLength(120);
+    expect(sanitizeDownloadFilename("")).toBeNull();
+    expect(sanitizeDownloadFilename("...")).toBeNull();
+    expect(sanitizeDownloadFilename(".")).toBeNull();
+    expect(sanitizeDownloadFilename("..")).toBeNull();
+  });
+
+  it("downloadSuffixName keeps the extension; looksLikeTextPayload smells the 200-that-lied shape", () => {
+    expect(downloadSuffixName("photo.png", 2)).toBe("photo-2.png");
+    expect(downloadSuffixName("photo.png", 3)).toBe("photo-3.png");
+    expect(downloadSuffixName("noext", 2)).toBe("noext-2");
+    expect(looksLikeTextPayload(Buffer.from("<html>error page</html>"))).toBe(true);
+    // A NUL (or any low control byte) in the head is binary, full stop —
+    // high-bit bytes alone are NOT (UTF-8 text carries them).
+    expect(looksLikeTextPayload(Buffer.from([0x89, 0x50, 0x00, 0x47, 0x0d]))).toBe(false);
+    expect(looksLikeTextPayload(Buffer.from("caf\u00e9 menu"))).toBe(true);
+  });
+});
+
+describe("R131-B (defect 8): download — the action (real fetch, hermetic upstream)", () => {
+  // A REAL local upstream: PNG bytes, a text liar, a 404, a redirect hop,
+  // a cookie-setting page, and a header echo (referer + UA + cookie).
+  const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+  const ALT_PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9, 9, 9]);
+  let upstream: http.Server;
+  let upstreamBase = "";
+
+  beforeAll(async () => {
+    upstream = http.createServer((req, res) => {
+      switch (req.url) {
+        case "/pic.png":
+          res.writeHead(200, { "content-type": "image/png" }).end(PNG_BYTES);
+          return;
+        case "/alt.png":
+          res.writeHead(200, { "content-type": "image/png" }).end(ALT_PNG_BYTES);
+          return;
+        case "/liar.png":
+          res.writeHead(200, { "content-type": "image/png" }).end("<html>error page served as an image</html>");
+          return;
+        case "/hop.png":
+          res.writeHead(302, { location: "/pic.png" }).end();
+          return;
+        case "/set-cookie":
+          res.writeHead(200, { "content-type": "text/plain", "set-cookie": "dl=sess321; Path=/" }).end("ok");
+          return;
+        case "/echo":
+          res.writeHead(200, { "content-type": "text/plain" }).end(
+            `referer=${req.headers.referer ?? "(none)"} ua=${req.headers["user-agent"] ?? "(none)"} cookie=${req.headers.cookie ?? "(none)"}`,
+          );
+          return;
+        case "/missing.png":
+          res.writeHead(404, { "content-type": "text/plain" }).end("not found");
+          return;
+        default:
+          res.writeHead(404).end();
+      }
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    upstreamBase = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    extendPrivateNetAllowlistForTest(`127.0.0.1:${(upstream.address() as AddressInfo).port}`);
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    resetPrivateNetAllowlistForTest();
+  });
+
+  /** buildTools + the project row the download resolves (rootPath = tempDir). */
+  async function buildToolsWithProject(deps?: { emit?: (event: unknown) => void }) {
+    const tools = await buildTools(tempDir, deps);
+    db.prepare(
+      "INSERT INTO projects (id, name, root_path, color, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("proj_browser_tool", "Browser Tool", tempDir, "#F59E0B", new Date().toISOString());
+    return tools;
+  }
+
+  it("saves a PNG to <root>/downloads/ with the magic verdict, the project-relative path, and the browser-download frame", async () => {
+    const frames: unknown[] = [];
+    const tools = await buildToolsWithProject({ emit: makeRecordingEmit(frames) });
+    const bc = tool(tools, "browser_control");
+
+    const result = await bc.execute({ action: "download", url: `${upstreamBase}/pic.png`, filename: "photo.png", sessionId: "tab-r131-dl" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("saved downloads/photo.png");
+    expect(result.output).toContain("12 bytes");
+    expect(result.output).toContain("image/png");
+    expect(result.output).toContain("magic PNG ✓");
+    expect(result.output).toContain("project-relative");
+    // The file on disk, exact bytes, in the pinned ROUND-115 location.
+    expect(existsSync(join(tempDir, "downloads", "photo.png"))).toBe(true);
+    expect(readFileSync(join(tempDir, "downloads", "photo.png"))).toEqual(PNG_BYTES);
+    // The announcement frame — beside the browser-navigate emit pattern.
+    const frame = frames.find((f) => (f as { type?: string }).type === "browser-download") as
+      | { tabId: string; sessionId: string; path: string; bytes: number }
+      | undefined;
+    expect(frame).toBeDefined();
+    expect(frame).toMatchObject({ tabId: "tab-r131-dl", path: "downloads/photo.png", bytes: 12 });
+  });
+
+  it("no filename given ⇒ the URL's last path segment; a redirect hop lands the FINAL segment", async () => {
+    const tools = await buildToolsWithProject();
+    const bc = tool(tools, "browser_control");
+
+    const named = await bc.execute({ action: "download", url: `${upstreamBase}/pic.png`, sessionId: "tab-r131-dl2" });
+    expect(named.ok).toBe(true);
+    expect(named.output).toContain("saved downloads/pic.png");
+
+    const hopped = await bc.execute({ action: "download", url: `${upstreamBase}/hop.png`, sessionId: "tab-r131-dl2" });
+    expect(hopped.ok).toBe(true);
+    // The redirect chain was followed (fetchUpstreamGuarded's manual walk —
+    // the FINAL url names the source and its segment named the file) and the
+    // same bytes arrived, so the incumbent was REUSED (never re-written).
+    expect(hopped.output).toContain("already saved as downloads/pic.png");
+    expect(hopped.output).toContain("from " + `${upstreamBase}/pic.png`);
+  });
+
+  it("nothing is ever silently overwritten: different bytes mint -2/-3, identical bytes are REUSED", async () => {
+    const tools = await buildToolsWithProject();
+    const bc = tool(tools, "browser_control");
+
+    const second = await bc.execute({ action: "download", url: `${upstreamBase}/alt.png`, filename: "photo.png", sessionId: "tab-r131-dl3" });
+    expect(second.ok).toBe(true);
+    expect(second.output).toContain("saved downloads/photo-2.png");
+    expect(readFileSync(join(tempDir, "downloads", "photo-2.png"))).toEqual(ALT_PNG_BYTES);
+    // The incumbent kept its bytes — no overwrite.
+    expect(readFileSync(join(tempDir, "downloads", "photo.png"))).toEqual(PNG_BYTES);
+
+    const third = await bc.execute({ action: "download", url: `${upstreamBase}/pic.png`, filename: "photo.png", sessionId: "tab-r131-dl3" });
+    expect(third.ok).toBe(true);
+    expect(third.output).toContain("already saved as downloads/photo.png");
+    expect(third.output).toContain("byte-identical");
+    expect(existsSync(join(tempDir, "downloads", "photo-3.png"))).toBe(false);
+  });
+
+  it("a filename with path separators is sanitized — no traversal out of downloads/", async () => {
+    const tools = await buildToolsWithProject();
+    const bc = tool(tools, "browser_control");
+    const result = await bc.execute({ action: "download", url: `${upstreamBase}/pic.png`, filename: "../../evil.png", sessionId: "tab-r131-dl4" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("saved downloads/evil.png");
+    expect(existsSync(join(tempDir, "downloads", "evil.png"))).toBe(true);
+    expect(existsSync(join(tempDir, "evil.png"))).toBe(false); // never escaped
+  });
+
+  it("the liar shape: content-type image/png over TEXT bytes — saved, mismatch REPORTED, requested name kept", async () => {
+    const tools = await buildToolsWithProject();
+    const bc = tool(tools, "browser_control");
+    const result = await bc.execute({ action: "download", url: `${upstreamBase}/liar.png`, filename: "liar.png", sessionId: "tab-r131-dl5" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("HONESTY NOTE: the content-type says image/png but the bytes carry no known image signature");
+    expect(result.output).toContain("look like TEXT");
+    expect(result.output).toContain("saved downloads/liar.png");
+  });
+
+  it("the referer + the panel's user agent + the tab's cookies ride the fetch (the page-context contract)", async () => {
+    const frames: unknown[] = [];
+    const tools = await buildToolsWithProject({ emit: makeRecordingEmit(frames) });
+    const bc = tool(tools, "browser_control");
+    // The tab is ON a page (the honest referer), and its project jar holds a
+    // cookie set by an earlier same-project fetch.
+    await bc.execute({ action: "navigate", url: "https://en.wikipedia.org/wiki/Downloads", sessionId: "tab-r131-dl6" });
+    await bc.execute({ action: "download", url: `${upstreamBase}/set-cookie`, filename: "cookie-set.txt", sessionId: "tab-r131-dl6" });
+    const result = await bc.execute({ action: "download", url: `${upstreamBase}/echo`, filename: "echo.txt", sessionId: "tab-r131-dl6" });
+    expect(result.ok).toBe(true);
+    // The echoed headers, verbatim in the saved body: the page as referer,
+    // the PANEL's UA (Chrome-lineage, AcuteBrowser-free server-side fetch
+    // UA is the proxy's own — pinned by its own string), and the cookie.
+    const body = readFileSync(join(tempDir, "downloads", "echo.txt"), "utf8");
+    expect(body).toContain("referer=https://en.wikipedia.org/wiki/Downloads");
+    expect(body).toContain("ua=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+    expect(body).toContain("cookie=dl=sess321");
+    // The output names the referer too.
+    expect(result.output).toContain("referer: https://en.wikipedia.org/wiki/Downloads");
+  });
+
+  it("failures are honest: HTTP status named, non-http(s) refused, unknown project refused", async () => {
+    const tools = await buildToolsWithProject();
+    const bc = tool(tools, "browser_control");
+
+    const missing = await bc.execute({ action: "download", url: `${upstreamBase}/missing.png`, sessionId: "tab-r131-dl7" });
+    expect(missing.ok).toBe(false);
+    expect(missing.output).toContain("HTTP 404");
+    expect(missing.output).toContain(`${upstreamBase}/missing.png`);
+
+    const ftp = await bc.execute({ action: "download", url: "ftp://example.com/file.png", sessionId: "tab-r131-dl7" });
+    expect(ftp.ok).toBe(false);
+    expect(ftp.output).toContain("only http(s) URLs can be downloaded");
+
+    const noUrl = await bc.execute({ action: "download", sessionId: "tab-r131-dl7" });
+    expect(noUrl.ok).toBe(false);
+    expect(noUrl.output).toContain("requires 'url'");
+
+    // No project row ⇒ the honest refusal (a project-bound chat session is
+    // where downloads live).
+    const bare = await buildTools(tempDir);
+    const bcBare = tool(bare, "browser_control");
+    const noProject = await bcBare.execute({ action: "download", url: `${upstreamBase}/pic.png`, sessionId: "tab-r131-dl8" });
+    expect(noProject.ok).toBe(false);
+    expect(noProject.output).toContain("project 'proj_browser_tool' was not found");
   });
 });
