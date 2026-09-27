@@ -187,7 +187,11 @@ export function nativeTabGo(tabId: string, direction: "back" | "forward" | "relo
 export async function nativeTabUrl(tabId: string): Promise<string | null> {
   const tauri = tauriGlobal();
   if (tauri === null) return null;
-  return (await tauri.core.invoke("browser_tab_url", { tabId })) as string;
+  const url = (await tauri.core.invoke("browser_tab_url", { tabId })) as string;
+  // R131-B-ui (BU3): a successful read refreshes the module's last-known-URL
+  // memory (the eval diagnostics quote it).
+  if (typeof url === "string" && url !== "") tabUrlMemory.set(tabId, url);
+  return url;
 }
 
 /** Destroy the tab's webview (idempotent — closing twice is a no-op). */
@@ -275,6 +279,25 @@ export interface TabEvalResult {
 }
 
 /**
+ * ROUND-131 (R131-B-ui, BU3): the module's LAST KNOWN URL per tab — written
+ * by every `browser-navigated` event this module funnels (regardless of any
+ * panel being mounted) and by every successful `nativeTabUrl` read. The
+ * eval decoder's diagnostics quote it (the ledger's defect: "eval
+ * null-payload with no diagnostics" — the agent had no way to know the eval
+ * context was gone because the page had navigated). Module state only —
+ * never a lie: a tab the module never saw answers null.
+ */
+const tabUrlMemory = new Map<string, string>();
+
+/**
+ * R131-B-ui (BU3): the last URL this module saw for the tab (a navigation
+ * event or an explicit url read), or null when none was ever seen.
+ */
+export function lastKnownTabUrl(tabId: string): string | null {
+  return tabUrlMemory.get(tabId) ?? null;
+}
+
+/**
  * R67/E2 — the WebView2 eval double-encoding normalizer.
  *
  * THE bug: on Windows, wry's `eval_with_callback` rides WebView2's
@@ -315,12 +338,27 @@ export async function nativeTabEval(tabId: string, script: string): Promise<TabE
     const raw = (await tauri.core.invoke("browser_tab_eval", { tabId, script })) as unknown;
     if (typeof raw !== "string") return { ok: false, error: "browser_tab_eval returned a non-string" };
     const parsed = parseWebViewEvalJson(raw) as Partial<TabEvalResult> | string | null;
-    if (parsed === null || typeof parsed !== "object") {
+    if (parsed === null) {
+      // R131-B-ui (BU3 — the ledger's "eval null-payload with no
+      // diagnostics" defect): the literal-"null" answer is a REAL signal,
+      // not garbage — WebView2's ExecuteScriptAsync answers the JSON null
+      // when the page NAVIGATED AWAY under the eval (the old document is
+      // destroyed, the callback fires with nothing) or the script itself
+      // evaluated to undefined (the Rust wrap maps undefined → null). The
+      // old message ("unexpected payload: null") told the agent neither.
+      // Name both causes + the recovery (re-probe with get_state) + the
+      // tab's last known URL so the next field report pinpoints the case.
+      const lastUrl = tabUrlMemory.get(tabId) ?? null;
+      return {
+        ok: false,
+        error:
+          "the page navigated away or the script returned undefined — the eval context is gone; re-probe with get_state" +
+          (lastUrl !== null ? ` (last known URL: ${lastUrl.slice(0, 200)})` : ""),
+      };
+    }
+    if (typeof parsed !== "object" || typeof parsed.ok !== "boolean") {
       // Still not the {ok, value|error} envelope — report the shape honestly
       // (this is the old "the page rejected the script" class of failure).
-      return { ok: false, error: `browser_tab_eval returned an unexpected payload: ${String(raw).slice(0, 200)}` };
-    }
-    if (typeof parsed.ok !== "boolean") {
       return { ok: false, error: `browser_tab_eval returned an unexpected payload: ${String(raw).slice(0, 200)}` };
     }
     return parsed as TabEvalResult;
@@ -465,6 +503,10 @@ export function onBrowserNavigated(callback: (tabId: string, url: string) => voi
         typeof payload.tab_id === "string" &&
         typeof payload.url === "string"
       ) {
+        // R131-B-ui (BU3): every navigation the module funnels refreshes the
+        // last-known-URL memory — the eval diagnostics quote it when the
+        // eval context is gone (the page navigated away under the script).
+        if (payload.url !== "") tabUrlMemory.set(payload.tab_id, payload.url);
         callback(payload.tab_id, payload.url);
       }
     })
@@ -477,6 +519,110 @@ export function onBrowserNavigated(callback: (tabId: string, url: string) => voi
     .catch(() => {
       // Event channel unavailable — the panel still works; it just won't
       // see in-webview navigations (address bar + poll keep running).
+    });
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
+}
+
+// ── ROUND-131 (R131-B-ui, BU2/BU3): the native downloads ───────────────────
+
+/**
+ * R131-B-ui (BU2): `<root>/downloads` — the per-project download dir the
+ * Rust `browser_tab_set_download_dir` command records for the tab (the
+ * ROUND-115-pinned save location: "when a 'save this download' affordance
+ * lands, its save location is pinned: <projectRoot>/downloads/"). Pure;
+ * exported for the tests. Handles both separator styles + trailing
+ * separators; an empty/blank root answers "/downloads" (the Rust side's
+ * own absolute-path validation is the real gate).
+ */
+export function downloadDirForRoot(root: string): string {
+  const trimmed = root.replace(/[\\/]+$/, "");
+  return `${trimmed === "" ? "" : trimmed}/downloads`;
+}
+
+/**
+ * R131-B-ui (BU2): tell Rust where THIS tab's downloads land (validated on
+ * the Rust side: absolute + created recursively). The PANEL calls it when
+ * it resolves the bound project's rootPath. Outside Tauri a safe no-op; on
+ * the Linux shell the command refuses honestly ("downloads are Windows-only
+ * in this build") — a rejection callers log once and swallow.
+ *
+ * The invoke key is `dir` (the Rust command's parameter is
+ * `browser_tab_set_download_dir(tab_id, dir)` — the audit caught the
+ * interrupted run sending `path`, which Tauri would reject as a missing
+ * `dir` key at RUNTIME even though every test-level mock stayed green).
+ */
+export function nativeTabSetDownloadDir(tabId: string, path: string): Promise<void> {
+  return runCommand("browser_tab_set_download_dir", { tabId, dir: path });
+}
+
+/**
+ * R131-B-ui (BU3): the `browser-download` event payload — emitted by the
+ * Rust DownloadStarting handler (state "starting") and its StateChanged
+ * follower ("completed" / "interrupted") with the bytes read at emit time.
+ * Serde keeps snake_case (same convention as `browser-navigated`).
+ */
+export interface NativeDownloadInfo {
+  /** "starting" | "completed" | "interrupted". */
+  state: "starting" | "completed" | "interrupted";
+  /** The absolute local path the bytes land at. */
+  path: string;
+  /** The download's file name (the path's final component). */
+  fileName: string;
+  /** Bytes received at emit time. */
+  receivedBytes: number;
+  /** The total when known (WebView2 answers -1 for unknown). */
+  totalBytes: number | null;
+}
+
+/**
+ * R131-B-ui (BU3): subscribe to `browser-download` — the Rust DownloadStarting
+ * pipeline's DOM-side channel (the panel surfaces a quiet toast; the sibling
+ * B-core's same-named SSE frame is the agent-side twin for the download
+ * ACTION — separate transports, no stream-store intercept needed here). The
+ * callback receives them as arguments; the returned function unsubscribes.
+ * Outside Tauri this is a permanent no-op subscription.
+ */
+export function onBrowserDownload(callback: (tabId: string, info: NativeDownloadInfo) => void): () => void {
+  const tauri = tauriGlobal();
+  if (tauri === null || typeof tauri.event?.listen !== "function") return () => {};
+
+  let unlisten: (() => void) | null = null;
+  let disposed = false;
+  void tauri.event
+    .listen("browser-download", (event) => {
+      const payload = event.payload as Record<string, unknown> | null;
+      if (payload === null || typeof payload !== "object") return;
+      const { tab_id, state, path, file_name, received_bytes, total_bytes } = payload as {
+        tab_id?: unknown;
+        state?: unknown;
+        path?: unknown;
+        file_name?: unknown;
+        received_bytes?: unknown;
+        total_bytes?: unknown;
+      };
+      if (typeof tab_id !== "string" || typeof state !== "string" || typeof path !== "string") return;
+      if (state !== "starting" && state !== "completed" && state !== "interrupted") return;
+      if (typeof file_name !== "string") return;
+      if (typeof received_bytes !== "number" || !Number.isFinite(received_bytes)) return;
+      if (total_bytes !== null && typeof total_bytes !== "number") return;
+      callback(tab_id, {
+        state,
+        path,
+        fileName: file_name,
+        receivedBytes: Math.max(0, received_bytes),
+        totalBytes: typeof total_bytes === "number" && Number.isFinite(total_bytes) && total_bytes >= 0 ? total_bytes : null,
+      });
+    })
+    .then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    })
+    .catch(() => {
+      // Event channel unavailable — downloads still land on disk; the
+      // panel just won't toast (the files remain in the downloads dir).
     });
   return () => {
     disposed = true;

@@ -17,6 +17,8 @@ import {
   useRightSidebarStore,
   stateKey,
   defaultProjectRightState,
+  BROWSER_PANEL_HEIGHT_SHARE,
+  BROWSER_PANEL_MIN_HEIGHT,
   type RightSidebarTabType,
 } from "../../lib/right-sidebar-store";
 import { useRightSidebarEvents } from "../../lib/right-sidebar-events";
@@ -212,6 +214,46 @@ export function RightSidebar({
   // width below transitions SMOOTHLY whenever the cap changes (window resize)
   // — the owner asked for the shrink to happen "automatically, smoothly".
   const width = Math.max(36, Math.min(state.width, maxWidth ?? state.width));
+
+  // ── R131-B-ui (BU1): the browser panel HEIGHT LAW ─────────────────────
+  // The panel's drag-resize stores a per-slice browserPanelHeight (null = the
+  // fill behavior). THIS is the render-time truth: the sidebar's content
+  // column is measured (ResizeObserver — window resizes, the tab strip's
+  // wrap, any layout change) and every browser keep-alive wrapper renders
+  // at the STORED height, honestly RE-CAPPED against ~75% of the measured
+  // column (BROWSER_PANEL_HEIGHT_SHARE; the floor wins when the column is
+  // too short — a usable browser beats a sliver, the width law's precedent).
+  // A set height top-anchors the wrapper; null keeps the fill (inset-0 —
+  // the panel fills the column exactly as it always did). The height is a
+  // plain style — INSTANT on every platform, which satisfies the R67/E5
+  // instant-snap law for Tauri trivially (the width's motion value already
+  // snaps at duration 0 there); the native webview re-glues automatically
+  // through the panel's existing bounds-sync loop.
+  const activePanelRef = useRef<HTMLDivElement | null>(null);
+  const [columnHeight, setColumnHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const el = activePanelRef.current;
+    if (el === null) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const h = entry.contentRect.height;
+        setColumnHeight(Number.isFinite(h) && h > 0 ? h : null);
+      }
+    });
+    observer.observe(el);
+    const initial = el.getBoundingClientRect().height;
+    if (Number.isFinite(initial) && initial > 0) setColumnHeight(initial);
+    return () => observer.disconnect();
+  }, []);
+  const panelHeightCap =
+    columnHeight !== null
+      ? Math.max(BROWSER_PANEL_MIN_HEIGHT, Math.floor(BROWSER_PANEL_HEIGHT_SHARE * columnHeight))
+      : null;
+  const storedPanelHeight = state.browserPanelHeight ?? null;
+  const effectivePanelHeight =
+    storedPanelHeight === null
+      ? null
+      : Math.min(storedPanelHeight, panelHeightCap ?? Number.POSITIVE_INFINITY);
 
   // Quick-menu open state.
   const [quickMenuOpen, setQuickMenuOpen] = useState(false);
@@ -797,7 +839,7 @@ export function RightSidebar({
       </div>
 
       {/* ── Active panel ── */}
-      <div className="flex-1 min-h-0 overflow-hidden relative">
+      <div ref={activePanelRef} className="flex-1 min-h-0 overflow-hidden relative">
         {/* ROUND-87 (R87, owner: "Make sure to properly embed the browser
             window as a complete part of the application itself rather than
             it being an overlay … If I click on the new tab button, the whole
@@ -809,14 +851,21 @@ export function RightSidebar({
             native webview hides but never re-creates (no reload, no blank
             frame, no glitch); the proxied iframe stays loaded (no FOUC,
             no lost scroll); switching back is INSTANT. Non-browser panels
-            stay conditional (cheap mount/unmount). */}
+            stay conditional (cheap mount/unmount).
+            R131-B-ui (BU1): when the slice carries a user-set
+            browserPanelHeight the wrapper renders AT that height
+            (top-anchored, honestly re-capped against the measured column —
+            see the height law above) instead of filling it; the remainder
+            below is the sidebar card's own space and the panel's
+            bottom-edge/corner resize handles delineate the browser's end. */}
         {state.tabs
           .filter((t) => t.type === "browser")
           .map((browserTab) => (
             <div
               key={browserTab.id}
-              className="absolute inset-0"
+              className="absolute left-0 right-0 top-0"
               style={{
+                ...(effectivePanelHeight !== null ? { height: effectivePanelHeight } : { bottom: 0 }),
                 display: activeTab?.id === browserTab.id ? "block" : "none",
                 zIndex: 0,
               }}
@@ -826,6 +875,8 @@ export function RightSidebar({
                 projectId={projectId}
                 tab={browserTab}
                 hidden={activeTab?.id !== browserTab.id}
+                widthCap={maxWidth}
+                heightCap={panelHeightCap ?? undefined}
               />
             </div>
           ))}

@@ -230,3 +230,113 @@ describe("setWidth — the R89-D1 dynamic cap", () => {
     expect(useRightSidebarStore.getState().byProject["prj_cap::default"]?.width).toBe(760);
   });
 });
+
+/* ── ROUND-131 (R131-B-ui, BU1): the browser panel HEIGHT law — the owner's
+ * "flexibly change the width of the browser window itself… drag the corners
+ * and resize it properly". setBrowserPanelHeight mirrors setWidth's clamp
+ * shape exactly (the floor, the live cap, the floor-wins-over-too-narrow-cap
+ * precedent); the ONLY asymmetry is the reset (null = the fill behavior). */
+describe("setBrowserPanelHeight — the R131-B-ui height law", () => {
+  beforeEach(() => {
+    useRightSidebarStore.setState({ byProject: {}, activeSessionByProject: {} });
+  });
+
+  function stored(projectId: string): number | null {
+    return useRightSidebarStore.getState().byProject[`${projectId}::default`]?.browserPanelHeight ?? null;
+  }
+
+  it("stores the height; null RESETS to the fill behavior (the double-click reset path)", () => {
+    useRightSidebarStore.getState().setBrowserPanelHeight("prj_h", 500);
+    expect(stored("prj_h")).toBe(500);
+    useRightSidebarStore.getState().setBrowserPanelHeight("prj_h", null);
+    expect(stored("prj_h")).toBeNull();
+  });
+
+  it("the 280 floor holds (a browser card shorter than chrome + a usable page area is refused)", () => {
+    useRightSidebarStore.getState().setBrowserPanelHeight("prj_h", 100);
+    expect(stored("prj_h")).toBe(280);
+    // The floor applies UNDER a cap too.
+    useRightSidebarStore.getState().setBrowserPanelHeight("prj_h", -50, 600);
+    expect(stored("prj_h")).toBe(280);
+  });
+
+  it("the live cap (the RightSidebar's measured-column share) clamps the ceiling", () => {
+    useRightSidebarStore.getState().setBrowserPanelHeight("prj_h", 900, 600);
+    expect(stored("prj_h")).toBe(600);
+  });
+
+  it("the floor WINS over a too-narrow cap (a usable browser beats a sliver — the setWidth precedent)", () => {
+    useRightSidebarStore.getState().setBrowserPanelHeight("prj_h", 500, 200);
+    expect(stored("prj_h")).toBe(280);
+  });
+
+  it("without a cap only the floor applies (the render-time cap re-clamps honestly)", () => {
+    useRightSidebarStore.getState().setBrowserPanelHeight("prj_h", 9999);
+    expect(stored("prj_h")).toBe(9999);
+  });
+
+  it("the v4 → v5 migration backfills browserPanelHeight (null = fill) and keeps an honest persisted number", () => {
+    const migrate = useRightSidebarStore.persist.getOptions().migrate;
+    expect(migrate).toBeTypeOf("function");
+
+    const v4 = {
+      activeProjectId: "prj_1",
+      activeSessionByProject: { prj_1: "sess_a" },
+      byProject: {
+        "prj_1::sess_a": {
+          open: true,
+          width: 500,
+          tabs: [{ id: "tab-browser", type: "browser", title: "B", createdAt: 1 }],
+          activeTabId: "tab-browser",
+          terminalLinesByTab: {},
+        },
+      },
+    };
+    const migrated = (migrate as (persisted: unknown, version: number) => unknown)(v4, 4) as {
+      byProject: Record<string, { browserPanelHeight: number | null }>;
+    };
+    // v4 slices simply lack the field — the fill behavior is the default.
+    expect(migrated.byProject["prj_1::sess_a"].browserPanelHeight).toBeNull();
+
+    // A persisted number survives verbatim (the render-time re-cap owns the
+    // honest clamping against a LATER-shorter column, never the migration).
+    const v5 = {
+      activeProjectId: "prj_1",
+      activeSessionByProject: { prj_1: "sess_a" },
+      byProject: {
+        "prj_1::sess_a": {
+          open: true,
+          width: 500,
+          tabs: [{ id: "tab-browser", type: "browser", title: "B", createdAt: 1 }],
+          activeTabId: "tab-browser",
+          terminalLinesByTab: {},
+          browserPanelHeight: 512,
+        },
+      },
+    };
+    const migrated5 = (migrate as (persisted: unknown, version: number) => unknown)(v5, 5) as {
+      byProject: Record<string, { browserPanelHeight: number | null }>;
+    };
+    expect(migrated5.byProject["prj_1::sess_a"].browserPanelHeight).toBe(512);
+
+    // Untrusted persisted JSON never smuggles garbage through the field.
+    const v5bad = {
+      activeProjectId: null,
+      activeSessionByProject: {},
+      byProject: {
+        "prj_1::sess_a": {
+          open: true,
+          width: 500,
+          tabs: [],
+          activeTabId: null,
+          terminalLinesByTab: {},
+          browserPanelHeight: "tall",
+        },
+      },
+    };
+    const migratedBad = (migrate as (persisted: unknown, version: number) => unknown)(v5bad, 5) as {
+      byProject: Record<string, { browserPanelHeight: number | null }>;
+    };
+    expect(migratedBad.byProject["prj_1::sess_a"].browserPanelHeight).toBeNull();
+  });
+});

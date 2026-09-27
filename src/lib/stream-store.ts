@@ -1850,6 +1850,31 @@ function handleStreamEvent(
     }
     return;
   }
+  // ── ROUND-131 (R131-B-ui, BU3): the agent's download ACTION landed — the
+  // sibling B-core's `browser-download` SSE frame `{sessionId, tabId, path,
+  // bytes}` (turn-independent, exactly like the navigate/open frames above;
+  // the frame is ADDITIVE for older frontends). The per-tab browser store
+  // records it (applyAgentDownload → lastDownload) and the mounted panel
+  // surfaces the quiet status line. The frame is not yet in api.ts's
+  // StreamTurnEvent union (READ-ONLY this wave) — the intercept reads it
+  // through a permissive cast, exactly how the raw SSE parser passes
+  // unknown-but-well-formed frames through to this funnel. FLAGGED for the
+  // next api.ts touch: promote the frame into the union and drop the cast. ──
+  if ((event as { type?: string }).type === "browser-download") {
+    const dl = event as { tabId?: unknown; path?: unknown; bytes?: unknown };
+    const frameTabId = typeof dl.tabId === "string" && dl.tabId !== "" ? dl.tabId : null;
+    if (frameTabId !== null) {
+      // The frame's tabId is the SIDECAR session id — map it to the store's
+      // tab key when a panel slice exists, else record under the id itself
+      // (an agent-minted tab's key IS its session id — the browser-open law).
+      const storeTabId = useBrowserTabStore.getState().tabIdForSession(frameTabId) ?? frameTabId;
+      useBrowserTabStore.getState().applyAgentDownload(storeTabId, {
+        path: typeof dl.path === "string" ? dl.path : "",
+        bytes: typeof dl.bytes === "number" && Number.isFinite(dl.bytes) && dl.bytes >= 0 ? dl.bytes : 0,
+      });
+    }
+    return;
+  }
 
   // ── ROUND-78 (R78-D): the message-queue frames — TURN-INDEPENDENT (they
   // mutate the session's queue slice, not liveTurn: a queued message can

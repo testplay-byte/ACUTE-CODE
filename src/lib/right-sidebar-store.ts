@@ -117,11 +117,35 @@ export interface ProjectRightState {
   activeTabId: string | null;
   /** Per-tab terminal scrollback (keyed by tab id; terminal tabs only). */
   terminalLinesByTab: Record<string, TerminalLine[]>;
+  /** ROUND-131 (R131-B-ui, BU1 — the owner: "the ability to flexibly change
+   * the width of the browser window itself… drag the corners and resize it
+   * properly"): the browser panel's USER-SET HEIGHT in px. null (the
+   * default) = the fill behavior the panel always had (flex-1 — the panel
+   * fills the sidebar column); a number = the panel renders at exactly
+   * that height (top-anchored inside the column, the resize handles
+   * re-delineating its edges — the native webview re-glues automatically
+   * through the existing bounds-sync loop). Persisted like `width` (it
+   * rides `byProject` in the persist partialize). Clamped by
+   * `setBrowserPanelHeight` against [BROWSER_PANEL_MIN_HEIGHT .. the live
+   * column cap]; a stored value that outgrows a later-shorter column is
+   * honestly re-capped at RENDER time (RightSidebar's height law). */
+  browserPanelHeight: number | null;
 }
 
 export const RIGHT_SIDEBAR_MIN_WIDTH = 360;
 export const RIGHT_SIDEBAR_MAX_WIDTH = 760;
 export const RIGHT_SIDEBAR_DEFAULT_WIDTH = 460;
+/** ROUND-131 (R131-B-ui, BU1): the browser panel height's FLOOR (px) — a
+ * browser card shorter than this cannot render its chrome bar + viewport
+ * bar + a usable page area; the drag clamp and the store clamp both hold
+ * it. */
+export const BROWSER_PANEL_MIN_HEIGHT = 280;
+/** ROUND-131 (R131-B-ui, BU1): the browser panel height's CEILING share of
+ * the sidebar's content column (~75%). The default (null) keeps the panel
+ * filling 100% of the column; once the user sets a height, the set value
+ * never exceeds this share — the panel always reads as a deliberately
+ * shorter browser, never a near-full-height sliver that forgot to fill. */
+export const BROWSER_PANEL_HEIGHT_SHARE = 0.75;
 /** Max open tabs per project (LRU eviction past this). */
 const MAX_TABS = 12;
 /** ROUND-65 (R65): agent-browser activity burst gap — frames closer than
@@ -135,6 +159,8 @@ export function defaultProjectRightState(): ProjectRightState {
     tabs: [],
     activeTabId: null,
     terminalLinesByTab: {},
+    // R131-B-ui (BU1): null = the fill behavior (the panel keeps flex-1).
+    browserPanelHeight: null,
   };
 }
 
@@ -172,6 +198,17 @@ interface RightSidebarState {
   setOpen: (projectId: string, open: boolean) => void;
   toggleOpen: (projectId: string) => void;
   setWidth: (projectId: string, width: number, effectiveMax?: number) => void;
+  /** ROUND-131 (R131-B-ui, BU1): set (or reset) the browser panel height.
+   * null resets to the DEFAULT FILL behavior (the panel goes back to
+   * flex-1 — the bottom-edge/corner handles' double-click reset targets
+   * this). A number clamps against [BROWSER_PANEL_MIN_HEIGHT ..
+   * effectiveMax] — the LIVE column cap the RightSidebar passes (0.75 × the
+   * measured column height); when the cap is narrower than the floor the
+   * FLOOR wins (a usable browser beats a sliver — the setWidth precedent).
+   * Without a cap only the floor applies; the render-time cap (the
+   * RightSidebar height law) does the honest re-clamping, exactly like
+   * the width law. */
+  setBrowserPanelHeight: (projectId: string, height: number | null, effectiveMax?: number) => void;
   /** Add a tab (or activate an existing tab of the same type+key). */
   addTab: (
     projectId: string,
@@ -321,6 +358,18 @@ export const useRightSidebarStore = create<RightSidebarState>()(
             RIGHT_SIDEBAR_MIN_WIDTH,
             effectiveMax ?? RIGHT_SIDEBAR_MAX_WIDTH,
           ),
+        }),
+      // R131-B-ui (BU1): the browser panel height — see the interface
+      // comment for the full law. Mirrors setWidth's clamp shape exactly
+      // (floor wins over a too-narrow cap; the render-time cap re-clamps
+      // honestly); the only asymmetry is the RESET: null clears the stored
+      // value so the panel returns to the fill behavior (flex-1).
+      setBrowserPanelHeight: (projectId, height, effectiveMax) =>
+        get().patch(projectId, {
+          browserPanelHeight:
+            height === null
+              ? null
+              : clamp(height, BROWSER_PANEL_MIN_HEIGHT, effectiveMax ?? Number.POSITIVE_INFINITY),
         }),
       addTab: (projectId, tabInput) => {
         // Compute the id up front so we can return it (set() returns void).
@@ -543,7 +592,7 @@ export const useRightSidebarStore = create<RightSidebarState>()(
         activeProjectId: state.activeProjectId,
         activeSessionByProject: state.activeSessionByProject,
       }),
-      version: 4,
+      version: 5,
       // v2 → v3 (ROUND-41): the storage key changed from `projectId` to
       // `projectId::sessionId` for per-session sidebar state. Old slices
       // are unreachable under the new key scheme, so drop them. Users
@@ -556,6 +605,12 @@ export const useRightSidebarStore = create<RightSidebarState>()(
       // are dropped and an activeTabId pointing at one falls back to the
       // first surviving tab (the floating monitor is the surface now —
       // nothing is lost, the STOP bar is always on top while it matters).
+      //
+      // v4 → v5 (ROUND-131, R131-B-ui): the slice gains `browserPanelHeight`
+      // (the panel drag-resize's height law). Older slices simply lack the
+      // field — backfill null (the default FILL behavior; a stale undefined
+      // would behave identically at every `?? null` read site, but the
+      // honest shape is worth three lines).
       migrate: (persisted: unknown, version: number) => {
         if (version < 3 || typeof persisted !== "object" || persisted === null) {
           return { byProject: {}, activeProjectId: null, activeSessionByProject: {} };
@@ -580,7 +635,14 @@ export const useRightSidebarStore = create<RightSidebarState>()(
             tabs.some((t) => t.id === slice.activeTabId)
               ? slice.activeTabId
               : (tabs[0]?.id ?? null);
-          byProject[key] = { ...slice, tabs, activeTabId };
+          // R131-B-ui: v4 slices have no browserPanelHeight — null (fill).
+          const rawHeight = (slice as { browserPanelHeight?: unknown } | undefined)?.browserPanelHeight;
+          byProject[key] = {
+            ...slice,
+            tabs,
+            activeTabId,
+            browserPanelHeight: typeof rawHeight === "number" && Number.isFinite(rawHeight) ? rawHeight : null,
+          };
         }
         return {
           byProject,

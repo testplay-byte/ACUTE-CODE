@@ -29,6 +29,12 @@ import {
   nativeTabsCloseAll,
   onBrowserNavigated,
   openExternalUrl,
+  // R131-B-ui (BU2/BU3): the native download pipeline's frontend legs.
+  downloadDirForRoot,
+  lastKnownTabUrl,
+  nativeTabSetDownloadDir,
+  onBrowserDownload,
+  type NativeDownloadInfo,
 } from "../../lib/native-browser";
 
 const AREA = { left: 80, top: 120, width: 400, height: 500 };
@@ -317,5 +323,171 @@ describe("R67 nativeTabEval / nativeTabScrollState — both transports return da
   it("nativeTabScrollState: a garbage reply returns null (never throws)", async () => {
     stubTauri(async () => "###");
     expect(await nativeTabScrollState("tab-1")).toBeNull();
+  });
+});
+
+// ── ROUND-131 (R131-B-ui): the native downloads + the eval null diagnostics ──
+
+describe("R131-B-ui (BU2): downloadDirForRoot — the <root>/downloads join", () => {
+  it("joins windows and posix roots, trimming trailing separators of both styles", () => {
+    // The join appends "/downloads" verbatim (Windows accepts the mixed
+    // separator — PathBuf::is_absolute and dir.join both normalize it on
+    // the Rust side; the Linux/dev shell only ever sees posix roots).
+    expect(downloadDirForRoot("C:\\Users\\me\\proj")).toBe("C:\\Users\\me\\proj/downloads");
+    expect(downloadDirForRoot("/home/z/proj")).toBe("/home/z/proj/downloads");
+    expect(downloadDirForRoot("/home/z/proj/")).toBe("/home/z/proj/downloads");
+    expect(downloadDirForRoot("/home/z/proj\\\\//")).toBe("/home/z/proj/downloads");
+  });
+
+  it("an empty root answers '/downloads' (the Rust side's absolute-path gate is the real refusal)", () => {
+    expect(downloadDirForRoot("")).toBe("/downloads");
+  });
+});
+
+describe("R131-B-ui (BU2): nativeTabSetDownloadDir — the command mapping", () => {
+  it("maps to browser_tab_set_download_dir with the Rust `dir` parameter name (camelCase note does NOT rename path→dir)", async () => {
+    // The Rust command is browser_tab_set_download_dir(tab_id, dir) — Tauri
+    // maps tabId→tab_id but leaves the `dir` key verbatim; sending `path`
+    // (the interrupted run's shape) would fail at RUNTIME as a missing
+    // `dir` key even though every JS-level mock stayed green.
+    const { calls } = stubTauri();
+    await nativeTabSetDownloadDir("tab-1", "C:\\Users\\me\\proj\\downloads");
+    expect(calls).toEqual([
+      { cmd: "browser_tab_set_download_dir", args: { tabId: "tab-1", dir: "C:\\Users\\me\\proj\\downloads" } },
+    ]);
+  });
+
+  it("outside Tauri the registration is a safe no-op (never throws)", async () => {
+    await expect(nativeTabSetDownloadDir("t1", "/nowhere/downloads")).resolves.toBeUndefined();
+  });
+});
+
+describe("R131-B-ui (BU3): onBrowserDownload — the Rust browser-download channel", () => {
+  it("unwraps the snake_case payload, normalizes -1 totals to null, filters malformed shapes, unsubscribes via the resolved unlisten", async () => {
+    let handler: ((ev: { payload: unknown }) => void) | null = null;
+    const unlistenFn = vi.fn();
+    vi.stubGlobal("__TAURI__", {
+      core: { invoke: vi.fn() },
+      event: {
+        listen: vi.fn(async (_event: string, h: (ev: { payload: unknown }) => void) => {
+          handler = h;
+          return unlistenFn;
+        }),
+      },
+    });
+
+    const seen: Array<[string, NativeDownloadInfo]> = [];
+    const unlisten = onBrowserDownload((tabId, info) => seen.push([tabId, info]));
+    await vi.waitFor(() => expect(handler).not.toBeNull());
+
+    const emit = (payload: unknown) => (handler as (ev: { payload: unknown }) => void)({ payload });
+    emit({
+      tab_id: "tab-1",
+      state: "starting",
+      path: "C:\\Users\\me\\proj\\downloads\\report.pdf",
+      file_name: "report.pdf",
+      received_bytes: 0,
+      total_bytes: 12345,
+    });
+    // -1 total (WebView2's "unknown") maps to null; received clamps at 0.
+    emit({
+      tab_id: "tab-1",
+      state: "completed",
+      path: "C:\\Users\\me\\proj\\downloads\\report.pdf",
+      file_name: "report.pdf",
+      received_bytes: 12345,
+      total_bytes: -1,
+    });
+    emit({ tab_id: "tab-1", state: "paused", path: "x", file_name: "y", received_bytes: 1, total_bytes: 1 }); // unknown state → ignored
+    emit({ tab_id: 42, state: "completed", path: "x", file_name: "y", received_bytes: 1, total_bytes: 1 }); // malformed → ignored
+    emit(null); // malformed → ignored
+    emit({ tab_id: "tab-1", state: "completed", path: "x", file_name: "y", received_bytes: "lots", total_bytes: 1 }); // non-number bytes → ignored
+
+    expect(seen).toEqual([
+      ["tab-1", { state: "starting", path: "C:\\Users\\me\\proj\\downloads\\report.pdf", fileName: "report.pdf", receivedBytes: 0, totalBytes: 12345 }],
+      ["tab-1", { state: "completed", path: "C:\\Users\\me\\proj\\downloads\\report.pdf", fileName: "report.pdf", receivedBytes: 12345, totalBytes: null }],
+    ]);
+
+    unlisten();
+    expect(unlistenFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("outside Tauri the subscription is a permanent no-op (the files still land on disk — just no toast)", () => {
+    let fired = 0;
+    const unlisten = onBrowserDownload(() => {
+      fired += 1;
+    });
+    expect(typeof unlisten).toBe("function");
+    expect(() => unlisten()).not.toThrow();
+    expect(fired).toBe(0);
+  });
+});
+
+describe("R131-B-ui (BU3): eval's null-payload diagnostics — the ledger's 'no diagnostics' defect", () => {
+  it("a literal-'null' raw answer names BOTH causes + the recovery hint (never the old bare dead end)", async () => {
+    stubTauri(async () => "null");
+    const result = await nativeTabEval("tab-null-1", "return 1");
+    expect(result?.ok).toBe(false);
+    expect(result?.error).toContain("the page navigated away or the script returned undefined");
+    expect(result?.error).toContain("re-probe with get_state");
+    // No URL was ever seen for this tab — the diagnostics say so by OMITTING
+    // the parenthetical, never by fabricating one.
+    expect(result?.error).not.toContain("last known URL");
+  });
+
+  it("a DOUBLE-encoded null (the Windows transport shape) answers the same fork", async () => {
+    // The page script's JSON.stringify(null) — the string "null" — arrives
+    // JSON-encoded once more on Windows: JSON.stringify("null") = "\"null\"".
+    stubTauri(async () => JSON.stringify("null"));
+    const result = await nativeTabEval("tab-null-2", "return 1");
+    expect(result?.ok).toBe(false);
+    expect(result?.error).toContain("the page navigated away or the script returned undefined");
+  });
+
+  it("the tab's LAST KNOWN URL rides the diagnostics (written by the navigation funnel)", async () => {
+    let handler: ((ev: { payload: unknown }) => void) | null = null;
+    vi.stubGlobal("__TAURI__", {
+      core: { invoke: vi.fn() },
+      event: {
+        listen: vi.fn(async (_event: string, h: (ev: { payload: unknown }) => void) => {
+          handler = h;
+          return vi.fn();
+        }),
+      },
+    });
+    const unlisten = onBrowserNavigated(() => {});
+    await vi.waitFor(() => expect(handler).not.toBeNull());
+    // The file's own emit-closure pattern (lines above): reads inside a
+    // closure see the declared type, so the cast overlaps for tsc where a
+    // top-level read would narrow to null (TS2352).
+    const emit = (payload: unknown) => (handler as (ev: { payload: unknown }) => void)({ payload });
+    emit({ tab_id: "tab-null-3", url: "https://example.com/gone" });
+    unlisten();
+    // The memory is module state — a read back proves the funnel wrote it.
+    expect(lastKnownTabUrl("tab-null-3")).toBe("https://example.com/gone");
+
+    // Now the eval context is gone (the page navigated under the script):
+    // the diagnostics quote where the tab WAS.
+    stubTauri(async () => "null");
+    const result = await nativeTabEval("tab-null-3", "return 1");
+    expect(result?.ok).toBe(false);
+    expect(result?.error).toContain("last known URL: https://example.com/gone");
+  });
+
+  it("a successful browser_tab_url read also refreshes the memory the diagnostics quote", async () => {
+    stubTauri(async (cmd: string) => (cmd === "browser_tab_url" ? "https://example.com/live" : "null"));
+    await expect(nativeTabUrl("tab-null-4")).resolves.toBe("https://example.com/live");
+    expect(lastKnownTabUrl("tab-null-4")).toBe("https://example.com/live");
+    const result = await nativeTabEval("tab-null-4", "return 1");
+    expect(result?.error).toContain("last known URL: https://example.com/live");
+  });
+
+  it("other non-object payloads keep the raw quote (the null fork is for null ONLY)", async () => {
+    stubTauri(async () => JSON.stringify("definitely not json"));
+    const result = await nativeTabEval("tab-null-5", "return 1");
+    expect(result?.ok).toBe(false);
+    expect(result?.error).toContain("unexpected payload");
+    expect(result?.error).toContain("definitely not json");
+    expect(result?.error).not.toContain("navigated away");
   });
 });

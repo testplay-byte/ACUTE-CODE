@@ -88,9 +88,11 @@ landing within **2.5 s** of a TOOL-COMMANDED navigation REPLACES the
 pending entry (its url/title update, no new index — the answer's action is
 `"redirect-collapse"`), multi-hop chains all fold into the one entry, and
 the window is bounded: a report that arrives late, or after a back/
-forward, pushes honestly. The panel can arm the same window for its own
-address-bar commands by sending `commanded: true` (the route forwards the
-flag — a B-ui follow-up, never required).
+forward, pushes honestly. R131-B-ui LANDED the panel half: the address
+bar's own commands now send `commanded: true` (the route forwards the
+flag), so an address-bar "google.com" that lands on "www.google.com" stays
+ONE history entry — the same collapse the agent's navigations get. Only
+the COMMAND path sets the flag; the location/title reports stay reports.
 
 ## The binding model (R67 — one chat session, one tab)
 
@@ -144,11 +146,56 @@ unexpected payload is reported with the raw text quoted instead of the old
 misleading rejection. The pop-out GUTTER SCROLLBAR probe rides the same
 normalizer (it was silently dead on Windows for the same reason).
 
+R131-B-ui addition, **the null fork**: a literal `null` payload is a REAL
+signal, not garbage — WebView2's `ExecuteScriptAsync` answers the JSON
+`null` when the page NAVIGATED AWAY under the eval (the old document is
+destroyed; the callback fires with nothing) or when the script itself
+evaluated to `undefined` (an undefined return serializes as null). The
+decoder now answers that case with BOTH causes named + the recovery
+("the page navigated away or the script returned undefined — the eval
+context is gone; re-probe with get_state") + the tab's LAST KNOWN URL
+(module memory, refreshed by every `browser-navigated` event and every
+`browser_tab_url` read) — never the old bare "unexpected payload: null"
+dead end. Other non-object payloads keep the raw quote.
+
 The panel resize no longer floats over the chat either (the owner's
 "overlay kind of vibe"): in the desktop shell the width snaps INSTANTLY
 (duration 0) so the bounds-sync loop keeps the OS-level webview
 pixel-glued to the placeholder; the smooth 200 ms animation stays for the
 web build (pure DOM, no floating layer).
+
+## The panel drag-resize (R131-B-ui — the owner's "drag the corners")
+
+The owner: "the ability to flexibly change the width of the browser window
+itself… like I should be able to drag the corners and resize it properly
+as needed." The panel itself now carries the house separator grammar
+(the ChatFocusLayout separator's exact pattern — `role="separator"`, the
+aria label, keyboard arrows ±16px, the 5px hit area, the hover-revealed
+2px hairline over the `bg-line` wash):
+
+- **The RIGHT-EDGE handle** widens/narrows the SIDEBAR through the SAME
+  `setWidth` clamp path the chat's separator drives (one truth: the chat's
+  floor holds no matter WHICH affordance dragged — the panel's handle
+  receives the same live `sidebarWidthCap` the separator does).
+- **The BOTTOM-EDGE handle + both CORNER squares** drive the panel's own
+  **height** — a NEW per-slice `browserPanelHeight` in the right-sidebar
+  store, persisted like the width. `null` (the default) is the FILL
+  behavior the panel always had (flex-1, the whole sidebar column); a
+  number renders the panel top-anchored at exactly that height. Clamped
+  `[280px .. ~75% of the measured column]` (the floor wins when the column
+  is too short — a usable browser beats a sliver); a stored value that
+  outgrows a later-shorter column is honestly RE-CAPPED at render time
+  (RightSidebar's ResizeObserver height law). Double-click any
+  height-bearing handle resets to the fill behavior.
+- **The geometry law**: the handles live in DOM space the OS-level webview
+  never covers (a sibling column beside the content card, a sibling row
+  below it, the root's padding corners) — the native webview floats above
+  ALL app HTML over the placeholder rect ONLY, so a sibling is the only
+  spot a clickable affordance can exist on the panel itself. Every drag
+  delta re-glues the webview automatically (the bounds-sync loop's
+  ResizeObserver reacts to ANY placeholder geometry change); the width
+  keeps the R67/E5 instant-snap law (duration 0 in Tauri) and the height
+  is a plain style change — instant on every platform by construction.
 
 ## Form submission discipline (the Google-search fix)
 
@@ -301,9 +348,66 @@ needs to be… a full-fledged browser." The agent-side half is the
   transport error, the cap, or the missing project context (downloads
   need a project-bound chat session — that is where the folder lives).
 
-The NATIVE right-click "save image as…" pipeline (WebView2's
-`DownloadStarting` handler writing to the same folder) is the B3 sibling
-wave — both halves land the same location.
+R131-B-ui addition, **the announcement's frontend landing**: the
+stream-store intercepts the frame (turn-independent, exactly like the
+navigate/open frames — the raw SSE parser passes well-formed frames
+through without a union gate), maps its `tabId` to the panel store's tab
+key, and records it as the tab's `lastDownload`; the mounted panel
+surfaces it as the same quiet status line the native pipeline uses.
+
+The NATIVE right-click "save image as…" pipeline is LANDED (R131-B-ui,
+Windows-only, CI-verified per ADR-0012) — both halves land the same
+`<projectRoot>/downloads/` folder:
+
+- **The context menu is pinned ON** (`AreDefaultContextMenusEnabled` in
+  the same `with_webview` settings pass at tab-create time) — right-click →
+  "Save image as…" is no longer a dead right-click; the save flows through
+  the pipeline below.
+- **`browser_tab_set_download_dir(tab_id, dir)`** — the command that
+  tells Rust where THIS tab's downloads land. Rust never knows the project
+  root (the sidecar owns project state), so the PANEL resolves the bound
+  project's `rootPath` and registers `<root>/downloads` on mount; a tab
+  that never got one falls back to the app's download dir. Validation is
+  honest (absolute path required, created recursively); the registration
+  survives webview re-creation (the map is per tab id, not per webview).
+- **The `DownloadStarting` handler** (registered per webview via
+  `with_webview` → ICoreWebView2_4): `Handled(true)` +
+  `ResultFilePath = <dir>/<suggested name>` with the attachments-style
+  never-overwrite `-<n>` minting (EXISTENCE-based at start time — the
+  bytes are not down yet; a fully-consumed series refuses by reusing the
+  base name and surfacing the failed write as an interrupted download,
+  never a silent overwrite). A `browser-download` TAURI event
+  (`{tab_id, state, path, file_name, received_bytes, total_bytes}` —
+  starting → completed/interrupted) reaches the panel, which presents a
+  quiet fading status line; Rust stays THIN.
+- **Non-Windows degrades honestly**: the command answers
+  "downloads are Windows-only in this build" and the panel logs it once
+  and swallows it — the agent-side `download` ACTION still works
+  everywhere through the sidecar (its fetch is plain HTTP, no WebView2).
+- Two DIFFERENT transports share the `browser-download` name: the
+  sidecar's SSE frame (the agent ACTION, above) and Rust's Tauri event
+  (the native right-click save, here). They never collide — different
+  channels — and both land the same folder.
+
+## The native title delivery (R131-B-ui)
+
+Native mode never delivered page titles (the Rust `on_navigation` hook
+fires at navigation START — the document is not loaded yet, there IS no
+title), so `get_state` answered `title:null` and the tab strip fell back
+to the host. `BrowserNavigated` now carries `title: Option<String>` (the
+one in-tree emitter sends None — the field exists so a future
+DocumentTitleChanged hook can fill it without another wire change), and
+the PANEL bridges the gap: after handling a native navigation it fires
+ONE delayed (600 ms — the page settles, `document.title` stabilizes by
+then) `eval("return document.title")` → the store's `handleTitleMessage`
+route (the iframe path's own `acute:title` feeder — it POSTs the
+title-update the agent's `get_state` reconciles against). The probe is
+debounced across navigation bursts and seq-guarded so a stale reply can
+never title the NEXT page; a failed/empty/garbage probe leaves the
+current title untouched (never a fabricated fallback). It is
+best-effort by design — a page that retitles itself after 600 ms (SPA
+route changes) shows the stale title until the next navigation; the
+sidecar's reconcile eval stays the truth.
 
 ## The monitor boundary
 
@@ -378,6 +482,18 @@ Round-100 reverts that trade and de-brands what remains:
   evergreen runtime — nothing to stage anymore. Web dev mode (`pnpm dev`)
   and the Linux sandbox never touch WebView2. The release workflow remains
   the canonical bundling path — `ci.yml` only runs `cargo check`.
+
+R131 honest scoping (the owner's "download Chromium base and build our own
+internal application browser… a full-fledged browser"): the WebView2
+runtime the panel already runs IS the Chromium-family engine — the same
+engine lineage as Edge/Chromium, auto-updated by the OS — so round 131
+ships the CAPABILITY leap on it (native downloads + right-click save-as,
+the context menu, the drag-resize, the eight tool truths) rather than
+bundling a separate engine. "Bundling our own Chromium" would mean
+replacing the app shell itself (a fixed-runtime build — the exact ~258 MB
+trade round-100 reverted — or a CEF fork at +165 MB), which is an
+owner-gated ADR, PROPOSED not decided: see round-131.md §4's pre-declared
+caveat and the R100 trilemma research above.
 
 ## Where links open (R99-A — the central link router)
 
@@ -475,11 +591,26 @@ user can always reach the device's browser deliberately.
   same host gate as `navigate`/`web_fetch`, that is an owner-gated follow-up.
   The magic-byte sniff covers PNG/JPEG/GIF/WEBP only (a mismatch is
   reported, other formats ride on trust of the content-type).
-- **The redirect-collapse window is 2.5 s and tool-armed only** (R131-B):
-  a location report landing LATE (a slow redirect chain, a hung page) still
-  pushes a second entry — the drift returns for those shapes, honestly.
-  The panel's own address-bar commands do not arm the window until B-ui
-  sends `commanded: true` (the route already forwards it).
+- **The redirect-collapse window is 2.5 s** (R131-B): a location report
+  landing LATE (a slow redirect chain, a hung page) still pushes a second
+  entry — the drift returns for those shapes, honestly. The window is
+  armed by the AGENT's tool navigations and (R131-B-ui) the panel's own
+  address-bar commands (`commanded: true` on the command path only); the
+  pop-out window, quick links and external opens do not arm it.
+- **The native download pipeline is Windows-only and CI-verified**
+  (R131-B-ui, ADR-0012): no local Rust toolchain — the COM plumbing was
+  API-verified against docs.rs webview2-com 0.38.2 + wry 0.55.1's own
+  DownloadStarting registration, and CI's `cargo check` is the compile
+  gate; the owner's live Windows run is the behavioral proof (right-click
+  an image → "Save image as…" → the file lands in the project's
+  `downloads/` and the panel toasts). The dedupe law is EXISTENCE-based
+  at DownloadStarting time (the sidecar's ACTION dedupes by CONTENT after
+  the fetch — the two laws are deliberately different because their
+  timing is).
+- **The native title probe is a 600 ms best-effort** (R131-B-ui): the
+  probe fires once per navigation burst; a page that retitles itself
+  later (SPA route changes) keeps the stale title until the next
+  navigation. `get_state`'s reconcile eval stays the truth.
 
 ## See also
 
@@ -508,11 +639,18 @@ user can always reach the device's browser deliberately.
   (`src-tauri/src/browser.rs` `PANEL_USER_AGENT` + the engine line in
   Settings → Browser and the About tab),
   the panel `src/components/right-sidebar/BrowserPanel.tsx` (the
-  agentNavSeq effect + the create-on-adopt poll backstop), the tab store +
-  instant apply + the bind client `src/lib/browser-store.ts`, the sidebar
-  slice landing `src/lib/right-sidebar-store.ts`
-  (`openBrowserForChatSession`), the instant width
+  agentNavSeq effect + the create-on-adopt poll backstop + the R131-B-ui
+  drag-resize handles + the native title probe + the download toast), the
+  tab store + instant apply + the bind client `src/lib/browser-store.ts`
+  (the address-bar `commanded:true` collapse arm + `applyAgentDownload`),
+  the sidebar slice landing `src/lib/right-sidebar-store.ts`
+  (`openBrowserForChatSession` + the persisted `browserPanelHeight` law),
+  the instant width + the render-time height cap
   `src/components/right-sidebar/RightSidebar.tsx`, the chat card
   `src/components/project-chat/BrowserCheckpointCard.tsx`, the frame
-  intercepts `src/lib/stream-store.ts`, the prompt section
+  intercepts `src/lib/stream-store.ts` (navigate/open/viewport/checkpoint/
+  download), the native download pipeline + the download-dir command + the
+  `BrowserNavigated.title` field `src-tauri/src/browser.rs`
+  (`browser_tab_set_download_dir`, the `downloads` module's
+  DownloadStarting/StateChanged handlers), the prompt section
   `agent-core/src/agents/prompts.ts` (EMBEDDED BROWSER PANEL).

@@ -63,6 +63,9 @@ function seedTerminalTab(): void {
         tabs: [tab],
         activeTabId: tab.id,
         terminalLinesByTab: {},
+        // R131-B-ui (BU1): the browser-panel height field joined the slice —
+        // null (the fill behavior) for a terminal-only fixture.
+        browserPanelHeight: null,
       },
     },
     activeProjectId: "prj_test",

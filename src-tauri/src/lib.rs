@@ -120,6 +120,16 @@ pub fn run() {
             browser::browser_tab_scroll_to,
             browser::browser_tab_set_zoom,
             browser::browser_tab_eval,
+            // ROUND-131 (R131-B-ui, BU2): the per-tab download dir for the
+            // native download pipeline — the PANEL resolves the bound
+            // project's rootPath and registers `<root>/downloads` (the
+            // ROUND-115-pinned location; the agent-side download ACTION
+            // writes to the same folder). WebView2's DownloadStarting
+            // handler (registered inside browser_tab_create) saves there
+            // and emits `browser-download` for the panel's toast. Refuses
+            // honestly on non-Windows ("downloads are Windows-only in this
+            // build").
+            browser::browser_tab_set_download_dir,
             // ROUND-128 (R128-W7a): restore the main window from minimized —
             // the staged screenshot capture's guard-3 recovery leg (a
             // minimized window used to be a flat refusal; now the capture

@@ -136,6 +136,13 @@ export interface BrowserTabUiState {
    * every panel remount. Persists per tab slice (survives panel remounts —
    * the store outlives the panel), so the setting applies ONCE per session. */
   zoomTouched: boolean;
+  /** R131-B-ui (BU3): the LAST download this tab's chat session recorded
+   * (the sibling B-core's `browser-download` SSE frame → applyAgentDownload
+   * — the AGENT's download ACTION; the native right-click save-as has its
+   * own Rust event channel). The mounted panel surfaces it as a quiet
+   * status line. `at` is the bump identity (Date.now()); null until the
+   * first download. */
+  lastDownload: { fileName: string; path: string; bytes: number; at: number } | null;
 }
 
 // ── sessionId hygiene ──────────────────────────────────────────────────────
@@ -238,8 +245,26 @@ export function bindChatBrowserSession(chatSessionId: string, sessionId: string 
   });
 }
 
-/** POST /browser/navigate — record a navigation or walk back/forward/reload. */
-export function browserNavigate(sessionId: string, body: { url?: string; title?: string; direction?: "back" | "forward" | "reload" }): Promise<NavigateResponse> {
+/** POST /browser/navigate — record a navigation or walk back/forward/reload.
+ * R131-B-ui (BU3): `commanded: true` marks a PANEL-COMMANDED navigation —
+ * the sibling B-core's redirect-collapse contract (browserNavigateCore's
+ * R131-B note): the flag ARMS the sidecar's 2.5s window so the location
+ * REPORT that follows (handleLocationMessage — the page's on_navigation /
+ * acute:location echo, a NON-commanded post) REPLACES the commanded entry
+ * instead of pushing a second one. An address-bar "google.com" that lands
+ * on "www.google.com" stays ONE history entry — the same collapse the
+ * agent's own navigations already get. Only `navigate` (the address-bar /
+ * quick-link command path) sets it; `handleLocationMessage` and the title
+ * updates stay reports. */
+export function browserNavigate(
+  sessionId: string,
+  body: {
+    url?: string;
+    title?: string;
+    direction?: "back" | "forward" | "reload";
+    commanded?: boolean;
+  },
+): Promise<NavigateResponse> {
   return browserRequest<NavigateResponse>("/browser/navigate", { json: { sessionId, ...body } });
 }
 
@@ -335,6 +360,13 @@ interface BrowserTabStoreState {
    * patches currentUrl + bumps navSeq (iframe reload) AND agentNavSeq (the
    * mounted panel drives the native webview immediately). */
   applyAgentNavigation: (tabId: string, url: string) => void;
+  /** R131-B-ui (BU3): apply the AGENT's download ACTION result instantly (the
+   * `browser-download` SSE frame `{sessionId, tabId, path, bytes}` — the
+   * frame's `tabId` is the sidecar session id, mapped to the store's tab
+   * key by the stream-store intercept). Creates the tab slice when unknown
+   * (the applyAgentNavigation pattern) so a not-yet-mounted agent tab still
+   * records the download for the panel that mounts later. */
+  applyAgentDownload: (tabId: string, info: { path: string; bytes: number }) => void;
   /** ROUND-66 (R66, A5): the tab whose sidecar session id matches (or null)
    * — the stream-store maps a frame's session id to THIS store's tab key. */
   tabIdForSession: (sessionId: string) => string | null;
@@ -379,6 +411,7 @@ function freshTab(sessionId: string): BrowserTabUiState {
     homeView: false,
     homeAnchorUrl: null,
     zoomTouched: false,
+    lastDownload: null,
   };
 }
 
@@ -426,6 +459,24 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
       }),
     );
   },
+  // R131-B-ui (BU3): the AGENT's download ACTION landed (the browser-download
+  // SSE frame via the stream-store intercept). The slice is ensured so an
+  // unmounted agent tab records the download for its later-mounted panel
+  // (the applyAgentNavigation pattern); the panel surfaces the quiet line.
+  applyAgentDownload: (tabId, info) => {
+    if (get().tabs[tabId] === undefined) get().ensureTab(tabId);
+    const fileName = info.path.split(/[\\/]/).filter(Boolean).pop() ?? "download";
+    set((s) =>
+      patchTabState(s, tabId, {
+        lastDownload: {
+          fileName,
+          path: info.path,
+          bytes: info.bytes,
+          at: Date.now(),
+        },
+      }),
+    );
+  },
   tabIdForSession: (sessionId) => {
     for (const [tabId, tab] of Object.entries(get().tabs)) {
       if (tab.sessionId === sessionId) return tabId;
@@ -462,7 +513,11 @@ export const useBrowserTabStore = create<BrowserTabStoreState>()((set, get) => (
     // R97-J (M1): any user navigation leaves the home view.
     set((s) => patchTabState(s, tabId, { loading: true, error: null, homeView: false }));
     try {
-      const res = await browserNavigate(tab.sessionId, { url: rawUrl });
+      // R131-B-ui (BU3): commanded:true — the ADDRESS-BAR command arms the
+      // sidecar's redirect-collapse window (see browserNavigate's docblock);
+      // the landing REPORT (handleLocationMessage) then collapses a
+      // redirected landing into this entry instead of pushing a second one.
+      const res = await browserNavigate(tab.sessionId, { url: rawUrl, commanded: true });
       set((s) => {
         const cur = s.tabs[tabId];
         if (cur === undefined) return s;

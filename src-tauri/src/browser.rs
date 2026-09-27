@@ -152,10 +152,43 @@ const PANEL_USER_AGENT_STR: &str = PANEL_USER_AGENT;
 /// ROUND-50: the `browser-navigated` event payload (serde field names stay
 /// snake_case — the frontend reads `event.payload.tab_id` /
 /// `event.payload.url`).
+///
+/// ROUND-131 (R131-B-ui, BU3): the optional `title` field — the native
+/// delivery route for page titles. The `on_navigation` hook below fires at
+/// navigation START (the document is not loaded yet — there IS no title),
+/// so the one in-tree emitter always sends None (serialized AWAY — an older
+/// frontend sees the exact pre-R131 wire shape). The field exists because
+/// the FRONTEND route (BrowserPanel's delayed `document.title` probe →
+/// handleTitleMessage) needed the struct to stop lying about what a
+/// navigation can carry, and a future emitter (e.g. a DocumentTitleChanged
+/// hook) can fill it without another wire change.
 #[derive(Clone, serde::Serialize)]
 struct BrowserNavigated {
     tab_id: String,
     url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+}
+
+/// ROUND-131 (R131-B-ui, BU2): the `browser-download` event payload — the
+/// DOM-side channel for the NATIVE download pipeline (WebView2's
+/// DownloadStarting handler + its StateChanged follower). Serde field names
+/// stay snake_case (the same convention as `browser-navigated`; the frontend
+/// decoder in src/lib/native-browser.ts reads exactly these keys). `state`
+/// is "starting" | "completed" | "interrupted"; `total_bytes` is null when
+/// WebView2 answers -1 (unknown length). NOTE: this is a DIFFERENT transport
+/// from the sidecar's same-named SSE frame (the agent's `download` ACTION,
+/// B-core) — that one rides the chat stream with `{sessionId, tabId, path,
+/// bytes}`; this one is a Tauri event for the panel's right-click
+/// "Save image as…" flow. Both land in the same `<root>/downloads` folder.
+#[derive(Clone, serde::Serialize)]
+struct BrowserDownload {
+    tab_id: String,
+    state: String,
+    path: String,
+    file_name: String,
+    received_bytes: u64,
+    total_bytes: Option<i64>,
 }
 
 /// `acute-tab-<tab_id>` — the webview label for a browser tab.
@@ -177,6 +210,88 @@ fn tab_label(tab_id: &str) -> String {
 /// every webview at 1×1 anyway, and the panel's first sync re-positions.)
 static TAB_LAST_BOUNDS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, (f64, f64, f64, f64)>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// ROUND-131 (R131-B-ui, BU2): the per-tab DOWNLOAD DIR — where the native
+/// download pipeline (WebView2's DownloadStarting handler) saves this tab's
+/// files. Written by `browser_tab_set_download_dir` (the PANEL resolves the
+/// bound project's rootPath and passes `<root>/downloads` — the
+/// ROUND-115-pinned location, the same folder the agent-side `download`
+/// ACTION writes to); read at DownloadStarting time. Falls back to the app's
+/// download dir (`app.path().download_dir()`) when a tab never got one.
+///
+/// DELIBERATELY NOT cleared in `browser_tab_close` (the asymmetry with
+/// TAB_LAST_BOUNDS is the point): the bounds map is safe to drop because the
+/// panel's bounds-sync re-asserts geometry continuously, but the panel's
+/// set-download-dir effect runs only on MOUNT/deps-change — a webview closed
+/// and re-created by the watchdog would otherwise silently lose its dir and
+/// fall back to the app download folder. The map is bounded by the tabs the
+/// app ever opened and dies with the process; a fresh boot re-registers via
+/// the panel's mount effect.
+static TAB_DOWNLOAD_DIRS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, std::path::PathBuf>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// ROUND-131 (R131-B-ui, BU2): the honest non-Windows refusal — the native
+/// download pipeline is WebView2-only in this build (the Linux panel keeps
+/// its pre-R131 behavior; the agent-side `download` ACTION works everywhere
+/// through the sidecar). The message lives at the refusal site
+/// (`set_tab_download_dir_impl`'s non-Windows leg) so neither platform
+/// carries a dead constant.
+
+/// ROUND-131 (R131-B-ui, BU2): the suggested file NAME for a download, from
+/// WebView2's suggested full path (the args' default `ResultFilePath` — the
+/// browser's own `<default downloads>/<suggested name>` computation). Pure
+/// (string-only) so it is unit-testable on every platform; both separator
+/// styles are accepted because the string arrives from the OS. A path with
+/// no usable final component (empty, "/", "\\\\", a trailing-separator-only
+/// string) falls back to "download" — the name must never be empty and must
+/// never carry a separator back into the path join.
+fn suggested_download_name(suggested_path: &str) -> String {
+    let trimmed = suggested_path.trim_end_matches(['/', '\\']);
+    let name = trimmed.rsplit(['/', '\\']).next().unwrap_or("");
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .collect();
+    if cleaned.is_empty() {
+        "download".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// ROUND-131 (R131-B-ui, BU2): the never-overwrite name law. The sidecar's
+/// `download` ACTION dedupes byte-identical files by CONTENT; at
+/// DownloadStarting time the bytes are not down yet, so the native pipeline's
+/// honest approximation is EXISTENCE-based: a target that already exists
+/// mints the next free `-<n>` variant (2..=100, the attachments-style cap),
+/// and a fully-consumed series refuses by reusing the base name — the caller
+/// has already decided `Handled(true)`, and WebView2 failing to write an
+/// over-crowded series surfaces as an interrupted download (the toast says
+/// so) rather than a silent overwrite. `exists` is injected so the law is
+/// unit-testable without a filesystem.
+fn dedupe_download_target(dir: &std::path::Path, file_name: &str, exists: &dyn Fn(&std::path::Path) -> bool) -> std::path::PathBuf {
+    let base = dir.join(file_name);
+    if !exists(&base) {
+        return base;
+    }
+    let stem = std::path::Path::new(file_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let ext = std::path::Path::new(file_name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    for n in 2..=100u32 {
+        let candidate = dir.join(format!("{stem}-{n}{ext}"));
+        if !exists(&candidate) {
+            return candidate;
+        }
+    }
+    base
+}
 
 /// Records `tab_id`'s commanded bounds (clamped to sane positives — the
 /// same floor `browser_tab_set_bounds` itself applies).
@@ -990,6 +1105,10 @@ pub async fn browser_tab_create(
                     BrowserNavigated {
                         tab_id: hook_tab_id.clone(),
                         url: nav.to_string(),
+                        // R131-B-ui (BU3): the hook fires at navigation START —
+                        // no title exists yet; the panel's delayed document.title
+                        // probe is the delivery route (see the struct's doc).
+                        title: None,
                     },
                 );
             }
@@ -1015,7 +1134,331 @@ pub async fn browser_tab_create(
     // the WebView2 child needs no adoption.
     #[cfg(target_os = "linux")]
     gtk_child_webviews::adopt_tab_webview(&webview);
+
+    // R131-B-ui (BU2): the native download pipeline + the default context
+    // menu — registered at CREATE time so the handlers ride the webview for
+    // its whole lifetime exactly like the initialization scripts (the
+    // idempotent-navigate branch above never re-registers). Windows-only;
+    // the non-Windows leg is the honest no-op stub (the command refuses
+    // separately — see `browser_tab_set_download_dir`).
+    downloads::register(&app, &tab_id, &webview);
     Ok(())
+}
+
+// ── ROUND-131 (R131-B-ui, BU2): the native DOWNLOAD pipeline ────────────────
+//
+// The owner: "it is not able to right-click and then click save as and save
+// to the download folder as it needs to be." Two legs, both Windows-only:
+//
+//  1. `browser_tab_set_download_dir` — the PANEL tells Rust where this tab's
+//     downloads land (`<projectRoot>/downloads`, the ROUND-115-pinned
+//     location — the same folder the agent-side `download` ACTION writes
+//     to, so both halves of round-131 Wave B land the same place). Rust
+//     never knew the project root (the sidecar owns project state), so the
+//     frontend is the one that resolves it. Falls back to the app's
+//     download dir for a tab that never got one.
+//  2. The DownloadStarting handler (registered per webview at create time
+//     via `Webview::with_webview` — the tauri escape hatch to the raw
+//     ICoreWebView2 COM surface): `Handled(true)` + `ResultFilePath =
+//     <dir>/<suggested name>` (the attachments-style never-overwrite
+//     `-<n>` minting), then a `browser-download` Tauri event ("starting")
+//     and a StateChanged follower that emits "completed"/"interrupted"
+//     with the final bytes. The UI presents (BrowserPanel's quiet toast);
+//     Rust stays THIN.
+//
+// In the SAME with_webview pass the default context menu is pinned ON
+// (`AreDefaultContextMenusEnabled(true)`) — right-click → "Save image as…"
+// then flows through this pipeline instead of being a dead right-click.
+//
+// Non-Windows: the module below is a no-op `register` and the
+// set-download-dir command refuses honestly ("downloads are Windows-only in
+// this build") — the agent-side ACTION still downloads everywhere through
+// the sidecar.
+//
+// CI is the compile gate for this whole section (ADR-0012 — no local
+// toolchain). The handler plumbing rides webview2-com's OWN event-callback
+// wrappers (`DownloadStartingEventHandler::create(Box::new(closure))` — the
+// crate's callback.rs generates exactly that shape for every WebView2 event
+// handler). EVERY interface call was API-verified against the two
+// authorities during the R131-B-ui audit: docs.rs webview2-com 0.38.2
+// (`add_DownloadStarting(handler, token: *mut i64)`, `SetHandled(bool)`,
+// `SetResultFilePath(Param<PCWSTR>)`, the `State`/`BytesReceived`/
+// `TotalBytesToReceive` out-param getters, `SetAreDefaultContextMenusEnabled`,
+// `take_pwstr(PWSTR) -> String`) and wry 0.55.1's OWN DownloadStarting
+// registration (src/webview2/mod.rs, the `add_DownloadStarting` +
+// `add_StateChanged` + `SetResultFilePath(&HSTRING)` + `SetHandled(true)`
+// block — the exact in-tree-family precedent, including the enum spelling
+// `COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS` — there is no `_RUNNING`
+// constant in this crate's WebView2 bindings).
+
+/// The Windows pipeline (see the section comment above).
+#[cfg(windows)]
+mod downloads {
+    use super::{dedupe_download_target, suggested_download_name, BrowserDownload, TAB_DOWNLOAD_DIRS};
+    use tauri::{AppHandle, Emitter, Manager, Webview};
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2, ICoreWebView2_4, COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED,
+        COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED, COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS,
+    };
+    use webview2_com::{DownloadStartingEventHandler, StateChangedEventHandler, take_pwstr};
+    use windows::core::{HSTRING, Interface, PWSTR};
+
+    /// WebView2 answers `-1` for "total unknown" — map to the payload's null.
+    fn total_bytes_or_none(total: i64) -> Option<i64> {
+        if total >= 0 {
+            Some(total)
+        } else {
+            None
+        }
+    }
+
+    /// Registers the pipeline on a freshly-created tab webview (called from
+    /// `browser_tab_create` — the chokepoint for panel tabs AND the pop-out's
+    /// content). `with_webview` DISPATCHES the closure to the main thread
+    /// (non-blocking — the same channel gtk_child_webviews rides from sync
+    /// commands); `browser_tab_create` is async for exactly the main-thread
+    /// discipline (see its doc), so this never waits on the thread it needs.
+    pub fn register(app: &AppHandle, tab_id: &str, webview: &Webview) {
+        let app = app.clone();
+        let tab_id = tab_id.to_string();
+        let _ = webview.with_webview(move |wv| {
+            // SAFETY: the controller/core pointers are live objects of THIS
+            // webview handed to us on the main thread (the single apartment
+            // ICoreWebView2 requires); the handler objects are webview2-com's
+            // own self-managing COM wrappers handed to WebView2 as refs.
+            unsafe {
+                let controller = wv.controller();
+                let core: ICoreWebView2 = match controller.CoreWebView2() {
+                    Ok(core) => core,
+                    Err(e) => {
+                        crate::sidecar::log_line(&format!(
+                            "browser: download pipeline skipped — no CoreWebView2 (tab \"{tab_id}\"): {e}"
+                        ));
+                        return;
+                    }
+                };
+                // The default context menu — the owner's right-click
+                // "Save image as…" entry point. The runtime default is ON,
+                // but the explicit put_ pins it (the whole feature's
+                // precondition, stated once at the chokepoint).
+                if let Ok(settings) = core.Settings() {
+                    let _ = settings.SetAreDefaultContextMenusEnabled(true);
+                }
+                // The download API rides ICoreWebView2_4 — an older runtime
+                // without it keeps the pre-R131 behavior, logged honestly.
+                let core4: ICoreWebView2_4 = match core.cast::<ICoreWebView2_4>() {
+                    Ok(core4) => core4,
+                    Err(_) => {
+                        crate::sidecar::log_line(&format!(
+                            "browser: WebView2 runtime has no download API (tab \"{tab_id}\") — right-click saves stay on the runtime default"
+                        ));
+                        return;
+                    }
+                };
+                // The DownloadStarting handler: webview2-com's own wrapper
+                // (`create(Box<dyn FnMut(Option<ICoreWebView2>,
+                // Option<ICoreWebView2DownloadStartingEventArgs>) ->
+                // Result<()>)` — the EventClosure alias, verified on
+                // docs.rs). wry 0.55.1's own DownloadStarting registration
+                // is the in-tree-family precedent (the same create + `&mut
+                // i64` token form).
+                let handler = DownloadStartingEventHandler::create(Box::new(move |_, args| {
+                    download_starting(&app, &tab_id, args)
+                }));
+                // The token is WebView2's remove-key for the registration —
+                // we never remove (the handler rides the webview for its
+                // lifetime), so the out-param is scratch space.
+                let mut token: i64 = 0;
+                if let Err(e) = core4.add_DownloadStarting(&handler, &mut token) {
+                    crate::sidecar::log_line(&format!(
+                        "browser: download pipeline registration failed (tab \"{tab_id}\"): {e}"
+                    ));
+                }
+            }
+        });
+    }
+
+    /// The DownloadStarting body (the closure the wrapper invokes per
+    /// download): route the bytes to the tab's download dir, announce the
+    /// start, and chain the StateChanged follower. Every interface call is
+    /// the wry-verified spelling — out-param getters via `PWSTR::null()` +
+    /// `take_pwstr`, the string setter via `&HSTRING`, plain-bool puts.
+    fn download_starting(
+        app: &AppHandle,
+        tab_id: &str,
+        args: Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2DownloadStartingEventArgs>,
+    ) -> windows::core::Result<()> {
+        let Some(args) = args else {
+            return Ok(());
+        };
+        // The dir: the tab's registered dir, else the app's download dir.
+        // Neither exists (no registration AND no resolvable OS download
+        // dir) → leave WebView2's default behavior alone — honest.
+        let dir = TAB_DOWNLOAD_DIRS
+            .lock()
+            .ok()
+            .and_then(|map| map.get(tab_id).cloned())
+            .or_else(|| app.path().download_dir().ok());
+        let Some(dir) = dir else {
+            return Ok(());
+        };
+        // SAFETY: the args pointer is a live WebView2 event object on the UI
+        // thread (the single apartment every ICoreWebView2 call requires);
+        // the suggested-path string is OS-allocated and freed by take_pwstr
+        // (CoTaskMemFree inside webview2-com's own RAII holder) in this scope.
+        let suggested: String = unsafe {
+            let mut path = PWSTR::null();
+            args.ResultFilePath(&mut path)?;
+            take_pwstr(path)
+        };
+        let file_name = suggested_download_name(&suggested);
+        let target = dedupe_download_target(&dir, &file_name, &|p: &std::path::Path| p.exists());
+        unsafe {
+            // Handled(true): OUR ResultFilePath is the whole save — never
+            // WebView2's default dialog/duplicate-bar on top of it.
+            args.SetHandled(true)?;
+            args.SetResultFilePath(&HSTRING::from(target.to_string_lossy().into_owned()))?;
+        }
+        // The starting announcement + the state follower.
+        let op: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2DownloadOperation =
+            unsafe { args.DownloadOperation()? };
+        let (received, total) = unsafe { download_progress(&op) };
+        let path = target.to_string_lossy().into_owned();
+        let _ = app.emit(
+            "browser-download",
+            BrowserDownload {
+                tab_id: tab_id.to_string(),
+                state: "starting".to_string(),
+                path: path.clone(),
+                file_name: file_name.clone(),
+                received_bytes: received,
+                total_bytes: total_bytes_or_none(total),
+            },
+        );
+        // The StateChanged follower: emits the terminal state with the final
+        // byte count (IN_PROGRESS churn is ignored — only the landing matters
+        // to the UI's quiet line). Captures exactly what the emit needs —
+        // OWNED clones, not the `&AppHandle`/`&str` params: EventClosure's
+        // `Box<dyn FnMut …>` carries the default 'static bound, and the
+        // register()-time owned app/tab_id outlive any one DownloadStarting
+        // call by the webview's whole lifetime — a borrowed capture would
+        // fail to compile (the audit catch: the interrupted run wrote this
+        // closure against the references).
+        let follower_app = app.clone();
+        let follower_tab_id = tab_id.to_string();
+        let follower = StateChangedEventHandler::create(Box::new(move |op, _| {
+            let Some(op) = op else {
+                return Ok(());
+            };
+            // SAFETY: same-thread event callback on a live WebView2 object.
+            let mut state = COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS;
+            unsafe { op.State(&mut state)? };
+            if state == COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS {
+                return Ok(());
+            }
+            let (received, _) = unsafe { download_progress(&op) };
+            let state_name = if state == COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED {
+                "completed"
+            } else {
+                // INTERRUPTED and any future enum value stay honest:
+                // terminal-not-completed reads as the interrupted class
+                // rather than inventing a wire word the frontend lacks.
+                "interrupted"
+            };
+            let _ = follower_app.emit(
+                "browser-download",
+                BrowserDownload {
+                    tab_id: follower_tab_id.clone(),
+                    state: state_name.to_string(),
+                    path: path.clone(),
+                    file_name: file_name.clone(),
+                    received_bytes: received,
+                    total_bytes: total_bytes_or_none(total),
+                },
+            );
+            Ok(())
+        }));
+        let mut token: i64 = 0;
+        unsafe {
+            let _ = op.add_StateChanged(&follower, &mut token);
+        }
+        Ok(())
+    }
+
+    /// The byte counters of a live download operation (received, total) —
+    /// both are out-param getters; a failed read answers (0, -1) so a lost
+    /// stat degrades the toast's numbers, never the download itself.
+    ///
+    /// SAFETY: `op` must be a live ICoreWebView2DownloadOperation on the UI
+    /// thread (both call sites hold one straight from a WebView2 event).
+    unsafe fn download_progress(
+        op: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2DownloadOperation,
+    ) -> (u64, i64) {
+        let mut received: i64 = 0;
+        let mut total: i64 = -1;
+        // SAFETY: the out-pointers are stack locals valid for the call.
+        let _ = unsafe { op.BytesReceived(&mut received) };
+        let _ = unsafe { op.TotalBytesToReceive(&mut total) };
+        (received.max(0) as u64, total)
+    }
+}
+
+/// The non-Windows stub: no pipeline (the set-download-dir command's honest
+/// refusal — "downloads are Windows-only in this build" — is the
+/// platform's whole story; the agent-side ACTION still works everywhere).
+#[cfg(not(windows))]
+mod downloads {
+    use tauri::{AppHandle, Webview};
+
+    pub fn register(_app: &AppHandle, _tab_id: &str, _webview: &Webview) {}
+}
+
+/// `browser_tab_set_download_dir(tab_id, dir)` — R131-B-ui (BU2): record
+/// where THIS tab's native downloads land (see TAB_DOWNLOAD_DIRS + the
+/// downloads module's section comment). The PANEL calls it when the tab
+/// binds a project (it resolves the project's rootPath — Rust never knows
+/// project state). Validation: the dir must be ABSOLUTE (a relative path
+/// would silently resolve against the app's CWD) and is created recursively
+/// up front so the first download never races a mkdir. Idempotent — the
+/// panel re-sends it on every mount; the map just overwrites.
+///
+/// Non-Windows: the honest refusal — the native pipeline is WebView2-only
+/// in this build (the agent-side `download` ACTION still works everywhere
+/// through the sidecar). The panel logs the rejection once and swallows it.
+///
+/// ASYNC for the file's own discipline (the browser_tab_create lesson): a
+/// SYNC command runs on the MAIN thread, and the command does real I/O here
+/// (the absolute-path check + `create_dir_all`) — off the main thread it can
+/// never stall the UI on a slow disk. Nothing in the body blocks on the main
+/// thread (no window/webview round-trips), so async is unconditionally safe
+/// here, unlike the window-building commands above.
+#[tauri::command]
+pub async fn browser_tab_set_download_dir(tab_id: String, dir: String) -> Result<(), String> {
+    set_tab_download_dir_impl(&tab_id, &dir)
+}
+
+/// The Windows leg of the command (validation + mkdir + record).
+#[cfg(windows)]
+fn set_tab_download_dir_impl(tab_id: &str, dir: &str) -> Result<(), String> {
+    let path = std::path::PathBuf::from(dir);
+    if !path.is_absolute() {
+        return Err(format!(
+            "the download dir must be an absolute path (got \"{dir}\")"
+        ));
+    }
+    std::fs::create_dir_all(&path)
+        .map_err(|e| format!("create_dir_all(\"{dir}\") failed: {e}"))?;
+    if let Ok(mut map) = TAB_DOWNLOAD_DIRS.lock() {
+        map.insert(tab_id.to_string(), path);
+    }
+    Ok(())
+}
+
+/// The non-Windows leg: the honest refusal (the pipeline does not exist on
+/// this platform, so accepting the dir would be a silent lie).
+#[cfg(not(windows))]
+fn set_tab_download_dir_impl(_tab_id: &str, _dir: &str) -> Result<(), String> {
+    Err("downloads are Windows-only in this build".to_string())
 }
 
 /// `browser_tab_exists(tab_id)` — does this tab's native webview exist
@@ -1377,9 +1820,12 @@ pub fn browser_tabs_close_all(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_popout_size, parse_http_url, parse_web_url, popout_pending_url, set_popout_pending_url,
-        POPOUT_DEFAULT_H, POPOUT_DEFAULT_W, POPOUT_MIN_H, POPOUT_MIN_W,
+        clamp_popout_size, dedupe_download_target, parse_http_url, parse_web_url,
+        popout_pending_url, set_popout_pending_url, suggested_download_name, POPOUT_DEFAULT_H,
+        POPOUT_DEFAULT_W, POPOUT_MIN_H, POPOUT_MIN_W,
     };
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
 
     /// R95-C: the native-tab gate accepts http, https AND file (the owner's
     /// local-HTML directive); the URL round-trips as parsed.
@@ -1501,6 +1947,90 @@ mod tests {
         assert_eq!(
             popout_pending_url().expect("stash re-read"),
             Some("https://second.example/".to_string())
+        );
+    }
+
+    // ── R131-B-ui (BU2): the native download pipeline's PURE laws ─────────
+
+    /// The suggested-name derivation: both separator styles, the final
+    /// component only, and the honest "download" fallback for paths with no
+    /// usable final component.
+    #[test]
+    fn suggested_download_name_takes_the_final_component() {
+        assert_eq!(suggested_download_name("C:\\Users\\owner\\Downloads\\report.pdf"), "report.pdf");
+        assert_eq!(suggested_download_name("/home/owner/Downloads/photo.png"), "photo.png");
+        assert_eq!(suggested_download_name("archive.tar.gz"), "archive.tar.gz");
+        // Trailing separators never smuggle an empty component through.
+        assert_eq!(suggested_download_name("C:\\Downloads\\setup.exe\\"), "setup.exe");
+        // A dir-only suggestion degrades to the dir's own last component.
+        assert_eq!(suggested_download_name("/downloads/"), "downloads");
+        assert_eq!(suggested_download_name(""), "download");
+        assert_eq!(suggested_download_name("\\"), "download");
+    }
+
+    /// The name is a NAME, never a path: separator + Windows-forbidden
+    /// characters are stripped (the target join must never be re-routed by
+    /// a hostile suggested string — the R95-C parse-gate discipline applied
+    /// to the download leg).
+    #[test]
+    fn suggested_download_name_never_carries_a_path_or_forbidden_char() {
+        assert_eq!(suggested_download_name("C:\\dl\\..\\..\\evil.txt"), "evil.txt");
+        assert_eq!(suggested_download_name("a<b>c.txt"), "abc.txt");
+        assert_eq!(suggested_download_name("what:1*2?3.txt"), "what123.txt");
+        // A name that cleans to nothing falls back honestly.
+        assert_eq!(suggested_download_name("???"), "download");
+    }
+
+    /// An in-memory `exists` for the dedupe law's tests (no filesystem —
+    /// the injected closure keeps the law pure).
+    fn existing(paths: &[&str]) -> impl Fn(&Path) -> bool + '_ {
+        let set: HashSet<PathBuf> = paths.iter().map(|p| PathBuf::from(p)).collect();
+        move |p: &Path| set.contains(p)
+    }
+
+    /// The never-overwrite law: a fresh name lands as-is; an existing target
+    /// mints the next free `-<n>` variant (stem + extension preserved).
+    #[test]
+    fn dedupe_download_target_mints_the_next_free_variant() {
+        let exists = existing(&["/dl/report.pdf"]);
+        assert_eq!(
+            dedupe_download_target(Path::new("/dl"), "report.pdf", &exists),
+            PathBuf::from("/dl/report-2.pdf")
+        );
+        let exists = existing(&["/dl/report.pdf", "/dl/report-2.pdf"]);
+        assert_eq!(
+            dedupe_download_target(Path::new("/dl"), "report.pdf", &exists),
+            PathBuf::from("/dl/report-3.pdf")
+        );
+        // Nothing exists → the base name lands untouched.
+        let none = existing(&[]);
+        assert_eq!(
+            dedupe_download_target(Path::new("/dl"), "report.pdf", &none),
+            PathBuf::from("/dl/report.pdf")
+        );
+        // No extension → the variant suffix rides the bare stem.
+        let exists = existing(&["/dl/Makefile"]);
+        assert_eq!(
+            dedupe_download_target(Path::new("/dl"), "Makefile", &exists),
+            PathBuf::from("/dl/Makefile-2")
+        );
+    }
+
+    /// A fully-consumed series (base + -2..-100 all present) reuses the base
+    /// name rather than minting past the cap — the documented over-crowded
+    /// refusal (WebView2 failing the write surfaces as an interrupted
+    /// download, never a silent overwrite of a DIFFERENT variant).
+    #[test]
+    fn dedupe_download_target_caps_the_series_and_reuses_the_base() {
+        let mut all: Vec<String> = vec!["/dl/photo.png".to_string()];
+        for n in 2..=100u32 {
+            all.push(format!("/dl/photo-{n}.png"));
+        }
+        let refs: Vec<&str> = all.iter().map(|s| s.as_str()).collect();
+        let exists = existing(&refs);
+        assert_eq!(
+            dedupe_download_target(Path::new("/dl"), "photo.png", &exists),
+            PathBuf::from("/dl/photo.png")
         );
     }
 }

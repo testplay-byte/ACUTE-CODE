@@ -21,6 +21,7 @@ import {
   getBrowserCommandHandlerForTest,
   hasBrowserCommandHandler,
 } from "../../lib/agent-browser-bridge";
+import { useConfigStore } from "../../lib/config-store";
 
 /**
  * ROUND-43 (R43-10) BrowserPanel — the embedded in-sidebar browser.
@@ -59,6 +60,18 @@ import {
 const nativeState = vi.hoisted(() => ({
   available: false,
   navigatedListener: null as ((tabId: string, url: string) => void) | null,
+  // R131-B-ui (BU2/BU3): the native download event listener — the mock's
+  // `onBrowserDownload` captures it so tests can simulate the Rust
+  // DownloadStarting pipeline (starting → completed/interrupted).
+  downloadListener: null as
+    | ((tabId: string, info: {
+        state: "starting" | "completed" | "interrupted";
+        path: string;
+        fileName: string;
+        receivedBytes: number;
+        totalBytes: number | null;
+      }) => void)
+    | null,
   // R62 (D8): the agent-browser command handler's Rust side fakes.
   evalResult: null as { ok: boolean; value?: unknown; error?: string } | null,
   evalScripts: [] as string[],
@@ -84,68 +97,102 @@ const nativeState = vi.hoisted(() => ({
   captureRegions: [] as Array<{ x: number; y: number; w: number; h: number } | null>,
 }));
 
-vi.mock("../../lib/native-browser", () => ({
-  isNativeBrowserAvailable: () => nativeState.available,
-  nativeInvoke: () => null,
-  nativeTabCreate: vi.fn(() => Promise.resolve()),
-  // R91-B3: the watchdog's existence probe (mocks as TRUE — the mock
-  // webview "exists" so the watchdog re-asserts instead of recreating).
-  nativeTabExists: vi.fn(() => Promise.resolve(true)),
-  nativeTabNavigate: vi.fn(() => Promise.resolve()),
-  // R124: the mock records commanded geometry EXACTLY like the real module
-  // (successful set_bounds/set_zoom write the tab geometry memory the staged
-  // capture's restore reads) — a faithful mock, not a bare resolver.
-  nativeTabSetBounds: vi.fn((tabId: string, x: number, y: number, w: number, h: number) => {
-    nativeState.boundsMemory.set(tabId, { x, y, w, h });
-    return Promise.resolve();
-  }),
-  nativeTabSetVisible: vi.fn(() => Promise.resolve()),
-  // R60: REAL zoom (Rust browser_tab_set_zoom — asserted by the R60 tests).
-  nativeTabSetZoom: vi.fn((tabId: string, factor: number) => {
-    nativeState.zoomMemory.set(tabId, factor);
-    return Promise.resolve();
-  }),
-  lastCommandedTabBounds: vi.fn((tabId: string) => nativeState.boundsMemory.get(tabId) ?? null),
-  lastCommandedTabZoom: vi.fn((tabId: string) => nativeState.zoomMemory.get(tabId) ?? null),
-  resetTabGeometryMemoryForTest: vi.fn(() => {
-    nativeState.boundsMemory.clear();
-    nativeState.zoomMemory.clear();
-  }),
-  nativeTabGo: vi.fn(() => Promise.resolve()),
-  nativeTabUrl: vi.fn(() => Promise.resolve(null)),
-  nativeTabClose: vi.fn(() => Promise.resolve()),
-  nativeTabsCloseAll: vi.fn(() => Promise.resolve()),
-  openExternalUrl: vi.fn(() => Promise.resolve()),
-  // R62 (D8): eval + screenshot geometry (the panel's bridge handler).
-  // R128-W7a: rustWrap=true runs the REAL Rust wrap semantics (see
-  // nativeState.rustWrap) — the script is wrapped as a function body and
-  // evaluated in this realm (happy-dom's window is the "page": a stub
-  // window.__acuteHands installed by a test is the page's runtime).
-  nativeTabEval: vi.fn((_tabId: string, script: string) => {
-    nativeState.evalScripts.push(script);
-    if (nativeState.rustWrap) {
-      const wrapped = `(function(){try{var __acute_r=(function(){${script}})();return JSON.stringify({ok:true,value:(__acute_r===undefined?null:__acute_r)});}catch(e){return JSON.stringify({ok:false,error:String((e&&(e.message||e))||e)});}})()`;
-      try {
-        // `return ${wrapped}` — the wrapped string is an EXPRESSION; using
-        // it directly as a function body would discard its value (the very
-        // bug under test).
-        const raw = new Function(`return ${wrapped}`)() as string;
-        return Promise.resolve(JSON.parse(raw) as { ok: boolean; value?: unknown; error?: string });
-      } catch (err) {
-        return Promise.resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
+// R131-B-ui: the factory keeps the module's PURE helpers real
+// (importOriginal — parseWebViewEvalJson/downloadDirForRoot are the actual
+// code under test for the panel's download-dir join) and overrides only the
+// Tauri-interacting wrappers + the two event subscriptions the tests need to
+// capture.
+vi.mock("../../lib/native-browser", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/native-browser")>();
+  return {
+    ...actual,
+    isNativeBrowserAvailable: () => nativeState.available,
+    nativeInvoke: () => null,
+    nativeTabCreate: vi.fn(() => Promise.resolve()),
+    // R91-B3: the watchdog's existence probe (mocks as TRUE — the mock
+    // webview "exists" so the watchdog re-asserts instead of recreating).
+    nativeTabExists: vi.fn(() => Promise.resolve(true)),
+    nativeTabNavigate: vi.fn(() => Promise.resolve()),
+    // R124: the mock records commanded geometry EXACTLY like the real module
+    // (successful set_bounds/set_zoom write the tab geometry memory the staged
+    // capture's restore reads) — a faithful mock, not a bare resolver.
+    nativeTabSetBounds: vi.fn((tabId: string, x: number, y: number, w: number, h: number) => {
+      nativeState.boundsMemory.set(tabId, { x, y, w, h });
+      return Promise.resolve();
+    }),
+    nativeTabSetVisible: vi.fn(() => Promise.resolve()),
+    // R60: REAL zoom (Rust browser_tab_set_zoom — asserted by the R60 tests).
+    nativeTabSetZoom: vi.fn((tabId: string, factor: number) => {
+      nativeState.zoomMemory.set(tabId, factor);
+      return Promise.resolve();
+    }),
+    lastCommandedTabBounds: vi.fn((tabId: string) => nativeState.boundsMemory.get(tabId) ?? null),
+    lastCommandedTabZoom: vi.fn((tabId: string) => nativeState.zoomMemory.get(tabId) ?? null),
+    resetTabGeometryMemoryForTest: vi.fn(() => {
+      nativeState.boundsMemory.clear();
+      nativeState.zoomMemory.clear();
+    }),
+    nativeTabGo: vi.fn(() => Promise.resolve()),
+    nativeTabUrl: vi.fn(() => Promise.resolve(null)),
+    nativeTabClose: vi.fn(() => Promise.resolve()),
+    nativeTabsCloseAll: vi.fn(() => Promise.resolve()),
+    openExternalUrl: vi.fn(() => Promise.resolve()),
+    // R131-B-ui (BU2): the per-tab download dir registration — recorded so
+    // the pin can assert the panel told Rust where downloads land.
+    nativeTabSetDownloadDir: vi.fn(() => Promise.resolve()),
+    // R62 (D8): eval + screenshot geometry (the panel's bridge handler).
+    // R128-W7a: rustWrap=true runs the REAL Rust wrap semantics (see
+    // nativeState.rustWrap) — the script is wrapped as a function body and
+    // evaluated in this realm (happy-dom's window is the "page": a stub
+    // window.__acuteHands installed by a test is the page's runtime).
+    nativeTabEval: vi.fn((_tabId: string, script: string) => {
+      nativeState.evalScripts.push(script);
+      if (nativeState.rustWrap) {
+        const wrapped = `(function(){try{var __acute_r=(function(){${script}})();return JSON.stringify({ok:true,value:(__acute_r===undefined?null:__acute_r)});}catch(e){return JSON.stringify({ok:false,error:String((e&&(e.message||e))||e)});}})()`;
+        try {
+          // `return ${wrapped}` — the wrapped string is an EXPRESSION; using
+          // it directly as a function body would discard its value (the very
+          // bug under test).
+          const raw = new Function(`return ${wrapped}`)() as string;
+          return Promise.resolve(JSON.parse(raw) as { ok: boolean; value?: unknown; error?: string });
+        } catch (err) {
+          return Promise.resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
       }
-    }
-    if (nativeState.evalQueue.length > 0) return Promise.resolve(nativeState.evalQueue.shift()!);
-    return Promise.resolve(nativeState.evalResult);
-  }),
-  nativeWindowMetrics: vi.fn(() => Promise.resolve(nativeState.windowMetrics)),
-  onBrowserNavigated: vi.fn((cb: (tabId: string, url: string) => void) => {
-    nativeState.navigatedListener = cb;
-    return () => {
-      if (nativeState.navigatedListener === cb) nativeState.navigatedListener = null;
-    };
-  }),
-}));
+      if (nativeState.evalQueue.length > 0) return Promise.resolve(nativeState.evalQueue.shift()!);
+      return Promise.resolve(nativeState.evalResult);
+    }),
+    nativeWindowMetrics: vi.fn(() => Promise.resolve(nativeState.windowMetrics)),
+    onBrowserNavigated: vi.fn((cb: (tabId: string, url: string) => void) => {
+      nativeState.navigatedListener = cb;
+      return () => {
+        if (nativeState.navigatedListener === cb) nativeState.navigatedListener = null;
+      };
+    }),
+    // R131-B-ui (BU3): the Rust browser-download event — the panel's quiet
+    // toast's native-side channel (the mock captures the listener exactly
+    // like onBrowserNavigated).
+    onBrowserDownload: vi.fn(
+      (
+        cb: (
+          tabId: string,
+          info: {
+            state: "starting" | "completed" | "interrupted";
+            path: string;
+            fileName: string;
+            receivedBytes: number;
+            totalBytes: number | null;
+          },
+        ) => void,
+      ) => {
+        nativeState.downloadListener = cb;
+        return () => {
+          if (nativeState.downloadListener === cb) nativeState.downloadListener = null;
+        };
+      },
+    ),
+  };
+});
 
 const BASE = "http://127.0.0.1:5178";
 
@@ -167,6 +214,10 @@ let mintCount: number;
 let mintFails: boolean;
 /** Scenario knob: even freshly minted tickets probe dead (persistent failure). */
 let probeAlwaysDead: boolean;
+/** R131-B-ui (BU2): the /projects list reply the useProjects query sees —
+ * [] by default (the panel's download-dir effect then no-ops); the
+ * download-dir pin seeds a project row with a rootPath. */
+let projectsReply: Array<{ id: string; rootPath: string }>;
 
 function ok(body: unknown, status = 200): Response {
   return {
@@ -185,6 +236,12 @@ function route(input: RequestInfo | URL, init?: RequestInit): Promise<Response> 
   const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
   calls.push({ method, path: url.pathname, body });
 
+  if (url.pathname === "/api/v1/projects") {
+    // R131-B-ui (BU2): the panel resolves the bound project's rootPath via
+    // useProjects — the download-dir registration's data source. The empty
+    // default keeps every pre-R131 test's effect an honest no-op.
+    return Promise.resolve(ok({ projects: projectsReply }));
+  }
   if (url.pathname === "/api/v1/browser/session") {
     if (mintFails) return Promise.resolve(ok({ error: { code: "BOOM", message: "sidecar exploded" } }, 500));
     mintCount += 1;
@@ -319,7 +376,17 @@ function makeTab(overrides: Partial<RightSidebarTab> = {}): RightSidebarTab {
 
 function seedRightSidebar(tab: RightSidebarTab): void {
   useRightSidebarStore.setState({
-    byProject: { "prj_test::default": { open: true, width: 460, tabs: [tab], activeTabId: tab.id, terminalLinesByTab: {} } },
+    byProject: {
+      "prj_test::default": {
+        open: true,
+        width: 460,
+        tabs: [tab],
+        activeTabId: tab.id,
+        terminalLinesByTab: {},
+        // R131-B-ui (BU1): the fill behavior is the default (null).
+        browserPanelHeight: null,
+      },
+    },
     activeProjectId: "prj_test",
     activeSessionByProject: {},
   });
@@ -336,9 +403,13 @@ beforeEach(() => {
   mintCount = 0;
   mintFails = false;
   probeAlwaysDead = false;
+  // R131-B-ui (BU2): no projects by default — the download-dir effect no-ops.
+  projectsReply = [];
   // ROUND-50: fresh native-bridge state + mock call history per test.
   nativeState.available = false;
   nativeState.navigatedListener = null;
+  // R131-B-ui (BU2/BU3): the download-event listener resets with the rest.
+  nativeState.downloadListener = null;
   // R128-W7a: the Rust-wrap simulation is per-test opt-in, and a stub page
   // runtime from a prior test never leaks into the next one.
   nativeState.rustWrap = false;
@@ -1006,7 +1077,7 @@ describe("BrowserPanel native mode (R50-a child webviews over the panel)", () =>
     const tabB = makeTab({ id: "tab-b", browserUrl: "https://b.example" });
     useRightSidebarStore.setState({
       byProject: {
-        "prj_test::default": { open: true, width: 460, tabs: [tabA, tabB], activeTabId: tabA.id, terminalLinesByTab: {} },
+        "prj_test::default": { open: true, width: 460, tabs: [tabA, tabB], activeTabId: tabA.id, terminalLinesByTab: {}, browserPanelHeight: null },
       },
       activeProjectId: "prj_test",
       activeSessionByProject: {},
@@ -2233,5 +2304,381 @@ describe("BrowserPanel R95-C — local file paths in the address bar", () => {
     expect(card.textContent).toContain("app's browser");
     // The Rust OS-handoff command was never invoked for a local file.
     expect(vi.mocked(nativeBrowser.openExternalUrl)).not.toHaveBeenCalled();
+  });
+});
+
+// ── ROUND-131 (R131-B-ui): the panel drag-resize + the native title/download
+// delivery — the owner: "the ability to flexibly change the width of the
+// browser window itself… drag the corners and resize it properly as needed"
+// + "it is not able to right-click and then click save as and save to the
+// download folder as it needs to be". ──────────────────────────────────────
+describe("BrowserPanel R131-B-ui (BU1) — the panel drag-resize handles", () => {
+  const setDownloadDir = () => vi.mocked(nativeBrowser.nativeTabSetDownloadDir);
+
+  const enableNative = (): void => {
+    nativeState.available = true;
+    nativeState.evalResult = null;
+    nativeState.evalScripts = [];
+    nativeState.evalQueue = [];
+    nativeState.windowMetrics = null;
+    vi.mocked(nativeBrowser.nativeTabCreate).mockReset();
+    vi.mocked(nativeBrowser.nativeTabCreate).mockImplementation(() => Promise.resolve());
+    vi.mocked(nativeBrowser.nativeTabNavigate).mockReset();
+    vi.mocked(nativeBrowser.nativeTabNavigate).mockImplementation(() => Promise.resolve());
+    setDownloadDir().mockReset();
+    setDownloadDir().mockImplementation(() => Promise.resolve());
+  };
+
+  /** The panel's stored slice (the seeded key). */
+  function stored(): { width: number; height: number | null } {
+    const s = useRightSidebarStore.getState().byProject["prj_test::default"];
+    return { width: s?.width ?? 460, height: s?.browserPanelHeight ?? null };
+  }
+
+  it("renders the house separator grammar: right-edge + bottom-edge + both corners (role, labels, both modes)", async () => {
+    // Web mode — the handles are panel chrome, not native-mode state.
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    for (const testId of ["browser-resize-width", "browser-resize-height", "browser-resize-corner-bl", "browser-resize-corner-br"]) {
+      const handle = screen.getByTestId(testId) as HTMLElement;
+      expect(handle.getAttribute("role")).toBe("separator");
+      expect(handle.getAttribute("aria-label")).toMatch(/^Resize browser panel/);
+      expect(handle.getAttribute("tabIndex")).toBe("0");
+    }
+  });
+
+  it("dragging the RIGHT-EDGE handle drives the SAME setWidth clamp path as the ChatFocusLayout separator (one truth)", async () => {
+    enableNative();
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} widthCap={700} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    const handle = screen.getByTestId("browser-resize-width");
+    // Drag from the sidebar's current edge rightward by 200px (460 → 660).
+    fireEvent.mouseDown(handle, { clientX: 460 });
+    fireEvent.mouseMove(window, { clientX: 660 });
+    fireEvent.mouseUp(window);
+    expect(stored().width).toBe(660);
+
+    // The cap holds: dragging past it clamps (the chat's floor is obeyed no
+    // matter WHICH affordance dragged — the ChatFocusLayout cap value).
+    fireEvent.mouseDown(handle, { clientX: 660 });
+    fireEvent.mouseMove(window, { clientX: 5000 });
+    fireEvent.mouseUp(window);
+    expect(stored().width).toBe(700);
+
+    // Dragging back LEFT narrows through the same path.
+    fireEvent.mouseDown(handle, { clientX: 700 });
+    fireEvent.mouseMove(window, { clientX: 600 });
+    fireEvent.mouseUp(window);
+    expect(stored().width).toBe(600);
+  });
+
+  it("dragging the BOTTOM-EDGE handle sets browserPanelHeight, clamped [280 .. cap]; dragging from FILL baselines on the live box", async () => {
+    enableNative();
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} heightCap={700} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    // Fill mode: the baseline is the panel's live box height — happy-dom
+    // reports a 0×0 rect for the detached tree, so the panel's honest
+    // fallback baseline (600) applies; +150 → 750 → capped at 700.
+    const handle = screen.getByTestId("browser-resize-height");
+    fireEvent.mouseDown(handle, { clientY: 600 });
+    fireEvent.mouseMove(window, { clientY: 750 });
+    fireEvent.mouseUp(window);
+    expect(stored().height).toBe(700);
+
+    // A set height is the next drag's baseline (the store, not the box).
+    fireEvent.mouseDown(handle, { clientY: 750 });
+    fireEvent.mouseMove(window, { clientY: 400 });
+    fireEvent.mouseUp(window);
+    expect(stored().height).toBe(350);
+
+    // The 280 floor holds under the same drag.
+    fireEvent.mouseDown(handle, { clientY: 400 });
+    fireEvent.mouseMove(window, { clientY: 0 });
+    fireEvent.mouseUp(window);
+    expect(stored().height).toBe(280);
+  });
+
+  it("double-click on a height-bearing handle RESETS to the fill behavior (null)", async () => {
+    enableNative();
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} heightCap={700} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    // Set a height first (the store directly — the drag path is pinned above).
+    useRightSidebarStore.getState().setBrowserPanelHeight("prj_test", 480);
+    expect(stored().height).toBe(480);
+
+    fireEvent.doubleClick(screen.getByTestId("browser-resize-height"));
+    expect(stored().height).toBeNull();
+
+    // The corners reset the same way.
+    useRightSidebarStore.getState().setBrowserPanelHeight("prj_test", 480);
+    fireEvent.doubleClick(screen.getByTestId("browser-resize-corner-br"));
+    expect(stored().height).toBeNull();
+  });
+
+  it("the CORNER handles drive BOTH axes at once (the bottom-left mirrors the sidebar's left-edge direction)", async () => {
+    enableNative();
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} widthCap={760} heightCap={650} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    // Bottom-RIGHT corner: dragging right+down widens the sidebar and grows
+    // the panel height together (the right edge follows the pointer).
+    const br = screen.getByTestId("browser-resize-corner-br");
+    fireEvent.mouseDown(br, { clientX: 460, clientY: 600 });
+    fireEvent.mouseMove(window, { clientX: 560, clientY: 720 });
+    fireEvent.mouseUp(window);
+    expect(stored().width).toBe(560);
+    expect(stored().height).toBe(650); // 600-baseline + 120 → 720 → capped 650
+
+    // Bottom-LEFT corner: dragging LEFT grows the sidebar (the ChatFocusLayout
+    // separator's direction — the sidebar's left edge), down grows the height.
+    const bl = screen.getByTestId("browser-resize-corner-bl");
+    fireEvent.mouseDown(bl, { clientX: 560, clientY: 650 });
+    fireEvent.mouseMove(window, { clientX: 460, clientY: 770 });
+    fireEvent.mouseUp(window);
+    expect(stored().width).toBe(660);
+    expect(stored().height).toBe(650);
+  });
+
+  it("keyboard: ArrowRight/ArrowLeft nudge the WIDTH ±16, ArrowUp/ArrowDown the HEIGHT ±16 (the separator grammar's step)", async () => {
+    enableNative();
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId("browser-resize-width"), { key: "ArrowRight" });
+    expect(stored().width).toBe(476);
+    fireEvent.keyDown(screen.getByTestId("browser-resize-width"), { key: "ArrowLeft" });
+    expect(stored().width).toBe(460);
+
+    fireEvent.keyDown(screen.getByTestId("browser-resize-height"), { key: "ArrowDown" });
+    expect(stored().height).toBe(616); // the 600 fill baseline + 16
+    fireEvent.keyDown(screen.getByTestId("browser-resize-height"), { key: "ArrowUp" });
+    expect(stored().height).toBe(600);
+  });
+
+  it("the download-dir registration fires when the panel knows the project root (native mode only)", async () => {
+    enableNative();
+    // LIVE mode: useProjects answers the /projects fetch mock (demo mode
+    // reads the fixture, whose projects have no prj_test rootPath — the
+    // effect would no-op and the pin would test nothing).
+    useConfigStore.setState({ demoData: false });
+    projectsReply = [{ id: "prj_test", rootPath: "C:\\Users\\me\\proj" }];
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    // The REAL downloadDirForRoot join (importOriginal keeps the pure helper
+    // live in this suite's mock) — the ROUND-115-pinned save location.
+    await waitFor(() => expect(setDownloadDir()).toHaveBeenCalledWith("tab-test-1", "C:\\Users\\me\\proj/downloads"));
+  });
+
+  it("web mode never registers a download dir (the native pipeline is desktop-only)", async () => {
+    // LIVE mode here too — the honest negative: the project root RESOLVES,
+    // and the effect still no-ops because nativeMode is false (not because
+    // the data was missing).
+    useConfigStore.setState({ demoData: false });
+    projectsReply = [{ id: "prj_test", rootPath: "C:\\Users\\me\\proj" }];
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(setDownloadDir()).not.toHaveBeenCalled();
+  });
+});
+
+describe("BrowserPanel R131-B-ui (BU3) — the native title delivery + the download toasts", () => {
+  const enableNative = (): void => {
+    nativeState.available = true;
+    nativeState.evalResult = null;
+    nativeState.evalScripts = [];
+    nativeState.evalQueue = [];
+    nativeState.windowMetrics = null;
+    vi.mocked(nativeBrowser.nativeTabCreate).mockReset();
+    vi.mocked(nativeBrowser.nativeTabCreate).mockImplementation(() => Promise.resolve());
+    vi.mocked(nativeBrowser.nativeTabNavigate).mockReset();
+    vi.mocked(nativeBrowser.nativeTabNavigate).mockImplementation(() => Promise.resolve());
+  };
+
+  it("a native navigation fires ONE delayed (600ms) document.title probe → handleTitleMessage → the store + the title-update POST", async () => {
+    enableNative();
+    // The probe's reply: the page's live title.
+    nativeState.evalResult = { ok: true, value: "Example Domain" };
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    vi.useFakeTimers();
+    try {
+      // An in-page navigation (a link click — NOT a commanded echo).
+      // NOTE (the R131-B-ui completion fix): NO waitFor under fake timers —
+      // @testing-library's retry interval is timer-driven, so a fake-timer
+      // waitFor never polls and hangs to the test timeout (and a timeout
+      // kills the finally, poisoning every LATER test's real-timer waitFor).
+      // The flush discipline instead: advanceTimersByTimeAsync(0) drains the
+      // microtask queue (the mocked fetch resolves in microtasks), so the
+      // location POST + the store update land after ONE flush round.
+      act(() => {
+        nativeState.navigatedListener?.("tab-test-1", "https://example.com/");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // The location POST landed (the store knows where the tab is — the
+      // title POST is a same-URL navigate, which needs it).
+      expect(useBrowserTabStore.getState().tabs["tab-test-1"]?.currentUrl).toBe("https://example.com/");
+
+      // Before the delay: NO probe yet (an immediate probe would read the
+      // PREVIOUS page's title — the on_navigation hook fires at START).
+      expect(nativeBrowser.nativeTabEval).not.toHaveBeenCalledWith("tab-test-1", "return document.title");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(600);
+      });
+      expect(nativeBrowser.nativeTabEval).toHaveBeenCalledWith("tab-test-1", "return document.title");
+      // The store route ran: currentTitle + the same-URL title-update POST
+      // (the probe's reply + handleTitleMessage's POST are microtask chains —
+      // two flush rounds drain the eval mock + the navigate mock).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(useBrowserTabStore.getState().tabs["tab-test-1"]?.currentTitle).toBe("Example Domain");
+      expect(postCalls("/api/v1/browser/navigate").some((c) => c.body?.title === "Example Domain")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a navigation BURST debounces to ONE probe (the seq guard keeps a stale reply from titling the NEXT page)", async () => {
+    enableNative();
+    nativeState.evalResult = { ok: true, value: "Later Page" };
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        nativeState.navigatedListener?.("tab-test-1", "https://example.com/a");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      await act(async () => {
+        nativeState.navigatedListener?.("tab-test-1", "https://example.com/b");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      // Still inside the second navigation's window — no probe fired yet.
+      expect(nativeBrowser.nativeTabEval).not.toHaveBeenCalled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(450);
+      });
+      // ONE probe total for the burst.
+      expect(nativeBrowser.nativeTabEval).toHaveBeenCalledTimes(1);
+      expect(nativeBrowser.nativeTabEval).toHaveBeenCalledWith("tab-test-1", "return document.title");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the native browser-download event surfaces the quiet toast (completed: file + saved-to path + honest bytes; fading)", async () => {
+    enableNative();
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    expect(nativeState.downloadListener).not.toBeNull();
+    await act(async () => {
+      nativeState.downloadListener?.("tab-test-1", {
+        state: "starting",
+        path: "C:\\Users\\me\\proj\\downloads\\report.pdf",
+        fileName: "report.pdf",
+        receivedBytes: 0,
+        totalBytes: 2048,
+      });
+    });
+    expect(screen.getByTestId("browser-download-toast").textContent).toContain("downloading");
+
+    await act(async () => {
+      nativeState.downloadListener?.("tab-test-1", {
+        state: "completed",
+        path: "C:\\Users\\me\\proj\\downloads\\report.pdf",
+        fileName: "report.pdf",
+        receivedBytes: 2048,
+        totalBytes: 2048,
+      });
+    });
+    const toast = screen.getByTestId("browser-download-toast").textContent ?? "";
+    expect(toast).toContain("report.pdf");
+    expect(toast).toContain("2 KiB");
+
+    // An interrupted download shows the danger spelling.
+    await act(async () => {
+      nativeState.downloadListener?.("tab-test-1", {
+        state: "interrupted",
+        path: "C:\\Users\\me\\proj\\downloads\\report.pdf",
+        fileName: "report.pdf",
+        receivedBytes: 10,
+        totalBytes: null,
+      });
+    });
+    expect(screen.getByTestId("browser-download-toast").textContent).toContain("interrupted");
+
+    // Another tab's downloads never surface here.
+    await act(async () => {
+      nativeState.downloadListener?.("tab-other", {
+        state: "completed",
+        path: "C:\\dl\\other.bin",
+        fileName: "other.bin",
+        receivedBytes: 5,
+        totalBytes: null,
+      });
+    });
+    expect(screen.getByTestId("browser-download-toast").textContent).toContain("interrupted");
+  });
+
+  it("the AGENT's download ACTION (the B-core SSE frame → applyAgentDownload → lastDownload) surfaces the same quiet line in ANY mode", async () => {
+    // Web mode on purpose — the download ACTION is any-mode by design.
+    const tab = makeTab();
+    seedRightSidebar(tab);
+    renderWithProviders(<BrowserPanel projectId="prj_test" tab={tab} />);
+    await waitFor(() => expect(postCalls("/api/v1/browser/session")).toHaveLength(1));
+
+    await act(async () => {
+      useBrowserTabStore.getState().applyAgentDownload("tab-test-1", { path: "downloads/report.pdf", bytes: 2048 });
+    });
+    const toast = screen.getByTestId("browser-download-toast").textContent ?? "";
+    expect(toast).toContain("report.pdf");
+    expect(toast).toContain("downloads/report.pdf");
+    expect(toast).toContain("2 KiB");
   });
 });

@@ -70,6 +70,24 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }
+# ROUND-131 (R131-B-ui, BU2): the native download pipeline — WebView2's
+# DownloadStarting handler + the default context menu, reached through
+# tauri's `Webview::with_webview` (the PlatformWebview controller). BOTH
+# crates are already in the lock as transitive dependencies (wry 0.55.1 →
+# webview2-com 0.38.2 → windows 0.61.3, sharing windows-core 0.61.2 →
+# windows-result 0.3.4, so every COM type webview2-com's handlers exchange
+# unifies with ours — verified in the lock during the R131-B-ui audit), so
+# declaring them direct adds ZERO new packages. webview2-com re-exports its
+# generated interfaces (ICoreWebView2_4, the download event args, the event
+# handler wrappers + take_pwstr) but NOT the windows core types, so the
+# `windows` leg is REQUIRED — the wry 0.55.1 precedent itself declares both
+# crates side by side. ZERO features: the code names only `windows::core`
+# items (HSTRING, Interface, PWSTR, Result — `pub use windows_core as core`
+# is unconditional in windows 0.61), and the suggested-path string is freed
+# INSIDE webview2-com's take_pwstr (its own CoTaskMemFree RAII), never by
+# us. CI's cargo check is the gate (ADR-0012 — no local toolchain).
+webview2-com = "0.38"
+windows = { version = "0.61" }
 
 # ROUND-100 (R100-B, ADR-0031): the Linux key store — the freedesktop Secret
 # Service (gnome-keyring/KWallet, encrypted at rest by the desktop keyring

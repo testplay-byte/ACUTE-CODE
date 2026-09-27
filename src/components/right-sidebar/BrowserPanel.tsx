@@ -14,7 +14,11 @@ import {
   Expand,
 } from "lucide-react";
 import { withAlpha } from "../dashboard/helpers";
-import { useRightSidebarStore, type RightSidebarTab } from "../../lib/right-sidebar-store";
+import {
+  stateKey,
+  useRightSidebarStore,
+  type RightSidebarTab,
+} from "../../lib/right-sidebar-store";
 // R97-G: the browser settings (the engine + the quick links + the homepage) —
 // the panel READS them; Settings → Browser owns the editing.
 import { useQuery } from "@tanstack/react-query";
@@ -41,6 +45,16 @@ import {
   nativeTabSetVisible,
   // R60: REAL DPI zoom (Rust browser_tab_set_zoom — WebView2 zoomFactor).
   nativeTabSetZoom,
+  // R131-B-ui (BU2): the per-tab download dir the Rust DownloadStarting
+  // handler saves into — set when the panel binds a project.
+  nativeTabSetDownloadDir,
+  // R131-B-ui (BU2): the `<root>/downloads` join (the ROUND-115-pinned
+  // save location — pure helper, tested in native-browser.test.tsx).
+  downloadDirForRoot,
+  // R131-B-ui (BU3): native download events (the Rust browser-download
+  // Tauri event — the DOM-side channel; the sibling B-core's SSE frame is a
+  // separate transport for the agent's download ACTION).
+  onBrowserDownload,
   onBrowserNavigated,
   openExternalUrl,
 } from "../../lib/native-browser";
@@ -56,6 +70,10 @@ import {
 // ROUND-58 (R58-b): Tauri detection for the "Open externally" handoff —
 // ONE source of truth, same as native-browser.ts itself.
 import { isTauri } from "../../lib/sidecar";
+// R131-B-ui (BU2): the project list — the panel resolves the bound
+// project's rootPath to tell Rust where its downloads land (the
+// FilesExplorerPanel's own useProjects pattern).
+import { useProjects } from "../../hooks/use-projects";
 // R60-D: the shared popover-suppression guard — a webview must never show
 // itself while a RightSidebar popover covers the page area. R62: the guard
 // module is now store-backed + also carries the GLOBAL overlay flag (any
@@ -235,6 +253,37 @@ const NATIVE_WATCHDOG_INTERVAL_MS = 2000;
  * timeout converts the silence into the honest error card.
  */
 const NATIVE_AFFORDANCE_TIMEOUT_MS = 6000;
+
+/**
+ * R131-B-ui (BU3): the native title probe's delay after a navigation — the
+ * page settles and document.title stabilizes by then (the Rust on_navigation
+ * hook fires at navigation START; an immediate probe would read the PREVIOUS
+ * page's title). ONE probe per navigation, debounced across bursts.
+ */
+const NATIVE_TITLE_PROBE_MS = 600;
+
+/** R131-B-ui (BU3): the download toast's visible duration before the fade. */
+const DOWNLOAD_TOAST_MS = 5500;
+/** R131-B-ui (BU3): the download toast's fade-out duration. */
+const DOWNLOAD_TOAST_FADE_MS = 500;
+
+/**
+ * R131-B-ui (BU3): compact byte formatting for the download toast line
+ * (B → KiB → MiB → GiB, one decimal under 10). Pure; pinned through the
+ * toast's rendered text.
+ */
+function formatDownloadBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KiB", "MiB", "GiB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const rounded = value >= 10 || unit === 0 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded} ${units[unit]}`;
+}
 
 /** R91-B3: reject with a readable timeout error after `ms`. */
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
@@ -469,6 +518,8 @@ export function BrowserPanel({
   projectId,
   tab,
   hidden = false,
+  widthCap,
+  heightCap,
 }: {
   projectId: string;
   tab: RightSidebarTab;
@@ -484,6 +535,19 @@ export function BrowserPanel({
    * hides but STAYS ALIVE) and pauses the bounds sync (a display:none
    * rect is 0×0 — never write that to a live webview). */
   hidden?: boolean;
+  /** R131-B-ui (BU1): the sidebar-width clamp for the panel's RIGHT-EDGE
+   * resize handle — the SAME live cap the ChatFocusLayout separator
+   * receives (sidebarWidthCap(container) = container − chat floor −
+   * chrome). One truth: the handle drives the SAME `setWidth` clamp path,
+   * so the sidebar obeys the chat's floor no matter which affordance
+   * dragged it. Undefined = the store's default 760 ceiling. */
+  widthCap?: number;
+  /** R131-B-ui (BU1): the panel-height clamp (≈ 75% of the measured
+   * sidebar content column — BROWSER_PANEL_HEIGHT_SHARE × columnHeight,
+   * floored at BROWSER_PANEL_MIN_HEIGHT) for the BOTTOM-EDGE and CORNER
+   * handles. Undefined (unmeasured / direct-render tests) = only the
+   * store's 280 floor applies. */
+  heightCap?: number;
 }) {
   const styles = useThemeStyles();
   // R97-G: the browser settings ride the panel (the address bar's query
@@ -615,6 +679,150 @@ export function BrowserPanel({
     agentViewportSeqRef.current = agentViewportSeq;
     if (agentViewportSeq > 0) setNaturalSize(false);
   }, [agentViewportSeq, setNaturalSize]);
+
+  // ── R131-B-ui (BU1): the panel DRAG-RESIZE ────────────────────────────────
+  // The owner: "the ability to flexibly change the width of the browser
+  // window itself… drag the corners and resize it properly as needed". The
+  // panel gains the house separator grammar (role="separator", keyboard
+  // arrows ±16px, the 5px hit area, the hover-revealed hairline — the
+  // ChatFocusLayout separator's exact pattern): a RIGHT-EDGE handle that
+  // widens/narrows the SIDEBAR through the SAME setWidth clamp path the
+  // ChatFocusLayout separator drives (one truth — the chat's floor is
+  // obeyed no matter which affordance dragged), plus a BOTTOM-EDGE handle
+  // and two CORNER squares that set the per-slice browserPanelHeight (null
+  // = the fill behavior the panel always had; double-click resets to it).
+  //
+  // GEOMETRY LAW: the native webview is an OS-level layer that floats ABOVE
+  // all app HTML and covers exactly the content card's placeholder — so the
+  // handles live in DOM space the webview never covers: the right-edge
+  // handle is a sibling COLUMN of the content card, the bottom-edge handle
+  // is a sibling ROW below it, and the corner squares sit in the panel
+  // root's padding corner (the card's inset + the row + the root's p-1.5
+  // keep them clear of the placeholder rect). The native webview re-glues
+  // automatically on every drag delta — the bounds-sync loop reacts to ANY
+  // placeholder geometry change (the ResizeObserver) — and the width keeps
+  // the R67/E5 instant-snap law (RightSidebar animates at duration 0 in
+  // Tauri); the HEIGHT is a plain style change, instant on every platform
+  // by construction.
+  const panelRootRef = useRef<HTMLDivElement | null>(null);
+  const widthCapRef = useRef<number | undefined>(widthCap);
+  const heightCapRef = useRef<number | undefined>(heightCap);
+  useEffect(() => {
+    widthCapRef.current = widthCap;
+  }, [widthCap]);
+  useEffect(() => {
+    heightCapRef.current = heightCap;
+  }, [heightCap]);
+  type ResizeMode = "width" | "height" | "corner-right" | "corner-left";
+  const resizeDragRef = useRef<{
+    mode: ResizeMode;
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number;
+  } | null>(null);
+  /** The current slice's width, read at drag time (the ChatFocusLayout
+   * separator's exact getState pattern — no render-scope closure churn). */
+  const currentSidebarWidth = useCallback((): number => {
+    const s = useRightSidebarStore.getState();
+    const key = stateKey(projectId, s.activeSessionByProject[projectId] ?? null);
+    return s.byProject[key]?.width ?? 460;
+  }, [projectId]);
+  /** The height baseline for a drag start: the user-set value, or the
+   * panel's LIVE box height in fill mode (the wrapper fills the column, so
+   * the measured root IS the column height — dragging up from fill shrinks
+   * it to a set value; dragging down is capped by the 75% share law). */
+  const effectivePanelHeight = useCallback((): number => {
+    const s = useRightSidebarStore.getState();
+    const key = stateKey(projectId, s.activeSessionByProject[projectId] ?? null);
+    const set = s.byProject[key]?.browserPanelHeight ?? null;
+    if (set !== null) return set;
+    const rect = panelRootRef.current?.getBoundingClientRect();
+    return rect !== undefined && rect.height > PANEL_MIN_LOGICAL_PX ? rect.height : 600;
+  }, [projectId]);
+  const RESIZE_CURSORS: Record<ResizeMode, string> = {
+    width: "ew-resize",
+    height: "ns-resize",
+    "corner-right": "nwse-resize",
+    "corner-left": "nesw-resize",
+  };
+  const beginResize = useCallback(
+    (mode: ResizeMode, e: React.MouseEvent) => {
+      e.preventDefault();
+      resizeDragRef.current = {
+        mode,
+        startX: e.clientX,
+        startY: e.clientY,
+        startWidth: currentSidebarWidth(),
+        startHeight: effectivePanelHeight(),
+      };
+      document.body.style.cursor = RESIZE_CURSORS[mode];
+      document.body.style.userSelect = "none";
+    },
+    [currentSidebarWidth, effectivePanelHeight],
+  );
+  const endResize = useCallback(() => {
+    if (resizeDragRef.current === null) return;
+    resizeDragRef.current = null;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  }, []);
+  // The move/up listeners stay mounted for the panel's lifetime and gate on
+  // the drag ref (the ChatFocusLayout pattern — no listener churn per drag).
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const drag = resizeDragRef.current;
+      if (drag === null) return;
+      const dx = e.clientX - drag.startX;
+      const dy = e.clientY - drag.startY;
+      const s = useRightSidebarStore.getState();
+      // WIDTH: the right edge / bottom-right corner grow with +dx; the
+      // bottom-LEFT corner mirrors (dragging left grows the sidebar, the
+      // same direction the ChatFocusLayout separator obeys).
+      if (drag.mode === "width" || drag.mode === "corner-right") {
+        s.setWidth(projectId, drag.startWidth + dx, widthCapRef.current);
+      } else if (drag.mode === "corner-left") {
+        s.setWidth(projectId, drag.startWidth - dx, widthCapRef.current);
+      }
+      // HEIGHT: the bottom edge and both corners grow with +dy (down). The
+      // store clamps [280 .. cap]; a null cap leaves only the floor — the
+      // render-time cap (RightSidebar's height law) re-clamps honestly.
+      if (drag.mode !== "width") {
+        s.setBrowserPanelHeight(projectId, drag.startHeight + dy, heightCapRef.current);
+      }
+    };
+    const onUp = () => endResize();
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [projectId, endResize]);
+  /** Keyboard nudge (±16px — the ChatFocusLayout separator's step). */
+  const nudgeResize = useCallback(
+    (widthDelta: number | null, heightDelta: number | null) => {
+      const s = useRightSidebarStore.getState();
+      if (widthDelta !== null) {
+        s.setWidth(projectId, currentSidebarWidth() + widthDelta, widthCapRef.current);
+      }
+      if (heightDelta !== null) {
+        s.setBrowserPanelHeight(projectId, effectivePanelHeight() + heightDelta, heightCapRef.current);
+      }
+    },
+    [projectId, currentSidebarWidth, effectivePanelHeight],
+  );
+  /** Double-click on a height-bearing handle: reset to the FILL behavior. */
+  const resetPanelHeight = useCallback(() => {
+    useRightSidebarStore.getState().setBrowserPanelHeight(projectId, null);
+  }, [projectId]);
+  // A drag that outlives the panel (tab switched mid-drag) must never keep
+  // the body cursor locked or keep mutating a hidden panel's slice.
+  useEffect(() => {
+    return () => {
+      if (resizeDragRef.current !== null) endResize();
+    };
+  }, [endResize]);
 
   /**
    * ROUND-67 (R67, E1): the agent-navigation driver. The store bumps
@@ -1448,6 +1656,44 @@ export function BrowserPanel({
     // watchdog reads the live guard + store state at tick time on purpose.
   }, [nativeMode, tabId, nativeCreate, syncBounds, nativeFail]);
 
+  // ── R131-B-ui (BU3): native TITLE delivery ────────────────────────────────
+  // Native mode never delivered page titles (BrowserNavigated has no title
+  // field — the Rust on_navigation hook only knows the URL), so get_state
+  // answered title:null and the tab strip fell back to the host. The store
+  // route ALREADY existed (`handleTitleMessage` — the iframe path's
+  // acute:title handler feeds it, and it POSTs the title-update the agent's
+  // get_state reconciles against); THIS is the native feeder: ONE delayed
+  // (600ms — the page settles, document.title is stable by then) eval per
+  // navigation, debounced so a navigation burst fires a single probe, and
+  // seq-guarded so a stale reply can never title the NEXT page.
+  const titleProbeTimerRef = useRef<number | null>(null);
+  const titleProbeSeqRef = useRef(0);
+  const scheduleNativeTitleProbe = useCallback(() => {
+    if (titleProbeTimerRef.current !== null) window.clearTimeout(titleProbeTimerRef.current);
+    const seq = titleProbeSeqRef.current + 1;
+    titleProbeSeqRef.current = seq;
+    titleProbeTimerRef.current = window.setTimeout(() => {
+      titleProbeTimerRef.current = null;
+      if (!mountedRef.current || titleProbeSeqRef.current !== seq) return;
+      void nativeTabEval(tabId, "return document.title")
+        .then((result) => {
+          if (titleProbeSeqRef.current !== seq) return;
+          if (result === null || !result.ok) return;
+          const title = typeof result.value === "string" ? result.value : null;
+          // Same honesty guards as the iframe path's acute:title handler:
+          // non-empty, ≤300 chars, never a fabricated fallback.
+          if (title === null || title === "" || title.length > 300) return;
+          void handleTitleMessage(tabId, title);
+        })
+        .catch(() => {});
+    }, NATIVE_TITLE_PROBE_MS);
+  }, [tabId, handleTitleMessage]);
+  useEffect(() => {
+    return () => {
+      if (titleProbeTimerRef.current !== null) window.clearTimeout(titleProbeTimerRef.current);
+    };
+  }, []);
+
   // ── native: user navigations INSIDE the webview ──────────────────────────
   useEffect(() => {
     if (!nativeMode) return;
@@ -1467,6 +1713,7 @@ export function BrowserPanel({
       // button sat on its stop glyph over a fully rendered page.
       if (lastCommandedUrlRef.current === url) {
         setLoading(tabId, false);
+        scheduleNativeTitleProbe();
         return;
       }
       lastCommandedUrlRef.current = url;
@@ -1475,8 +1722,100 @@ export function BrowserPanel({
       // browser_control get_state stays truthful — the same intent as the
       // iframe path's acute:location handler below.
       void handleLocationMessage(tabId, url);
+      scheduleNativeTitleProbe();
     });
-  }, [nativeMode, tabId, handleLocationMessage, setLoading]);
+  }, [nativeMode, tabId, handleLocationMessage, setLoading, scheduleNativeTitleProbe]);
+
+  // ── R131-B-ui (BU2): the per-tab download dir ─────────────────────────────
+  // The Rust DownloadStarting handler saves into the tab's download dir
+  // (<projectRoot>/downloads — the ROUND-115-pinned location); Rust does not
+  // know the project root (the sidecar owns project state), so the PANEL —
+  // which knows the project — tells it. Fire-and-forget + idempotent: the
+  // effect re-runs whenever the resolved rootPath changes (project switch on
+  // the same tab id), and a rejection (the honest "downloads are
+  // Windows-only in this build" refusal on the Linux shell) logs once via
+  // the standard nativeWarn channel, never breaks the panel.
+  const projectsQuery = useProjects();
+  const projectRoot = projectsQuery.data?.find((p) => p.id === projectId)?.rootPath ?? null;
+  useEffect(() => {
+    if (!nativeMode || projectRoot === null) return;
+    nativeTabSetDownloadDir(tabId, downloadDirForRoot(projectRoot)).catch(nativeWarn);
+  }, [nativeMode, tabId, projectRoot]);
+
+  // ── R131-B-ui (BU3): native downloads surfaced in the panel's own chrome ──
+  // The Rust browser-download Tauri event (starting → completed/interrupted)
+  // lands HERE — the DOM-side channel, no stream-store intercept needed (the
+  // sibling B-core's `browser-download` SSE frame is the agent-side twin for
+  // the download ACTION; this surface is for the owner's right-click →
+  // "Save image as…" flow). A quiet line with the bytes, fading out.
+  const [downloadToast, setDownloadToast] = useState<{
+    fileName: string;
+    detail: string;
+    ok: boolean;
+    fading: boolean;
+  } | null>(null);
+  const downloadToastTimersRef = useRef<number[]>([]);
+  const showDownloadToast = useCallback((fileName: string, detail: string, ok: boolean) => {
+    for (const t of downloadToastTimersRef.current) window.clearTimeout(t);
+    downloadToastTimersRef.current = [];
+    setDownloadToast({ fileName, detail, ok, fading: false });
+    // The fade: ~5.5s visible → 500ms opacity fade → gone. A newer download
+    // replaces the line and restarts the clock.
+    downloadToastTimersRef.current.push(
+      window.setTimeout(() => {
+        setDownloadToast((cur) => (cur === null ? cur : { ...cur, fading: true }));
+      }, DOWNLOAD_TOAST_MS),
+      window.setTimeout(() => {
+        setDownloadToast(null);
+        downloadToastTimersRef.current = [];
+      }, DOWNLOAD_TOAST_MS + DOWNLOAD_TOAST_FADE_MS),
+    );
+  }, []);
+  useEffect(() => {
+    return () => {
+      for (const t of downloadToastTimersRef.current) window.clearTimeout(t);
+      downloadToastTimersRef.current = [];
+    };
+  }, []);
+  useEffect(() => {
+    if (!nativeMode) return;
+    return onBrowserDownload((evtTabId, info) => {
+      if (evtTabId !== tabId) return;
+      if (info.state === "starting") {
+        showDownloadToast(
+          info.fileName,
+          info.totalBytes !== null ? `downloading… ${formatDownloadBytes(info.totalBytes)}` : "downloading…",
+          true,
+        );
+      } else if (info.state === "completed") {
+        showDownloadToast(
+          info.fileName,
+          `saved to ${info.path} · ${formatDownloadBytes(info.receivedBytes)}`,
+          true,
+        );
+      } else if (info.state === "interrupted") {
+        showDownloadToast(info.fileName, "the download was interrupted", false);
+      }
+    });
+  }, [nativeMode, tabId, showDownloadToast]);
+
+  // ── R131-B-ui (BU3): the AGENT's download ACTION — the sibling B-core's
+  // `browser-download` SSE frame (the stream-store intercept → browser-store's
+  // lastDownload bump). Same quiet line as the native right-click save, the
+  // agent-side twin transport. The panel surfaces it whether the right-sidebar
+  // slice is in native or web mode (the ACTION is any-mode by design); a
+  // download that landed while this panel was away still announces once on
+  // return (the store outlives the panel — the keep-alive unmount is the only
+  // gap, and re-opening a tab is a fresh slice). ──
+  const lastDownload = useBrowserTabStore((s) => s.tabs[tabId]?.lastDownload ?? null);
+  useEffect(() => {
+    if (lastDownload === null) return;
+    showDownloadToast(
+      lastDownload.fileName,
+      `→ ${lastDownload.path !== "" ? lastDownload.path : "downloads/"} · ${formatDownloadBytes(lastDownload.bytes)}`,
+      true,
+    );
+  }, [lastDownload, showDownloadToast]);
 
   // A tab opened WITH a url (openBrowser(projectId, url)) navigates once the
   // ticket exists.
@@ -1881,9 +2220,11 @@ export function BrowserPanel({
 
   return (
     <div
+      ref={panelRootRef}
       // R126-3e (TOKENS §10): the panel's ambient bed = THE WELL (the
       // recessed rung); the JS isDark/subtle leg died.
-      className="h-full flex flex-col min-h-0 gap-1.5 p-1.5 bg-well"
+      // R131-B-ui (BU1): `relative` anchors the corner resize squares.
+      className="relative h-full flex flex-col min-h-0 gap-1.5 p-1.5 bg-well"
       data-testid="browser-panel"
     >
       {/* ── Chrome bar: navigation + address + explicit external actions.
@@ -2226,21 +2567,44 @@ export function BrowserPanel({
         </div>
       ) : null}
 
+      {/* ── R131-B-ui (BU3): the native download toast — a quiet line in the
+          panel's own chrome (the viewport-bar rhythm at one row tall), the
+          bytes honest, fading out. The danger spelling only on interruption. ── */}
+      {downloadToast !== null ? (
+        <div
+          className={`shrink-0 flex min-w-0 items-center gap-2 px-2.5 h-7 rounded-xl border border-clay-rim bg-well text-[11px] transition-opacity duration-500 ${
+            downloadToast.fading ? "opacity-0" : "opacity-100"
+          } ${downloadToast.ok ? "text-muted" : "text-danger-deep"}`}
+          data-testid="browser-download-toast"
+          role="status"
+        >
+          {downloadToast.ok ? <ArrowRight size={11} className="shrink-0" /> : <AlertTriangle size={11} className="shrink-0" />}
+          <span className="shrink-0 font-medium">{downloadToast.fileName}</span>
+          <span className="min-w-0 truncate">{downloadToast.detail}</span>
+        </div>
+      ) : null}
+
       {/* ── Content: empty state or the scaled viewport frame. R60-D: the
           R59 rounded CONTENT CARD — the card's border + rounded corners read
           as the page's frame; in native mode the placeholder (the webview's
           rect) is inset 4px so the webview's square OS-level corners stay
           inside the card's 12px corner curve and the card's background shows
           through as the frame around the page (the pop-out's exact pattern).
-          The proxy path's geometry below is EXACTLY as before. ── */}
-      <div
-        ref={contentRef}
-        // R126-3e: the content frame = the deep mono-block substrate (the
-        // page's recessed bed) + the clay rim; the JS isDark/subtle + border
-        // legs died. The webview glue (bounds sync, snap widths, keep-alive)
-        // is byte-identical.
-        className="relative flex-1 min-h-0 overflow-auto rounded-xl border border-clay-rim bg-mono-block"
-      >
+          The proxy path's geometry below is EXACTLY as before.
+          R131-B-ui (BU1): the card now sits in a ROW with the RIGHT-EDGE
+          resize handle beside it — the handle must live in DOM space the
+          native webview never covers (it floats above ALL app HTML over the
+          placeholder rect only), so a sibling COLUMN is the only spot a
+          clickable width affordance can exist on the panel itself. ── */}
+      <div className="flex flex-1 min-h-0 gap-1.5">
+        <div
+          ref={contentRef}
+          // R126-3e: the content frame = the deep mono-block substrate (the
+          // page's recessed bed) + the clay rim; the JS isDark/subtle + border
+          // legs died. The webview glue (bounds sync, snap widths, keep-alive)
+          // is byte-identical.
+          className="relative flex-1 min-h-0 min-w-0 overflow-auto rounded-xl border border-clay-rim bg-mono-block"
+        >
         {nativeMode ? (
           /* ROUND-50 (R50-a): the page area placeholder. The native child
              webview is NOT a DOM child — it is an OS-level child of the
@@ -2319,7 +2683,133 @@ export function BrowserPanel({
             </div>
           </div>
         )}
+        </div>
+
+        {/* ── R131-B-ui (BU1): the RIGHT-EDGE resize handle — widens/narrows
+            the SIDEBAR through the SAME setWidth clamp path the
+            ChatFocusLayout separator drives (one truth: the chat's floor
+            holds). The house separator grammar (role=separator, keyboard
+            ±16px, the 5px hit area, the hover-revealed hairline + bg-line
+            wash — ChatFocusLayout's exact look, vertical). The numeric dims
+            ride the inline style leg — the arbitrary-px utilities are the
+            one part of the grammar TOKENS §2 refuses to replicate per
+            instance (design-audit R2's ratchet: the count never grows); the
+            visual identity (the wash + the 2px hairline) is identical. ── */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize browser panel width"
+          title="Drag to resize the browser panel's width"
+          tabIndex={0}
+          data-testid="browser-resize-width"
+          className="shrink-0 cursor-ew-resize relative group flex items-center justify-center outline-none rounded-full bg-transparent hover:bg-line focus-visible:bg-line hover:opacity-100 opacity-0 transition-opacity transition-colors"
+          style={{ width: 5 }}
+          onMouseDown={(e) => beginResize("width", e)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") {
+              e.preventDefault();
+              nudgeResize(-16, null);
+            } else if (e.key === "ArrowRight") {
+              e.preventDefault();
+              nudgeResize(16, null);
+            }
+          }}
+        >
+          <div
+            className="absolute inset-y-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+            style={{ background: styles.border, width: 2 }}
+          />
+        </div>
       </div>
+
+      {/* ── R131-B-ui (BU1): the BOTTOM-EDGE resize handle + the CORNER
+          squares. The bottom row sets the per-slice browserPanelHeight (a
+          sibling ROW below the content card — DOM space the native webview
+          never covers); the corners sit in the panel root's padding corners
+          (the card's inset + this row + the root's p-1.5 keep them clear of
+          the placeholder rect) and drive BOTH axes at once. Double-click any
+          height-bearing handle to reset to the fill behavior. ── */}
+      <div className="shrink-0 flex items-stretch" style={{ height: 5 }}>
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize browser panel height"
+          title="Drag to resize the browser panel's height — double-click to fill the sidebar"
+          tabIndex={0}
+          data-testid="browser-resize-height"
+          className="flex-1 cursor-ns-resize relative group flex items-center justify-center outline-none rounded-full bg-transparent hover:bg-line focus-visible:bg-line hover:opacity-100 opacity-0 transition-opacity transition-colors"
+          onMouseDown={(e) => beginResize("height", e)}
+          onDoubleClick={() => resetPanelHeight()}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowUp") {
+              e.preventDefault();
+              nudgeResize(null, -16);
+            } else if (e.key === "ArrowDown") {
+              e.preventDefault();
+              nudgeResize(null, 16);
+            }
+          }}
+        >
+          <div
+            className="absolute inset-x-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+            style={{ background: styles.border, height: 2 }}
+          />
+        </div>
+      </div>
+      {/* The corner squares — the root's very corners (clear of the webview
+          rect by the padding rhythm); the cursor is the affordance. */}
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize browser panel (bottom-left corner)"
+        title="Drag to resize the browser panel — double-click to fill the sidebar"
+        tabIndex={0}
+        data-testid="browser-resize-corner-bl"
+        className="absolute bottom-0 left-0 w-3 h-3 cursor-nesw-resize rounded-full"
+        onMouseDown={(e) => beginResize("corner-left", e)}
+        onDoubleClick={() => resetPanelHeight()}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            nudgeResize(16, null);
+          } else if (e.key === "ArrowRight") {
+            e.preventDefault();
+            nudgeResize(-16, null);
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            nudgeResize(null, -16);
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            nudgeResize(null, 16);
+          }
+        }}
+      />
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize browser panel (bottom-right corner)"
+        title="Drag to resize the browser panel — double-click to fill the sidebar"
+        tabIndex={0}
+        data-testid="browser-resize-corner-br"
+        className="absolute bottom-0 right-0 w-3 h-3 cursor-nwse-resize rounded-full"
+        onMouseDown={(e) => beginResize("corner-right", e)}
+        onDoubleClick={() => resetPanelHeight()}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            nudgeResize(-16, null);
+          } else if (e.key === "ArrowRight") {
+            e.preventDefault();
+            nudgeResize(16, null);
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            nudgeResize(null, -16);
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            nudgeResize(null, 16);
+          }
+        }}
+      />
 
     </div>
   );
