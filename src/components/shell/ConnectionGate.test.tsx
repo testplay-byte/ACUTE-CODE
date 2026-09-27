@@ -48,6 +48,8 @@ vi.mock("./Sidebar", () => ({
 }));
 
 import { useConfigStore } from "../../lib/config-store";
+// R131-TH (TH1): the Restart CTA's §1d pair pin drives the theme store.
+import { useThemeStore } from "../../lib/theme-store";
 
 afterEach(cleanup);
 
@@ -165,6 +167,33 @@ describe("ConnectionGate — R54 offline screen", () => {
     await waitFor(() => {
       expect(connectionMock.retryConnection).toHaveBeenCalledTimes(1);
     });
+  });
+
+  // ── ROUND-131 (R131-TH, TH1): the Restart CTA rides the §1d pair — the
+  // owner's white-on-white scenario pinned. Mono Stone DARK resolves the
+  // accent to the near-white #E0E0E0; the pre-TH button painted `text-white`
+  // on var(--ac-accent) = white-on-white. Now: the `bg-accent-deep` class
+  // leg + the JS accentText ink (the AboutTab:311 in-house spelling). ──
+  it("R131-TH: the Restart CTA is the §1d pair — dark ink on the near-white Mono Stone dark accent", () => {
+    useThemeStore.setState({ themeId: "mono", mode: "dark" });
+    useConfigStore.setState({
+      connection: "offline",
+      connectionError: "boom",
+    });
+
+    render(
+      <ConnectionGate>
+        <p>APP TREE</p>
+      </ConnectionGate>,
+    );
+
+    const restart = screen.getByRole("button", { name: /restart engine/i }) as HTMLElement;
+    // The class leg: the deep-tier fill (no text-white anywhere).
+    expect(restart.className).toContain("bg-accent-deep");
+    expect(restart.className).not.toContain("text-white");
+    // The JS ink leg: accentText on the near-white fill = DARK ink.
+    expect(["#111111", "rgb(17, 17, 17)"]).toContain(restart.style.color);
+    expect(restart.style.backgroundColor).not.toBe("var(--ac-accent)");
   });
 });
 

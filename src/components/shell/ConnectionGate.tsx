@@ -4,6 +4,9 @@ import { useConfigStore, type UpdateInFlight } from "../../lib/config-store";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { beginSidecarConnect, retryConnection } from "../../lib/sidecar-connection";
 import { getSidecarLogTail, isTauri, type SidecarLogTail } from "../../lib/sidecar";
+// R131-TH: the OfflineScreen's Restart CTA rides the §1d pair (the JS
+// accentText ink leg — see the button below).
+import { useThemeStyles } from "../../lib/use-theme-styles";
 // R128-W1: the update's OS-level completion confirmation (the owner's
 // "it did not show me any system or anything" report).
 import { notifyDesktop } from "../../lib/desktop-notifications";
@@ -330,6 +333,7 @@ function ConnectingSplash({ settingUpVersion }: { settingUpVersion: string | nul
  * %APPDATA% with a file explorer.
  */
 function OfflineScreen({ error }: { error: string | null }) {
+  const styles = useThemeStyles();
   const [retrying, setRetrying] = useState(false);
   const [logTail, setLogTail] = useState<SidecarLogTail | null>(null);
   const [copied, setCopied] = useState(false);
@@ -468,8 +472,13 @@ function OfflineScreen({ error }: { error: string | null }) {
           type="button"
           onClick={() => void onRetry()}
           disabled={retrying}
-          className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-opacity disabled:opacity-60"
-          style={{ backgroundColor: "var(--ac-accent)" }}
+          /* R131-TH (TH1): the Restart CTA rides the §1d pair — the
+             `bg-accent-deep` class leg + the JS accentText ink (the
+             AboutTab:311 in-house spelling). The pre-TH `text-white` on
+             var(--ac-accent) painted white-on-white on Mono Stone dark
+             (accent #E0E0E0 — the owner's v0.123.0 verdict). */
+          className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold transition-opacity disabled:opacity-60 bg-accent-deep"
+          style={{ color: styles.accentText }}
         >
           {retrying ? (
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden />

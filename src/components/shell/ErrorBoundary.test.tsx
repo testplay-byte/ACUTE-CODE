@@ -116,4 +116,26 @@ describe("ErrorBoundary (R59-E)", () => {
     expect(payload).toContain("Bomb"); // the component stack rides along
     expect(payload).toContain("render error diagnostics");
   });
+
+  // ── ROUND-131 (R131-TH, TH1): the Retry CTA rides the §1d pair on the
+  // PURE CSS-VAR leg — `bg-accent-deep` + var(--ac-accent-text) ink, never
+  // `text-white` on var(--ac-accent) (white-on-white on Mono Stone dark,
+  // where the accent resolves to the near-white #E0E0E0). The
+  // failure-isolation property is pinned with it: NO store/hook dependency
+  // (the fallback must render even when the store was the crash cause). ──
+  it("R131-TH: the Retry CTA is the §1d pair on the CSS-var leg — no store dependency, no hardcoded white", () => {
+    render(
+      <ErrorBoundary>
+        <Bomb detonate={true} />
+      </ErrorBoundary>,
+    );
+
+    const retry = screen.getByRole("button", { name: /^retry$/i }) as HTMLElement;
+    expect(retry.className).toContain("bg-accent-deep");
+    expect(retry.className).not.toContain("text-white");
+    // The ink rides the CSS-var token (resolves pre-paint from :root — the
+    // index.css fallbacks cover a pre-bridge crash), never a JS fill.
+    expect(retry.style.color).toBe("var(--ac-accent-text)");
+    expect(retry.style.backgroundColor).not.toBe("var(--ac-accent)");
+  });
 });

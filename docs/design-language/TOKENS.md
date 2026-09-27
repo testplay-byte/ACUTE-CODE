@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-24 round-126 -->
+<!-- last-reviewed: 2026-09-27 round-131 -->
 # Tokens — the color, type, and spacing language
 
 Serves DESIGN-SYSTEM §1 (source of truth), §2 (spacing), §3 (typography).
@@ -139,6 +139,20 @@ The accent is ONE family, two depths — never a second accent:
 for contrast duty. Themes without an `accentDeep` field resolve it to
 their own accent (identity). `text-accent-deep` / `bg-accent-deep` are the
 Tailwind spellings; `styles.accentDeep` the JS leg.
+
+**ROUND-131 (R131-TH — the mono-stone law):** on achromatic accents the
+ink is ALWAYS the `accentText` pair — **hardcoded white ink on an
+accent/theme fill is a defect class** (the R131-TH sweep retired three:
+the todo editor's Save, the connection gate's Restart engine, the render
+boundary's Retry — all painted `"#fff"`/`text-white` on the accent and
+died white-on-white on Mono Stone dark, whose accent resolves to the
+near-white `#E0E0E0`). The pair law is absolute: `accentDeep` fill +
+`accentText` ink on every CTA, in every theme, in both modes — the fill
+may be near-white, so the ink is what carries the contrast (the R93-A4
+toggle precedent). The adjacent family: letter tiles over the flat
+project hues derive their ink from the hue's luminance
+(`getContrastText`), never hardcoded white — amber `#F59E0B` / lime
+`#84CC16` (and the flame-orange default) take dark ink.
 
 ## 2. The type scale (the canonical ladder) — ROUND-100 (R100-C, research §C1.1)
 
@@ -443,6 +457,19 @@ free) and rides the `--ac-*` bridge + the Tailwind `@theme` leg.
    not alpha hacks.
 4. **Skeletons ride the well** (`bg-well` at 0.45↔0.85 opacity pulse —
    MOTION §4), never plain `bg-subtle`.
+5. **ROUND-131 (R131-TH — the mono-neutral surface law):** on a theme
+   whose accent carries no chroma (`achromaticAccent` — the DATA check in
+   `deriveThemeStyles`, never an id check), the recessed-surface
+   derivations mix from the NEUTRAL ink ramp instead of the clay warm
+   taupe: the well's `#8A6A55` becomes the luminance-matched `#717171`,
+   the recess ink `#2A2018` becomes `#222222` — same ratios, same
+   lightness targets (every recess keeps its DEPTH), just achromatic.
+   Warm-taupe wells over a pure-stone palette are the "not well planned"
+   drift (the owner's v0.123.0 verdict); non-mono themes keep the warm
+   derivations byte-identically. The clay SHADOW ink (§9) + the
+   liquid-chrome ramp (§8) stay theme-independent by their own
+   constitutions — they layer around surfaces, they are not
+   recessed-surface fills.
 
 ## 11. The status grammar — ROUND-126 (R126, mobile R117-g1 §2.2)
 

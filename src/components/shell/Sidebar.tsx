@@ -30,6 +30,12 @@ import { SEMANTIC_COLORS } from "../../lib/semantics";
 import { isTauri } from "../../lib/sidecar";
 import { useConfigStore } from "../../lib/config-store";
 import { useThemeStyles } from "../../lib/use-theme-styles";
+// R131-TH (TH1b): the tile ink derives from the tile color's own luminance
+// (getContrastText — themes.ts's existing pair picker), never a hardcoded
+// white: the PROJECT_PALETTE's amber #F59E0B / lime #84CC16 (and the flame
+// orange default) are light enough that white ink fails contrast; the dark
+// hues keep white.
+import { getContrastText } from "../../lib/themes";
 import { useProjects, useCreateProject, useDeleteProject } from "../../hooks/use-projects";
 import { useCreateSession, useDeleteSession, useRenameSession, useSessions } from "../../hooks/use-sessions";
 import { useAgents } from "../../hooks/use-agents";
@@ -88,7 +94,9 @@ function readExpanded(): string[] {
  * retired (the "gradient tile" slop pattern — JetBrains new UI deliberately
  * flattens project icons); the tile keeps its color-identity job. R60-C: the
  * `selected` inset-ring variant died with the collapsed rail — the tile is
- * the expanded-row mark only. */
+ * the expanded-row mark only. R131-TH (TH1b): the letter ink is
+ * getContrastText(color) — the luminance-derived pair, not hardcoded white
+ * (white dies on the palette's amber/lime/orange hues). */
 function ProjectTile({
   color,
   name,
@@ -104,7 +112,7 @@ function ProjectTile({
 }) {
   return (
     <span
-      className="shrink-0 grid place-items-center font-semibold text-white select-none"
+      className="shrink-0 grid place-items-center font-semibold select-none"
       style={{
         width: size,
         height: size,
@@ -116,6 +124,8 @@ function ProjectTile({
         borderRadius: radius,
         fontSize,
         background: color,
+        // R131-TH (TH1b): luminance-derived ink over the flat hue.
+        color: getContrastText(color),
         boxShadow: "var(--ac-clay-shadow-sm)",
       }}
       aria-hidden

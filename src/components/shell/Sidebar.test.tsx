@@ -1073,6 +1073,12 @@ describe("ProjectView compact header + per-session rows (R113-d)", () => {
     expect(tile?.style.boxShadow).toContain("var(--ac-clay-shadow-sm)");
     const seed = (await getFixtureProjects().list()).find((p) => p.name === "ACUTE-CODE");
     expect(tile?.style.background).toBe(seed?.color);
+    // R131-TH (TH1b): the letter ink is the luminance-derived PAIR, not
+    // hardcoded white — the fixture's flame orange #FF6B2C (the palette
+    // default) is light enough that getContrastText picks DARK ink (white
+    // ink on it sat at ~2.8:1; #111111 holds ~6.7:1).
+    expect(tile?.className).not.toContain("text-white");
+    expect(["#111111", "rgb(17, 17, 17)"]).toContain(tile?.style.color);
     // The pre-R113 chrome is deleted outright (the 44px bento tile).
     expect(document.querySelector(".h-11.w-11")).toBeNull();
     expect(screen.queryByText("Open project chat")).toBeNull();

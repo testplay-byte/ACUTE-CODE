@@ -9,6 +9,12 @@ import { useThemeStyles } from "../../lib/use-theme-styles";
 import { useScrollFade } from "../../lib/useScrollFade";
 import { highlightLine, getFileColor, SYNTAX_COLORS } from "../project-chat/highlight";
 import { withAlpha } from "../dashboard/helpers";
+// R131-TH (TH3): the image branch + the binary guard's shared pieces.
+import {
+  BinaryFileNotice,
+  FileImagePreview,
+  isDisplayableImageAttachment,
+} from "./FileImagePreview";
 
 /**
  * ROUND-38/39 right-sidebar File tab (owner: "for the codes… it can display
@@ -193,7 +199,13 @@ function inlineMd(text: string, projectId?: string): ReactNode[] {
 export function FileViewerPanel({ projectId, tab }: { projectId: string; tab: RightSidebarTab }) {
   const styles = useThemeStyles();
   const filePath = tab.filePath ?? null;
-  const fileQuery = useProjectFile(projectId, filePath);
+  const fileName = filePath !== null ? filePath.split("/").pop() ?? filePath : "";
+  // R131-TH (TH3): the image branch — displayable images (the bytes route's
+  // own allowlist: png/jpg/jpeg/gif/webp/bmp) NEVER ride the text route: the
+  // bytes route is the door they come out of (the R67/R121-b law), so the
+  // text query is disabled for them and no doomed text fetch fires.
+  const isImage = filePath !== null && isDisplayableImageAttachment(filePath, fileName);
+  const fileQuery = useProjectFile(projectId, isImage ? null : filePath);
   const scrollRef = useRef<HTMLDivElement>(null);
   useScrollFade(scrollRef);
 
@@ -212,8 +224,11 @@ export function FileViewerPanel({ projectId, tab }: { projectId: string; tab: Ri
   }
 
   const isMd = isMarkdown(filePath);
+  // R131-TH (TH3): the NUL sniff — content carrying a NUL byte is binary,
+  // and the raw <pre> would render it as mojibake (the honest notice
+  // instead; checked on the code leg only — the md leg keeps its renderer).
+  const isBinary = content.includes("\u0000");
   const lines = content.split("\n");
-  const fileName = filePath.split("/").pop() ?? filePath;
   const fileColor = getFileColor(fileName);
 
   return (
@@ -244,10 +259,17 @@ export function FileViewerPanel({ projectId, tab }: { projectId: string; tab: Ri
           <div className="px-3 py-2 text-[11px] font-mono text-danger-deep">
             {error instanceof Error ? error.message : "failed to load file"}
           </div>
+        ) : isImage ? (
+          // R131-TH (TH3): the image pane — BEFORE the markdown check, per
+          // the viewer's law (an image is pixels, never text legs).
+          <FileImagePreview projectId={projectId} filePath={filePath} />
         ) : isMd ? (
           <div className="px-3 py-3">
             <Markdown content={content} projectId={projectId} />
           </div>
+        ) : isBinary ? (
+          // R131-TH (TH3): the honesty guard — binary content, no mojibake.
+          <BinaryFileNotice />
         ) : (
           <pre className="p-2 font-mono text-[12px] leading-[1.6]">
             {lines.map((line, idx) => (
