@@ -343,5 +343,17 @@ export interface CuaBackend {
  * before emitting JSON" was a dead compile the old probe could not see).
  * linux/macos OMIT the field — absence means "not probed on this backend",
  * never "failed".
+ *
+ * ROUND-131 (R131-C, C7 — the capability honesty): `webTree` reports the
+ * probe's web-accessibility-tree verification state. NO backend's probe
+ * walks a live Chromium page to verify the web tree's depth, so the honest
+ * value is "unverified" — the seeded skill's "the WEB accessibility tree IS
+ * searched" claim is conditional for USER-launched browsers (Chromium builds
+ * the web tree lazily; without --force-renderer-accessibility at start the
+ * walk may see only the window node). Absence means "not reported by this
+ * backend", never "verified".
  */
-export type ProbedPermissionReport = PermissionReport & { addTypeOk?: boolean };
+export type ProbedPermissionReport = PermissionReport & {
+  addTypeOk?: boolean;
+  webTree?: "unverified";
+};

@@ -86,9 +86,20 @@ function seedUsage(overrides: Partial<UsageRecord>): void {
 
 describe("R127 getUsageSummary — granularity=hour", () => {
   it("buckets by UTC hour with 13-char keys, zero-filled ascending to the CURRENT hour", () => {
-    // Two rows in DIFFERENT hours of today + one row 3 days back.
-    seedUsage({ ts: isoAtMsIntoDay(0, 10 * 3_600_000 + 5 * 60_000) }); // 10:05
-    seedUsage({ ts: isoAtMsIntoDay(0, 10 * 3_600_000 + 30 * 60_000), inputTokens: 7 }); // 10:30 — same hour, folds
+    // R131 (the round's honest close-out fix — the time-bomb flake): the
+    // rows used to be seeded at a FIXED 10:05/10:30 UTC, so any run between
+    // 00:00 and 10:00 UTC found NO T10 bucket (the zero-fill ends at the
+    // current hour) and the pin failed — a morning-only flake that also
+    // menaces CI. The rows now ride the PREVIOUS UTC hour of "now"
+    // (computed once, both rows in the SAME hour so the fold law still
+    // pins), which is always inside the zero-filled window by construction.
+    const seededHourMs = Math.floor(Date.now() / 3_600_000) * 3_600_000 - 3_600_000;
+    const seededHourKey = new Date(seededHourMs).toISOString().slice(0, 13);
+    const msIntoSeededHour = (seededHourMs % 86_400_000) + 5 * 60_000;
+    const msIntoSeededHourLate = (seededHourMs % 86_400_000) + 30 * 60_000;
+    const seededDaysBack = Math.floor((todayUtcMidnight() + 86_400_000 - 1 - seededHourMs) / 86_400_000);
+    seedUsage({ ts: isoAtMsIntoDay(seededDaysBack, msIntoSeededHour) }); // :05 into the seeded hour
+    seedUsage({ ts: isoAtMsIntoDay(seededDaysBack, msIntoSeededHourLate), inputTokens: 7 }); // :30 — same hour, folds
     seedUsage({ ts: isoAtMsIntoDay(3, 23 * 3_600_000) }); // 3 days back, 23:00
 
     const summary = getUsageSummary(db, { days: 7, granularity: "hour" });
@@ -100,12 +111,11 @@ describe("R127 getUsageSummary — granularity=hour", () => {
     // …ascending, ending at the CURRENT hour (no future buckets)…
     const last = summary.days[summary.days.length - 1];
     expect(last.date).toBe(new Date().toISOString().slice(0, 13));
-    // …the 10:00 hour carries BOTH rows (input 107), the rest are zeros.
-    const todayKey = new Date().toISOString().slice(0, 10);
-    const tenAm = summary.days.find((b) => b.date === `${todayKey}T10`);
-    expect(tenAm?.inputTokens).toBe(107);
-    expect(tenAm?.requests).toBe(2);
-    expect(tenAm?.outputTokens).toBe(100);
+    // …the seeded hour carries BOTH rows (input 107), the rest are zeros.
+    const seededBucket = summary.days.find((b) => b.date === seededHourKey);
+    expect(seededBucket?.inputTokens).toBe(107);
+    expect(seededBucket?.requests).toBe(2);
+    expect(seededBucket?.outputTokens).toBe(100);
     // The 3-days-back 23:00 row is INSIDE the window.
     const threeDaysBack = new Date(todayUtcMidnight() - 3 * 86_400_000)
       .toISOString()

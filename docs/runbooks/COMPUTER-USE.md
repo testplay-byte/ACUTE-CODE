@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-27 round-131 -->
 # COMPUTER USE — the desktop-control system (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: computer
@@ -15,7 +15,22 @@ the MODEL brings to it: the prompt's computer-use section kept only its
 always-on discipline and points at the skill body for the deep contract
 (skill bodies no longer evaporate mid-task now), the agent knows its
 real OS/shell/date/git state, and the verify-before-claiming-done
-contract + line-numbered read_file joined the general discipline) ·
+contract + line-numbered read_file joined the general discipline; R131-C
+made the system TRUTHFUL about itself — the readiness probe compiles the
+REAL U32 preamble (addTypeOk:true can never again coexist with
+"U32-unavailable" refusals — the trivial-class probe that lied on the
+owner's host is dead), open_application RESOLVES installed Windows
+identities (canonical aliases → Get-Command → registry App Paths →
+Get-StartApps/AUMID — "edge browser" finds the installed Edge), focus and
+activation carry the csc-free UIAutomation SetFocus fallback (Add-Type-dead
+hosts still act), every focus/launch/window recovery derives from the
+ACTUAL error (the canned "the window may have closed" answers are dead),
+the vision relay catches TRANSPORT throws (a dead endpoint answers the
+retryable "vision relay transport failure: <cause>", never a bare
+"TypeError: fetch failed"), a consecutive-failure CIRCUIT BREAKER stops
+zero-progress refusal loops after 3, the monitor frames carry the action's
+POINT + frame id (the overlay's data), and the web-tree claim is honestly
+CONDITIONAL for USER-launched browsers) ·
 **Audience:** the owner (anyone flipping the
 switches and watching the monitor) and any agent maintaining the system
 
@@ -90,12 +105,31 @@ virtualized coordinates). Notes:
   compile fails, `list_apps` falls back to Get-Process MainWindowTitle
   (entries tagged `source:"get-process-fallback"`) instead of the whole
   script dying before ANY output — the fallback was previously dead code.
-  The readiness probe now also exercises the compile itself (`addTypeOk`
+  The readiness probe also exercises the compile itself (`addTypeOk`
   in the probe report; a third probe next to the permission checks).
+  **R131-C (C1): the probe compiles the REAL thing.** The addType leg now
+  compiles the production U32 preamble VERBATIM (the same ~90-line
+  TypeDefinition every window/input capsule rides) and asserts the guard's
+  own `$script:U32_OK` — the old probe compiled a trivial
+  `public class AcuteProbe {}` that succeeded on hosts where the real
+  preamble fails, so `addTypeOk:true` coexisted with "U32-unavailable"
+  refusals from every U32-dependent tool (the owner's exact host). The
+  failure line also carries the captured csc reason (the preamble's
+  `$script:U32_ERR` → `AddTypeErr` channel), and the report gains the
+  `webTree: "unverified"` honesty line — the probe does NOT walk a
+  browser's web accessibility tree, so it never claims the web tree was
+  verified (see the Chromium poke section below for what that means).
 - Activation is the `SetForegroundWindow` + `AttachThreadInput` sequence
   with a ≤1.5 s **postcondition check** — the receipt's `active` field
   reports the truth, not the API's return value. **R68: the ladder
-  escalates** — see the activate section below.
+  escalates** — see the activate section below. **R131-C (C3): a csc-free
+  UIA fallback backs the ladder up** — when the Add-Type compile is dead,
+  `AutomationElement.FromHandle(hwnd).SetFocus()` (the same .NET
+  assemblies the a11y walk rides — no csc) takes the activation,
+  postcondition-verified by climbing the focused element's control-view
+  parents to its top-level window and comparing the native handle; the
+  same fallback backs `focus_window` and `window_action` (which already
+  carried it since R94-E).
 - Raw input is `SetCursorPos` + `mouse_event` + **SendInput** (user32
   P/Invoke — R68-C: keyboard input is SendInput ONLY, never Windows.Forms);
   typing rides `SendText` (KEYEVENTF_UNICODE per character — see the key
@@ -275,7 +309,17 @@ A1/B1 report) reshaped it:
   controller watches these to open/close the OS window; the mini window
   itself polls `GET /computer-use/session` every second (its own bearer
   token via the shell) so it stays honest even if the main window is
-  backgrounded.
+  backgrounded. **R131-C (C6): the frames carry the action's POINT.**
+  Every mutating receipt the dispatcher stamps with a global screen point
+  (raw clicks at their point, element actions at the element's center,
+  scroll/hover/down at their point, drags at their source) rides that
+  knowledge into the monitor frame as additive `point {x,y}` + `frameId`
+  fields (the freshest registered raster — the post-action observation
+  frame, else the stale-frame auto-refresh frame) — the DATA an overlay
+  needs to paint "tapping here" over the latest capture. Older frontends
+  ignore the fields (the wire shape is backward-compatible); the mini
+  window actually PAINTING the raster + the animated marker is the
+  flagged frontend follow-up (this round ships the backend MVP only).
 - **STOP** = `POST /computer-use/stop`: the kill switch engages, a held
   button (if any) is released with a real mouse-up at its recorded point,
   and every further computer-use call refuses with `kill_switch_active`
@@ -418,6 +462,21 @@ considers "not foreground eligible". TRADEOFF (accepted, documented at
 source): the target window VISIBLY FLICKERS (one-frame minimize +
 restore) — only when the polite sequence failed, and only once.
 
+**R131-C (C3): when the ladder cannot even run.** The whole sequence is
+U32 (P/Invoke) — on an Add-Type-dead host the old guard refused BEFORE
+any actuation attempt, which killed `open_application {activate:true}`
+AND the self-heal above in one stroke. Activation now falls back to the
+UIA `AutomationElement.FromHandle(hwnd).SetFocus()` ladder — the same
+csc-free .NET assemblies the a11y walk rides — with the SAME-law
+postcondition: the focused element's control-view parents are climbed to
+its top-level window and the native handle is compared (the foreground
+truth without user32). `focus_window` runs the same fallback (U32 raise
+first, UIA SetFocus whenever the raise is unavailable or returned
+false), and `window_action {action:'focus'}` has carried it since R94-E.
+Every failure line names WHICH paths ran, and the refusals' recovery
+text derives from that ACTUAL error (the canned "the window may have
+closed" answer is dead).
+
 ## Edge/Chromium pages are searchable now (R68 — the Chromium poke)
 
 Why the owner's Edge trees came back SPARSE (only the window element):
@@ -442,6 +501,20 @@ targets become the PRIMARY path for browser content and the screenshot
 loop the fallback (the owner: a "coordinate-based system is not proper").
 The prompts, the skill and the tool descriptions teach exactly this.
 
+**R131-C (C7): the honest cold-start caveat.** The poke wakes the tree
+for a browser that is ALREADY RUNNING, and an AGENT-launched browser
+starts with `--force-renderer-accessibility` (the flag rides every
+resolved Chromium identity) so its web tree is built at startup. But a
+browser the USER launched themselves (plain shortcut, taskbar pin)
+may — depending on the Chromium build and timing — still expose ONLY
+the window node, with the poke too late for the page's lifetime. The
+probe report says so honestly (`webTree: "unverified"` — the probe never
+walks a browser's web tree), and the skill/prompt/tool descriptions
+carry the conditional: when `find_elements` returns just the window on a
+user-launched browser, launch it yourself via `open_application` (the
+a11y flag rides agent-launched starts) or read the page through the
+embedded browser (`browser_control`) instead.
+
 ## Frames stay valid 30 s + the vision relay retries (R68)
 
 - **MAX_FRAME_AGE_MS 10 s → 30 s**: the vision roundtrip (describeRaster
@@ -460,7 +533,16 @@ The prompts, the skill and the tool descriptions teach exactly this.
   wire formats (chat-completions + anthropic-messages), retries **429
   and ≥500 twice** with a 1.5 s + 3 s backoff, and fails fast on every
   other 4xx (auth/shape errors are terminal — retrying them is
-  pointless).
+  pointless). **R131-C (C4): transport throws are caught too.** A dead
+  relay endpoint used to surface as a bare `TypeError: fetch failed` —
+  the attempt body handled only HTTP-level failures, so a DNS /
+  connection-refused throw ESCAPED describeRaster entirely (no retry
+  ladder, no recovery hint). A transport throw is now a RETRYABLE
+  failure envelope naming the cause ("vision relay transport failure:
+  <cause> (retryable)") — the ladder engages and the honest refusal
+  carries the diagnosis; a 200 whose body is unparseable is terminal
+  (retrying the same broken body is pointless). The relay's
+  never-throws contract now actually holds.
 
 ## Every action returns an observation receipt (R69 — the enforcement layer)
 
@@ -677,12 +759,62 @@ every tool surface, computer use included:
   this runbook teaches, applied to the agent's own edits. For 3+ file
   edits the loop also suggests a `delegate_task` adversarial review.
 
+## R131-C — the truthfulness wave (the field ledger's defects, retired)
+
+The owner's second feedback ledger named the computer-use defects this
+section records as retired. The one LAW underneath all of them: **a
+computer-use answer must be TRUE about what the system actually did,
+can do, and failed at** — probes probe the real path, resolvers report
+the real identity, recoveries derive from the real error, and loops
+stop instead of spinning:
+
+1. **The addTypeOk probe lies no more (C1).** The readiness probe's
+   addType leg compiles the REAL production preamble and asserts the
+   guard's own token — `addTypeOk:true` and "U32-unavailable" can never
+   coexist again; the failure note carries the captured csc reason.
+2. **open_application resolves installed apps (C2).** The resolver
+   ladder (canonical aliases → `Get-Command` → registry App Paths
+   (HKLM, then HKCU) → `Get-StartApps`/AUMID → the raw name) runs inside
+   ONE capsule; 'edge browser' and 'Microsoft Edge' both find the
+   installed Edge. The Chromium a11y flag rides the RESOLVED identity.
+   A `could_not_launch` recovery branches on the ACTUAL outcome: a
+   resolved identity means Windows refused to START the app (report it);
+   no resolution means the name matched nothing installed (verify with
+   the user). The old self-contradictory "never retry variant spellings /
+   retry the resolved identity" pair is dead.
+3. **Focus works on Add-Type-dead hosts (C3).** `focus_window`,
+   activation, and `window_action {focus}` all carry the csc-free UIA
+   SetFocus fallback (see the activate section above); every
+   focus/launch/window recovery derives from the backend's ACTUAL error
+   text — the window-gone hint appears only for the no-window error
+   class, the addTypeOk hint only for the compile-failure class.
+4. **The vision relay never throws (C4).** Transport throws become the
+   retryable "vision relay transport failure: <cause>" envelope (see the
+   vision section above) — the bare "TypeError: fetch failed" the ledger
+   saw is dead.
+5. **The consecutive-failure circuit breaker (C5).** The dispatcher
+   counts consecutive `capability_fail_closed` /
+   `frontmost_pid_mismatch` refusals per run; after 3 with zero
+   successful actions between, EVERY further call (observations
+   included) answers the stop-and-report refusal — the model is told to
+   describe what it was trying to do and the exact errors, then end the
+   turn. Any SENT action resets the counter; `stop_computer_control` is
+   exempt (the honest end must always be reachable). The ledger's
+   observe→refuse→observe→refuse loop-to-turn-end shape is structurally
+   dead.
+6. **The overlay's data (C6).** The monitor SSE frames carry the
+   action's `point {x,y}` + the freshest registered `frameId` (see the
+   monitor's Data path above). The FRONTEND rendering — the mini window
+   painting the raster with the animated "tapping here" marker over the
+   always-on-top window — is the flagged follow-up; this round ships
+   the backend truth the overlay needs.
+
 ## The 31 tools (quick reference)
 
 | Tool | Purpose |
 |---|---|
 | `list_apps` | List RUNNING apps (name/pid/active) — absent means not running, not not installed |
-| `open_application` | Launch by EXACT user-provided name (character-for-character) or activate a running one (`activate:true`) |
+| `open_application` | Launch by name — R131-C: Windows RESOLVES installed identities (canonical aliases edge/chrome/notepad/cmd/powershell, Get-Command, registry App Paths, Get-StartApps/AUMID), so "edge browser" finds the installed Edge; or activate a running one (`activate:true`). A failure names the identity it resolved (if any) |
 | `list_windows` | An app's windows (id, title, bounds, main, focused) |
 | `get_app_state` | THE core observation: the window's a11y tree (detail:full adds bounds + actions; includeScreenshot adds a raster) |
 | `find_elements` | SEARCH the tree by name substring (+ optional kind) — the big-app locator; returns small match lists whose indexes are directly actionable (R66) |
@@ -728,13 +860,13 @@ Every refusal is `{error, message, recovery}` — the codes:
 | `request_access_refused` | The probe itself failed — report, don't loop-probe |
 | `app_not_found` | No running match — `list_apps`, re-resolve; never guess pids |
 | `ambiguous_app_ref` | Name matches several apps — scope with pid/bundle_id |
-| `could_not_launch` | Launch failed — verify the EXACT name once; never substitute |
+| `could_not_launch` | Launch failed — read the message: a RESOLVED identity means Windows refused to START that app (report it); no resolution means the name matched nothing installed (verify the exact name with the user). Never substitute |
 | `invalid_window_id` | Invented/stale window id — use a real one from list_windows |
 | `frontmost_pid_mismatch` | Raw input but app not frontmost — R68: the engine already auto-activated + retried once; this refusal means the ACTIVATION failed (list_apps/list_windows → re-observe → retry once, or report the conflict) |
 | `foreground_required` | Event path needs focus — repeat activation + fresh observation |
 | `uipi_blocked` | Elevated target (Windows UIPI) — human step; retrying is pointless |
 | `targetless_input_refused` | No target on type/key — scope with element target or appRef |
-| `capability_fail_closed` | Element can't do that action — re-observe detail:full, pick an advertised action |
+| `capability_fail_closed` | Element can't do that action — re-observe detail:full, pick an advertised action. R131-C: after 3 consecutive capability_fail_closed/frontmost_pid_mismatch refusals with zero successes between, the CIRCUIT BREAKER answers this same code with `circuitBreaker:true` in the payload — stop and report to the user, do not retry |
 | `element_stale` | State token superseded/changed/scope-drifted — fresh `get_app_state` |
 | `frame_stale` | Coordinate raster is stale (>30 s — R68, was 10 s — or superseded) — R69: pointer tools AUTO-REFRESH first (see the R69 section; `frame_changed` appears only when the screen really changed); `set_value`/`left_mouse_down` keep this honest hard fail — fresh screenshot, resubmit pixels |
 | `frame_changed` | R69: the screen changed since the observation — a FRESH frame was auto-captured and registered (`refreshFrameId`) — zoom it, retry with current coordinates (ONE round-trip) |
@@ -768,18 +900,30 @@ first round with NO new field report — its Windows behavior is
 construction-pinned from the start (the dual-object poke, the stdin paste
 channel, the HWHEEL math, the non-activating monitor, the aHash thresholds
 on real 1280×1024 frames, the 600 ms settle) and gates on this same
-checklist.** The checklist below is how the 0.64.0+R67+R68+R69 fixes get
+checklist. R131-C retired the SECOND ledger's computer-use set by
+construction (the real-preamble probe, the app resolver, the UIA focus
+fallbacks, the error-derived recoveries, the vision transport catch, the
+circuit breaker, the overlay's point data) — the owner's next live pass
+is the proof.** The checklist below is how the 0.64.0+R67+R68+R69 fixes get
 verified. **The owner
 must live-verify on the real machine before relying
 on computer use.** Per platform, in order:
 
 1. Flip the master switch ON (Settings → Computer Use) and press
    **Test readiness** — expect "Ready" (or read the issue lines; the
-   report now also carries `addTypeOk` — the Add-Type compile probe — on
-   Windows).
+   report now also carries `addTypeOk` — the Add-Type compile probe, which
+   since R131-C compiles the REAL production preamble, so a false green
+   is impossible — and `webTree: "unverified"`, the honest admission
+   that the probe does not walk a browser's web tree, on Windows).
 2. Ask the agent: *"list the running apps"* — expect a real app list via
    `list_apps` (a FIRST empty with the "session died" note should
    self-heal via the built-in retry; a second empty carries `probeNote`).
+   **R131-C: ask it to open an installed app by a HUMAN name** (*"open
+   edge browser"*) — the resolver should find the installed Edge
+   (Get-Command / App Paths / Get-StartApps) and launch it; on a machine
+   where the name genuinely matches nothing, the refusal should NAME the
+   ladder it tried, not just "The system cannot find the file
+   specified".
 3. Ask it to **observe** one app (*"look at the X window and tell me what
    controls it has"*) — expect `get_app_state` output and a tree. Try a
    WebView2 renderer pid if you can find one in a task list (e.g.

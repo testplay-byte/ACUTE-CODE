@@ -603,14 +603,45 @@ describe("ROUND-61 (R61): keyboard + app-scoped typing", () => {
 /* ── launch / activation / stop ───────────────────────────────────────────── */
 
 describe("ROUND-61 (R61): open_application + stop_computer_control", () => {
-  it("launch failure → could_not_launch with the EXACT-name discipline", async () => {
+  it("launch failure → could_not_launch with the resolver-derived recovery (R131-C: the contradictory clauses died)", async () => {
     const d = makeDispatcher();
     mode = "launch-fail";
     const result = await d.dispatch("open_application", { app: { name: "Notepad++" } });
     expect(result.kind).toBe("refusal");
     if (result.kind === "refusal") {
       expect(result.refusal.error).toBe("could_not_launch");
-      expect(result.refusal.recovery).toContain("character-for-character");
+      // R131-C (C2): the recovery derives from the ACTUAL resolution outcome —
+      // the fake backend's bare "not found" error carries no resolved identity,
+      // so the no-resolution branch answers: what was tried, the likely cause,
+      // and the never-substitute law (the old line self-contradicted — it
+      // forbade variant spellings AND instructed a resolved-identity retry).
+      expect(result.refusal.recovery).toContain("The resolver found no installed identity for 'Notepad++'");
+      expect(result.refusal.recovery).toContain("Get-Command");
+      expect(result.refusal.recovery).toContain("never substitute a different app");
+      expect(result.refusal.recovery).not.toContain("character-for-character");
+    }
+  });
+
+  it("R131-C (C2): a RESOLVED-identity launch failure gets the resolved recovery (Windows refused to START it)", async () => {
+    // Script the Windows backend's resolved-identity error shape: the resolver
+    // landed on the installed exe and Start-Process failed on it.
+    const resolvedBackend: CuaBackend = {
+      ...fakeBackend,
+      launch: async () => ({
+        ok: false,
+        error:
+          "could not launch 'edge browser': resolved 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' via AppPaths:msedge.exe - Start-Process failed: The system cannot find the file specified",
+      }),
+    };
+    const dd = new ComputerDispatcher({ backend: resolvedBackend, run: fakeRun, root: tempRoot, allowMutations: true });
+    const result = await dd.dispatch("open_application", { app: { name: "edge browser" } });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("could_not_launch");
+      expect(result.refusal.message).toContain("resolved 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'");
+      expect(result.refusal.recovery).toContain("The resolver DID land on an installed identity");
+      expect(result.refusal.recovery).toContain("not a naming miss");
+      expect(result.refusal.recovery).toContain("never substitute a different app");
     }
   });
 
@@ -2271,5 +2302,306 @@ describe("R93: window placement (move_window / window_state / focus_window)", ()
       expect(result.kind === "refusal" && result.refusal.error).toBe("host_policy_denied");
     }
     expect(calls).toHaveLength(0);
+  });
+
+  // ── R131-C (C3): the ERROR-DERIVED recoveries ──────────────────────────
+  // The field ledger's defect: focus_window failed "U32-unavailable (the
+  // Add-Type helper did not compile)" and the recovery answered "the window
+  // may have closed" — a canned cause that had nothing to do with the actual
+  // error. The recovery now derives from the backend's own error text.
+  it("R131-C (C3): focus_window's recovery names the ACTUAL error class — the canned window-gone line dies", async () => {
+    const u32DeadBackend: CuaBackend = {
+      ...fakeBackend,
+      focusWindow: async () => ({
+        ok: false,
+        error:
+          "u32-unavailable (the Add-Type helper did not compile on this host) and the UIAutomation SetFocus failed: Exception calling SetFocus",
+      }),
+    };
+    const d = new ComputerDispatcher({ backend: u32DeadBackend, run: fakeRun, root: tempRoot, allowMutations: true });
+    const result = await d.dispatch("focus_window", { windowId: 77 });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.error).toBe("capability_fail_closed");
+      expect(result.refusal.message).toContain("focus_window failed on window 77");
+      expect(result.refusal.message).toContain("the Add-Type helper did not compile");
+      // The recovery names the compile class + the honest next step (NOT the
+      // canned "the window may have closed" — the window exists).
+      expect(result.refusal.recovery).toContain("request_access and read addTypeOk");
+      expect(result.refusal.recovery).not.toContain("window may have closed");
+    }
+    // The no-window error class keeps the window-gone hint.
+    const goneBackend: CuaBackend = { ...fakeBackend, focusWindow: async () => ({ ok: false, error: "no-window" }) };
+    const d2 = new ComputerDispatcher({ backend: goneBackend, run: fakeRun, root: tempRoot, allowMutations: true });
+    const gone = await d2.dispatch("focus_window", { windowId: 77 });
+    expect(gone.kind).toBe("refusal");
+    if (gone.kind === "refusal") {
+      expect(gone.refusal.recovery).toContain("may have closed");
+      expect(gone.refusal.recovery).toContain("windows_overview");
+    }
+  });
+
+  it("R131-C (C3): window_action's recovery is error-derived too (the addTypeOk hint only for the compile class)", async () => {
+    const deadBackend: CuaBackend = {
+      ...fakeBackend,
+      windowAction: async () => ({ ok: false, error: "U32-unavailable (the Add-Type helper did not compile on this host and the UIAutomation fallback is unavailable - this action cannot run)" }),
+    };
+    const d = new ComputerDispatcher({ backend: deadBackend, run: fakeRun, root: tempRoot, allowMutations: true });
+    const result = await d.dispatch("window_action", { windowId: 77, action: "minimize" });
+    expect(result.kind).toBe("refusal");
+    if (result.kind === "refusal") {
+      expect(result.refusal.recovery).toContain("request_access and read addTypeOk");
+      expect(result.refusal.recovery).toContain("do not retry the same action on this host");
+    }
+  });
+});
+
+/* ── R131-C (C5): the consecutive-failure CIRCUIT BREAKER ──────────────────
+ * The field ledger's defect: nothing stopped N consecutive
+ * capability_fail_closed / frontmost_pid_mismatch refusals with ZERO
+ * progress between them. Three pins: 2 failures → the 3rd attempt still
+ * EXECUTES; 3 failures → the 4th call answers the breaker (before any
+ * backend work); a successful action between failures RESETS the run. */
+describe("R131-C (C5): the consecutive-failure circuit breaker", () => {
+  /** A backend whose element press ALWAYS fails closed (the ledger's loop). */
+  function failingPressBackend(): CuaBackend {
+    return {
+      ...fakeBackend,
+      pressElement: async () => ({ ok: false, error: "capability-fail-closed (no Invoke/Toggle/ExpandCollapse/SelectionItem pattern)" }),
+    };
+  }
+
+  /** The breaker dispatcher: the makeDispatcher discipline (the session
+   * RESET is load-bearing — the singleton's snapshot ring carries CONSUMED
+   * tokens from earlier tests, and the prune evicts the oldest NON-consumed
+   * snapshot, i.e. the FRESH one, which fake- element_stale'd the prior
+   * draft of these pins) + zero settle so the success receipt's auto-
+   * observation costs nothing. */
+  function makeBreakerDispatcher(backend: CuaBackend): ComputerDispatcher {
+    resetComputerSessionForTests();
+    resetAuditForTests(tempRoot);
+    capsules.length = 0;
+    calls.length = 0;
+    mode = "ok";
+    fakeFrontmost = 4242;
+    rawRequiresForeground = true;
+    fakeApps = [{ name: "App", pid: 4242, active: true }];
+    fakeElements = null;
+    fakeMapDb = null;
+    fakeListAppsQueue = [];
+    fakeWindows = [
+      { windowId: 77, title: "App Window", bounds: [10, 20, 800, 600] as [number, number, number, number], main: true, focused: true },
+    ];
+    fakeCaptureQueue = [];
+    resetFramehashCacheForTests();
+    const d = new ComputerDispatcher({ backend, run: fakeRun, root: tempRoot, allowMutations: true });
+    d.observationSettleMs = 0;
+    return d;
+  }
+
+  it("2 consecutive failures → the 3rd attempt STILL EXECUTES (the breaker has not tripped)", async () => {
+    const d = makeBreakerDispatcher(failingPressBackend());
+    for (let i = 0; i < 3; i++) {
+      // The ledger's real loop shape: observe → act → fail (the stateId is
+      // consumed by the write) → re-observe → act → fail… — the observations
+      // are NEUTRAL for the breaker, so the failures accumulate.
+      const snap = await observe(d);
+      const result = await d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+      // All three genuinely RAN (the press was attempted — a real refusal
+      // shaped by the backend, not the breaker's stop-and-report refusal).
+      expect(result.kind).toBe("refusal");
+      if (result.kind === "refusal") {
+        expect(result.refusal.payload?.circuitBreaker).toBeUndefined();
+        expect(result.refusal.message).toContain("does not support the requested semantic action");
+      }
+    }
+  });
+
+  it("3 consecutive failures → the 4th call answers the honest stop-and-report refusal BEFORE any backend work", async () => {
+    const backend = failingPressBackend();
+    let presses = 0;
+    backend.pressElement = async () => {
+      presses += 1;
+      return { ok: false, error: "capability-fail-closed (no pattern)" };
+    };
+    const d = makeBreakerDispatcher(backend);
+    let lastSnap: Snapshot | null = null;
+    for (let i = 0; i < 3; i++) {
+      lastSnap = await observe(d);
+      await d.dispatch("left_click", { target: { type: "element", stateId: lastSnap.stateId, index: 1 } });
+    }
+    expect(presses).toBe(3);
+    if (lastSnap === null) throw new Error("no snapshot");
+    // The 4th click: the breaker answers BEFORE any backend work (the click
+    // never runs — the press count is unchanged; the stateId is irrelevant
+    // because route() is never reached).
+    const fourth = await d.dispatch("left_click", { target: { type: "element", stateId: lastSnap.stateId, index: 1 } });
+    expect(fourth.kind).toBe("refusal");
+    if (fourth.kind === "refusal") {
+      // The breaker's own shape: the honest stop-and-report message + the
+      // machine-readable circuitBreaker payload marker.
+      expect(fourth.refusal.message).toContain("3 consecutive capability failures with no successful action in between");
+      expect(fourth.refusal.message).toContain("Stop and report to the user instead of retrying");
+      expect(fourth.refusal.recovery).toContain("Describe to the user what you were trying to do and the exact errors");
+      expect(fourth.refusal.payload?.circuitBreaker).toBe(true);
+      expect(fourth.refusal.payload?.consecutiveFailures).toBe(3);
+    }
+    expect(presses).toBe(3);
+    // The breaker gates EVERY further call — observations included (the
+    // ledger's loop had successful observations around its zero-progress
+    // failures; the honest answer to observe→refuse→observe→refuse is STOP,
+    // not a fresh loop).
+    const obsAttempt = await d.dispatch("get_app_state", { appRef: { pid: 4242 } });
+    expect(obsAttempt.kind === "refusal" && obsAttempt.refusal.payload?.circuitBreaker).toBe(true);
+    const fifth = await d.dispatch("left_click", { target: { type: "element", stateId: lastSnap.stateId, index: 1 } });
+    expect(fifth.kind === "refusal" && fifth.refusal.payload?.circuitBreaker).toBe(true);
+    expect(presses).toBe(3);
+    // stop_computer_control still passes (the honest END of the session —
+    // the ONE exemption: the model must always be able to end the run) and
+    // its SENT receipt clears the breaker counter.
+    const stop = await d.dispatch("stop_computer_control", { reason: "reporting instead of looping" });
+    expect(stop.kind).toBe("receipt");
+    // After the stop the KILL SWITCH (an earlier law, enforced in route)
+    // is what refuses — NOT the breaker (its counter was cleared by the
+    // stop receipt; circuitBreaker stays undefined and no backend work
+    // runs — the press count is still 3).
+    const afterStop = await d.dispatch("left_click", { target: { type: "element", stateId: lastSnap.stateId, index: 1 } });
+    expect(afterStop.kind).toBe("refusal");
+    if (afterStop.kind === "refusal") {
+      expect(afterStop.refusal.error).toBe("kill_switch_active");
+      expect(afterStop.refusal.payload?.circuitBreaker).toBeUndefined();
+    }
+    expect(presses).toBe(3);
+  });
+
+  it("a SUCCESSFUL action between failures RESETS the run (2 fails → success → 2 fails → the next still executes)", async () => {
+    const backend = failingPressBackend();
+    let presses = 0;
+    let failNext = true;
+    backend.pressElement = async () => {
+      presses += 1;
+      return failNext ? { ok: false, error: "capability-fail-closed (no pattern)" } : { ok: true };
+    };
+    const d = makeBreakerDispatcher(backend);
+    const click = async () => {
+      const snap = await observe(d);
+      return d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    };
+    // fail, fail (counter 2)
+    await click();
+    await click();
+    // success — the reset.
+    failNext = false;
+    const ok = await click();
+    expect(ok.kind).toBe("receipt");
+    // fail, fail (counter 2 again — the earlier run is forgotten)
+    failNext = true;
+    await click();
+    await click();
+    // The NEXT attempt still executes (2 < 3 — no trip).
+    const stillRuns = await click();
+    expect(stillRuns.kind).toBe("refusal");
+    if (stillRuns.kind === "refusal") {
+      expect(stillRuns.refusal.payload?.circuitBreaker).toBeUndefined();
+      expect(presses).toBe(6);
+    }
+  });
+
+  it("the breaker counts the frontmost_pid_mismatch class too; OTHER refusal codes are neutral (no false trips)", async () => {
+    // frontmost-mismatch: the raw-input foreground gate refusing after the
+    // failed auto-activation — three of them trip the breaker.
+    const d = makeDispatcher();
+    mode = "frontmost-mismatch";
+    healOnActivate = false;
+    await screenshot(d);
+    for (let i = 0; i < 3; i++) {
+      const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 40, y: 60 } });
+      expect(result.kind === "refusal" && result.refusal.error).toBe("frontmost_pid_mismatch");
+    }
+    const fourth = await d.dispatch("left_click", { target: { type: "coordinate", x: 40, y: 60 } });
+    expect(fourth.kind === "refusal" && fourth.refusal.payload?.circuitBreaker).toBe(true);
+    // Neutral codes do NOT count: three element_stale refusals never trip it.
+    const d2 = makeDispatcher();
+    for (let i = 0; i < 3; i++) {
+      const result = await d2.dispatch("left_click", { target: { type: "element", stateId: "s-nope", index: 1 } });
+      expect(result.kind === "refusal" && result.refusal.error).toBe("element_stale");
+    }
+    const after = await d2.dispatch("list_apps", {});
+    expect(after.kind).toBe("data"); // no trip — the class is what counts
+  });
+});
+
+/* ── R131-C (C6): the action POINT rides the receipt + the monitor frames ──
+ * The owner's overlay ask: "all the actions which it is performing should be
+ * shown on the screen as an overlay first, like it will be tapping here and
+ * then it will tap there" — the coordinate must exist as DATA before any
+ * frontend can paint it. The dispatcher stamps the GLOBAL point on every
+ * receipt where it knows one (raw clicks, element centers, scroll/hover/
+ * down points, the drag source); the intent ring carries it as detail too. */
+describe("R131-C (C6): the action's point rides the receipt (the overlay coordinate)", () => {
+  it("a raw coordinate click stamps the GLOBAL point on the receipt + the ring's intent detail", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE];
+    await screenshot(d);
+    const result = await d.dispatch("left_click", { target: { type: "coordinate", x: 96, y: 96 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.point).toEqual({ x: 96, y: 96 }); // scale 1, origin 0 → identity
+    }
+    // The ring's intent record carries the same structured point (the
+    // POLLED monitor side — the SSE side is pinned in the plugin suite).
+    const intent = getComputerSession().state().events.find((e) => e.kind === "intent");
+    expect(intent?.detail?.point).toEqual({ x: 96, y: 96 });
+  });
+
+  it("an ELEMENT action stamps the element's CENTER (bounds known); a bounds-less element omits the point", async () => {
+    const d = makeDispatcher();
+    const snap = await observe(d);
+    // index 1 = "Save" button at [100, 200, 80, 30] → center (140, 215).
+    const result = await d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.point).toEqual({ x: 140, y: 215 });
+    }
+    // A snapshot WITHOUT bounds (compact) omits the point — never fabricated.
+    fakeElements = [{ index: 0, kind: "button", name: "Bare", flags: ["pressable"] }];
+    const d2 = makeDispatcher();
+    const snap2 = await observe(d2);
+    const bare = await d2.dispatch("left_click", { target: { type: "element", stateId: snap2.stateId, index: 0 } });
+    expect(bare.kind === "receipt");
+    if (bare.kind === "receipt") {
+      expect(bare.receipt.point).toBeUndefined();
+    }
+    fakeElements = null;
+  });
+
+  it("scroll / mouse_move / left_mouse_down / drag stamp their points (the drag also rides the ring's toPoint)", async () => {
+    const d = makeDispatcher();
+    fakeDisplaySize = { width: 128, height: 128 };
+    fakeCaptureQueue = [PNG_BASE, PNG_BASE, PNG_BASE, PNG_BASE];
+    await screenshot(d);
+    const scroll = await d.dispatch("scroll", { target: { type: "coordinate", x: 64, y: 32 }, scrollDirection: "down", scrollAmount: 10 });
+    expect(scroll.kind === "receipt" && scroll.receipt.point).toEqual({ x: 64, y: 32 });
+    const hover = await d.dispatch("mouse_move", { target: { type: "coordinate", x: 10, y: 12 } });
+    expect(hover.kind === "receipt" && hover.receipt.point).toEqual({ x: 10, y: 12 });
+    const down = await d.dispatch("left_mouse_down", { target: { type: "coordinate", x: 20, y: 22 } });
+    expect(down.kind === "receipt" && down.receipt.point).toEqual({ x: 20, y: 22 });
+    const drag = await d.dispatch("left_click_drag", {
+      fromTarget: { type: "coordinate", x: 5, y: 5 },
+      to: { type: "coordinate", x: 50, y: 50 },
+    });
+    expect(drag.kind === "receipt" && drag.receipt.point).toEqual({ x: 5, y: 5 }); // the drag SOURCE
+    const intent = getComputerSession().state().events.find((e) => e.kind === "intent" && e.tool === "left_click_drag");
+    expect(intent?.detail?.toPoint).toEqual({ x: 50, y: 50 });
+  });
+
+  it("typing/keys carry NO point (honest omission — nothing was tapped)", async () => {
+    const d = makeDispatcher();
+    const snap = await observe(d);
+    const typed = await d.dispatch("type", { text: "hi", target: { type: "element", stateId: snap.stateId, index: 2 } });
+    expect(typed.kind === "receipt" && typed.receipt.point).toEqual({ x: 220, y: 272 }); // the field's center — the overlay "typing here" marker
+    const keyed = await d.dispatch("key", { text: "tab", appRef: { pid: 4242 } });
+    expect(keyed.kind === "receipt" && keyed.receipt.point).toBeUndefined(); // keys have no point
   });
 });

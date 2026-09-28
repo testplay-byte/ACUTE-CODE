@@ -301,6 +301,13 @@ export interface Receipt {
    * from the hit-test that already runs on the coordinate-click path (the
    * model learns WHAT it clicked — "Search" edit, "Sign in" button). */
   hitElementName?: string;
+  /** R131-C (C6, ADDITIVE): the action's GLOBAL screen point, stamped where
+   * the dispatcher knows it (raw clicks at their point, element actions at
+   * the element's center, scroll/hover/down at their point). The monitor SSE
+   * frames carry it so the overlay can paint the "tapping here" marker —
+   * absent when the action has no point (typing, keys) or the element had no
+   * bounds; never fabricated. */
+  point?: { x: number; y: number };
 }
 
 /** R69 (task 4-c-2): the observation that rides a mutating action's receipt.

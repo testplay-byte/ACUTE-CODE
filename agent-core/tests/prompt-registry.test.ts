@@ -484,6 +484,19 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // observed echo clause ("The type result echoes \"submit requested:
     // false/true · observed: …\" — a submitted:true under requested:false
     // means the PAGE submitted on its own"). NOTHING else moved.
+    //
+    // Re-pinned in R131-C (the computer-use truthfulness wave, C7) against
+    // the SAME r131 fixture (same round, the sanctioned UPDATE_GOLDEN regen
+    // — the R131-B precedent, the r131 file stays the live anchor). The
+    // verified diff is EXACTLY one hunk, +8/−8 lines, ALL inside the
+    // "## COMPUTER USE" section: the "Browser content is searchable" line
+    // gains the ONE honest cold-start Chromium caveat ("A USER-launched
+    // browser may expose only the window node — launch it via
+    // open_application (the a11y flag rides) or read the page with
+    // browser_control"), and the seven sibling discipline lines were
+    // tightened word-for-word (never steals the user's focus → no focus
+    // steal, etc.) to pay the budget — the composed prompt stays within
+    // r113's pinned 25,100-char bound. NOTHING outside the section moved.
     const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r131.txt"), "utf8").replace(/\r\n/g, "\n");
     const composed = buildProjectSystemPrompt(FULL_CTX).replace(/\r\n/g, "\n");
     expect(composed).toBe(golden);

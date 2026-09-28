@@ -253,6 +253,29 @@ export const computerUsePlugin: PluginDefinition = {
       }
     };
 
+    /**
+     * R131-C (C6): the frame the overlay should paint under the action
+     * marker — the receipt's freshest REGISTERED raster id (the post-action
+     * observation frame first, else the stale-frame auto-refresh frame),
+     * both of which emitScreenshotFrame registers route-side. Empty when
+     * neither ran (returnState "none", capture failures) — the field is
+     * omitted, never fabricated.
+     */
+    const actionOverlayFrame = (receipt: {
+      observation?: { frameId?: string } | { captureFailed: true };
+      frameRefreshed?: boolean;
+      refreshFrameId?: string;
+    }): { frameId?: string } => {
+      const obs = receipt.observation;
+      if (obs !== undefined && "frameId" in obs && typeof obs.frameId === "string") {
+        return { frameId: obs.frameId };
+      }
+      if (receipt.frameRefreshed === true && typeof receipt.refreshFrameId === "string") {
+        return { frameId: receipt.refreshFrameId };
+      }
+      return {};
+    };
+
     /* The shared execute wrapper: vision gate → consent gate → dispatch → shaping. */
     const execute = async (tool: string, input: Record<string, unknown>): Promise<ToolResult> => {
       // 0. R94-E (PART 3): the VISION GATE — screenshots need a seer. BEFORE
@@ -307,6 +330,22 @@ export const computerUsePlugin: PluginDefinition = {
         kind: result.kind,
         tool,
         ...(result.kind === "refusal" ? { code: result.refusal.error } : {}),
+        // R131-C (C6 — the overlay MVP): the action's POINT + the freshest
+        // REGISTERED frame id ride the monitor frame — "tapping here" is now
+        // expressible: the floating monitor can paint the raster (fetch via
+        // the existing /computer-use/frames/<id> route) with an animated
+        // marker at the global point. ADDITIVE fields: the current frontend
+        // (stream-store → computer-monitor-store) ignores them; the mini
+        // window's rendering leg is the flagged follow-up. The point is the
+        // GLOBAL screen coordinate the dispatcher stamped (raw clicks at
+        // their point, element actions at the element's center); the frameId
+        // is the receipt's freshest registered raster (the post-action
+        // observation, else the stale-frame auto-refresh) — omitted when
+        // neither exists, never fabricated.
+        ...(result.kind === "receipt" && result.receipt.point !== undefined
+          ? { point: result.receipt.point }
+          : {}),
+        ...(result.kind === "receipt" ? actionOverlayFrame(result.receipt) : {}),
       });
       if (result.kind === "refusal") {
         return refusalResult(result.refusal);
@@ -402,7 +441,7 @@ export const computerUsePlugin: PluginDefinition = {
       ),
       tool(
         "open_application",
-        "Launch an app by its EXACT user-provided name (character-for-character: case, spaces, punctuation, suffixes like 'app' — never translate/normalize/shorten/retry spellings), or activate a running one with activate:true. activate:false (default) NEVER brings it to the foreground.",
+        "Launch an app by name (Windows resolves installed identities: the canonical aliases edge/chrome/notepad/cmd/powershell/pwsh…, Get-Command, the registry App Paths, and Get-StartApps → 'shell:AppsFolder\\<AUMID>'), or activate a running one with activate:true. Use the user's own words — 'edge browser' and 'Microsoft Edge' both resolve to the installed Edge. activate:false (default) NEVER brings it to the foreground. A launch failure names the identity the resolver chose (if any) — read it: a resolved identity means Windows refused to START the app, an unresolved one means the name matched nothing installed. Never substitute a different app.",
         {
           app: appRefSchema,
           activate: { type: "boolean", description: "true = genuine foreground activation (postcondition-verified)" },
@@ -431,7 +470,7 @@ export const computerUsePlugin: PluginDefinition = {
       // without reading the whole snapshot or looping screenshots.
       tool(
         "find_elements",
-        "SEARCH an app's accessibility tree by name substring (and optional kind) — returns the matching elements with their indexes + bounds. THE way to find one control in a big app (browsers, Edge, VS Code) without reading the whole tree or taking screenshots: find_elements {appRef, query:'Sign in', kind:'button'} → left_click {target:{type:'element', stateId, index}} using the returned stateId + index. BROWSER PAGES: the web accessibility tree IS searched — links, buttons, inputs by name (the tree is activated automatically). Cheaper than get_app_state detail:'full' on Chromium-sized windows (those return thousands of elements). kind filters by the snapshot's mapped kinds (button, textfield, checkbox, combobox, slider, tab, menuitem, row, text, image, pane, window, scrollbar).",
+        "SEARCH an app's accessibility tree by name substring (and optional kind) — returns the matching elements with their indexes + bounds. THE way to find one control in a big app (browsers, Edge, VS Code) without reading the whole tree or taking screenshots: find_elements {appRef, query:'Sign in', kind:'button'} → left_click {target:{type:'element', stateId, index}} using the returned stateId + index. BROWSER PAGES: the web accessibility tree IS searched — links, buttons, inputs by name (the tree is activated automatically). For a browser the USER launched themselves the tree may expose ONLY the window node (Chromium builds it lazily) — launch browsers via open_application (the a11y flag rides agent-launched starts) or read the page with the embedded browser instead. Cheaper than get_app_state detail:'full' on Chromium-sized windows (those return thousands of elements). kind filters by the snapshot's mapped kinds (button, textfield, checkbox, combobox, slider, tab, menuitem, row, text, image, pane, window, scrollbar).",
         {
           appRef: appRefSchema,
           query: { type: "string", description: "case-insensitive name substring" },
@@ -703,7 +742,7 @@ export const computerUsePlugin: PluginDefinition = {
       ),
       tool(
         "focus_window",
-        "Bring ONE window to the foreground by its id (without activating the whole app) — put the right window on top before observing or acting on it.",
+        "Bring ONE window to the foreground by its id (without activating the whole app) — put the right window on top before observing or acting on it. On Windows the U32 raise falls back to the UIAutomation SetFocus path, so it works on hosts where the Add-Type compile is dead; a failure names which paths ran.",
         {
           windowId: { type: "integer", description: "from windows_overview / list_windows" },
         },

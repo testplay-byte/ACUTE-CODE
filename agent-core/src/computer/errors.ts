@@ -257,6 +257,26 @@ export function capabilityFailClosed(what: string, actions?: string[]): RefusalO
   );
 }
 
+/**
+ * R131-C (C5): the consecutive-failure CIRCUIT BREAKER's stop-and-report
+ * refusal — after 3 consecutive capability_fail_closed /
+ * frontmost_pid_mismatch refusals with zero successful actions between,
+ * the dispatcher answers THIS instead of running the next call. The field
+ * ledger's defect: the model looped observe→refuse→observe→refuse to the
+ * turn's end with nothing stopping it. The refusal tells the model to STOP
+ * and REPORT to the user (what it was trying to do + the exact errors),
+ * not to retry — the circuitBreaker payload marker distinguishes it from
+ * an ordinary capability failure (machine-readable without a new code).
+ */
+export function consecutiveCapabilityFailures(count: number): RefusalOutcome {
+  return refuse(
+    "capability_fail_closed",
+    `${count} consecutive capability failures with no successful action in between — the circuit breaker is tripped and this call was not run. Stop and report to the user instead of retrying.`,
+    "Stop retrying. Describe to the user what you were trying to do and the exact errors from the last attempts (they are in your context — name each refusal code and message), then end the turn. If the failures name a broken capability (e.g. the Add-Type compile), say so explicitly; a human step or a settings change is needed.",
+    { circuitBreaker: true, consecutiveFailures: count },
+  );
+}
+
 export function unsupportedOnBackend(what: string, backend: string): RefusalOutcome {
   return refuse(
     "unsupported_on_backend",

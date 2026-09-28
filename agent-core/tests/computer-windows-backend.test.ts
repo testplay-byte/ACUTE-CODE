@@ -54,6 +54,18 @@
  *     non-sparse) replace the fixed 400ms + one 600ms retry
  *   · launch: Chromium browser executables (msedge/chrome, matched
  *     flexibly on the basename) get --force-renderer-accessibility
+ * R131-C (Wave C) re-pins + adds the truthfulness contracts:
+ *   · C1: the readiness probe's addType leg compiles the REAL U32
+ *     preamble (the ONE production TypeDefinition) and asserts
+ *     $script:U32_OK — the trivial 'public class AcuteProbe {}' probe
+ *     that lied (addTypeOk:true beside U32-unavailable refusals) is dead
+ *   · C2: launch resolves Windows app identities (canonical alias map →
+ *     Get-Command → registry App Paths (HKLM+HKCU) → Get-StartApps/AUMID →
+ *     the raw name); the pure candidate generator
+ *     (windowsAppResolverCandidates) is pinned directly
+ *   · C3: focusWindow + activate carry the csc-free UIAutomation SetFocus
+ *     fallback (FromHandle → SetFocus; activate verifies via the
+ *     control-view TreeWalker climb to the top-level NativeWindowHandle)
  * The parse paths run against a fake RunCommand returning exactly what the
  * fixed PowerShell emits on Windows.
  */
@@ -64,6 +76,7 @@ import {
   LONG_TYPE_THRESHOLD,
   chromiumBrowserExecutable,
   composeVkChord,
+  windowsAppResolverCandidates,
   windowsListAppsScript,
   windowsListWindowsScript,
   windowsListDisplaysScript,
@@ -1207,7 +1220,7 @@ describe("R67-C: focusedElementName — the Tab-walk readback script", () => {
 /* ── R69-a: launch — the Chromium browser accessibility flag ─────────── */
 
 describe("R69-a: launch gives Chromium browsers --force-renderer-accessibility", () => {
-  it("msedge / chrome — with or without .exe, with a full path, any case — launch with the flag", async () => {
+  it("msedge / chrome — with or without .exe, with a full path, any case — launch with the flag (R131-C: the flag rides the RESOLVED identity, not the raw name)", async () => {
     const names = [
       "msedge",
       "msedge.exe",
@@ -1215,27 +1228,42 @@ describe("R69-a: launch gives Chromium browsers --force-renderer-accessibility",
       "chrome.exe",
       String.raw`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
       "MSEDGE.EXE",
+      // R131-C (C2): the human spellings the owner actually said — both
+      // resolve to the installed Edge, and the agent-launched start must
+      // carry the a11y flag regardless of the spelling.
+      "edge browser",
+      "Microsoft Edge",
     ];
     for (const name of names) {
       const run = fakeRun("OK");
       const result = await windowsBackend.launch(run, { name, activate: false });
       expect(result.ok).toBe(true);
       const script = decodeCapsuleScript(run.capsules[0]!);
+      // The flag rides Start-Process's ArgumentList on the RESOLVED-identity
+      // leg (the resolver ladder below), the AUMID leg, AND the raw-name
+      // last resort — whichever leg fires, the flag is on the start.
       expect(script).toContain("-ArgumentList '--force-renderer-accessibility'");
-      // The flag rides Start-Process's ArgumentList; the FilePath keeps
-      // the (single-quote-escaped) name the model gave.
-      expect(script).toContain(`Start-Process -FilePath "${name.replace(/'/g, "''")}" -ArgumentList '--force-renderer-accessibility' -ErrorAction Stop`);
+      // The old verbatim `Start-Process -FilePath "<name>"` line is DEAD —
+      // 'edge browser' never was a FilePath; the resolver's candidates and
+      // the $name/$resolved variables drive every Start-Process now.
+      expect(script).not.toContain(`Start-Process -FilePath "${name.replace(/'/g, "''")}"`);
+      expect(script).toContain("Start-Process -FilePath $resolved");
+      expect(script).toContain("Start-Process -FilePath $name");
     }
   });
 
-  it("NON-browser targets launch UNCHANGED — no flag, same Start-Process line as R68-C", async () => {
+  it("NON-browser targets launch UNCHANGED — no flag anywhere in the resolver ladder", async () => {
     for (const name of ["notepad", "msedgewebview2", "chrome_proxy", "explorer"]) {
       const run = fakeRun("OK");
       const result = await windowsBackend.launch(run, { name, activate: false });
       expect(result.ok).toBe(true);
       const script = decodeCapsuleScript(run.capsules[0]!);
       expect(script).not.toContain("--force-renderer-accessibility");
-      expect(script).toContain(`Start-Process -FilePath "${name}" -ErrorAction Stop`);
+      // R131-C (C2): even non-browser names ride the resolver (the identity
+      // legs run; the flag simply never composes because the resolved
+      // candidates are not Chromium executables).
+      expect(script).toContain("Get-Command $c -ErrorAction Stop");
+      expect(script).toContain("Get-StartApps -ErrorAction Stop");
     }
   });
 
@@ -1291,7 +1319,7 @@ describe("R68-C: the capture scripts load Windows.Forms via Add-Type (the PROVEN
   });
 });
 
-describe("R67-C: probePermissions — the THIRD probe (Add-Type -TypeDefinition, the csc compile)", () => {
+describe("R67-C/R131-C: probePermissions — the THIRD probe (the Add-Type compile, now the REAL preamble)", () => {
   /** A fake runner that answers each capsule in order (probe 1/2/3). */
   function seqRun(outs: string[], codes: number[] = []): RecordingRun {
     const capsules: CommandCapsule[] = [];
@@ -1303,33 +1331,63 @@ describe("R67-C: probePermissions — the THIRD probe (Add-Type -TypeDefinition,
     return Object.assign(run, { capsules }) as RecordingRun;
   }
 
-  it("probes the tiny compile in a BARE -EncodedCommand capsule (no U32 preamble) and reports addTypeOk", async () => {
+  it("R131-C (C1): the addType leg compiles the REAL production preamble — the probe and production share ONE compile path", async () => {
     const run = seqRun(["PS_OK", "UIA_OK", "ADDTYPE_OK"]);
     const report = await windowsBackend.probePermissions(run);
     expect(run.capsules).toHaveLength(3);
     expect(report.accessibility).toBe("granted");
     expect(report.addTypeOk).toBe(true);
-    // The third capsule is the tiny compile probe: base64 UTF-16LE, no preamble.
+    // The third capsule is STILL a bare -EncodedCommand capsule (no
+    // DOUBLE preamble — the script text carries the real one itself).
     const probe = run.capsules[2]!;
     expect(probe.args.slice(0, 5)).toEqual(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand"]);
     expect(probe.stdin).toBeUndefined();
     const script = decodeCapsuleScript(probe);
-    expect(script).toContain("Add-Type -TypeDefinition 'public class AcuteProbe {}'");
-    expect(script).toContain("Write-Output 'ADDTYPE_OK'");
-    expect(script).not.toContain("ListTopWindows");
-    // The first two probes still carry the preamble (unchanged shape).
+    // THE C1 LAW: the probe script IS the production preamble verbatim +
+    // the assertion — the trivial 'public class AcuteProbe {}' that lied
+    // (addTypeOk:true while every U32 capsule refused U32-unavailable on
+    // the owner's host) is dead. One compile path, one truth.
+    expect(script.startsWith(WINDOWS_PS_PREAMBLE)).toBe(true);
+    expect(script).toContain("Add-Type -TypeDefinition 'using System;");
+    expect(script).toContain("public class U32{");
+    expect(script).toContain("public static List<WINFO> ListTopWindows()");
+    expect(script).toContain("if ($script:U32_OK) { Write-Output 'ADDTYPE_OK' }");
+    expect(script).toContain("ADDTYPE_FAIL:' + (AddTypeErr)");
+    expect(script).not.toContain("AcuteProbe");
+    // The first two probes still carry the preamble via psCapsule (the
+    // unchanged liveness legs — same encoder, different composition).
     expect(decodeCapsuleScript(run.capsules[0]!)).toContain("public static List<WINFO> ListTopWindows()");
+    expect(decodeCapsuleScript(run.capsules[1]!)).toContain("Add-Type -AssemblyName UIAutomationClient");
+    // C7: even the HEALTHY report says webTree "unverified" (the probe
+    // never walks a browser's web tree) + carries the honesty note.
+    expect(report.webTree).toBe("unverified");
+    expect(report.notes?.some((n) => n.startsWith("webTree: unverified"))).toBe(true);
   });
 
-  it("a FAILED compile is reported honestly: addTypeOk false + the explanatory note", async () => {
-    // PS_OK + UIA_OK + ADDTYPE_FAIL — the owner's "the PowerShell session
-    // died before emitting JSON" class, now VISIBLE in the probe result
-    // instead of a green PS_OK.
-    const run = seqRun(["PS_OK", "UIA_OK", "ADDTYPE_FAIL"]);
+  it("R131-C (C1): a FAILED compile reports addTypeOk false + the REAL-preamble note + the captured csc reason", async () => {
+    // PS_OK + UIA_OK + ADDTYPE_FAIL:<why> — the owner's class (the trivial
+    // compile succeeds, the REAL one fails) is now VISIBLE: the note names
+    // the real preamble and the failure reason rides the line (the
+    // preamble's own $script:U32_ERR → AddTypeErr channel).
+    const run = seqRun(["PS_OK", "UIA_OK", "ADDTYPE_FAIL:csc.exe could not be found"]);
     const report = await windowsBackend.probePermissions(run);
     expect(run.capsules).toHaveLength(3);
     expect(report.addTypeOk).toBe(false);
-    expect(report.notes?.some((n) => n.includes("Add-Type -TypeDefinition (the csc compile behind list_apps/list_windows) failed"))).toBe(true);
+    const note = report.notes?.find((n) => n.includes("Add-Type -TypeDefinition"));
+    expect(note).toBeDefined();
+    expect(note).toContain("the REAL U32 preamble compile");
+    expect(note).toContain("(csc.exe could not be found)");
+    expect(note).toContain("window_action still acts through the UIAutomation fallback");
+    // C7: the probe report carries the web-tree honesty line — NEVER a
+    // claim that the web accessibility tree was verified.
+    expect(report.webTree).toBe("unverified");
+  });
+
+  it("a FAILED compile with NO captured reason keeps the honest note (the empty-detail leg)", async () => {
+    const run = seqRun(["PS_OK", "UIA_OK", "ADDTYPE_FAIL"]);
+    const report = await windowsBackend.probePermissions(run);
+    expect(report.addTypeOk).toBe(false);
+    expect(report.notes?.some((n) => n.includes("Add-Type -TypeDefinition (the REAL U32 preamble compile") && !n.includes("(csc"))).toBe(true);
   });
 
   it("a NONZERO exit on the compile probe is a failure too (not just ADDTYPE_FAIL)", async () => {
@@ -1557,5 +1615,206 @@ describe("R94-E: window_action — the window ACTOR script (the 'minimize the cu
     const failed = await windowsBackend.windowAction?.(fakeRun("", 1), { windowId: 77 }, "close");
     expect(failed?.ok).toBe(false);
     expect(failed?.error).toContain("window_action failed");
+  });
+});
+
+/* ── R131-C (C2): the Windows app-identity RESOLVER ──────────────────────────
+ * The owner's field ledger: open_application('edge browser') and
+ * open_application('Microsoft Edge') both failed "The system cannot find the
+ * file specified" — Start-Process -FilePath "<name>" VERBATIM resolves only
+ * PATH + shell-registered names, and msedge is on neither. The candidate
+ * generation is PURE TypeScript (pinned here); the capsule-side execution
+ * (Get-Command → registry App Paths → Get-StartApps → raw name) is pinned
+ * by construction inside the launch script. */
+describe("R131-C (C2): windowsAppResolverCandidates — the pure candidate generator", () => {
+  it("the canonical alias map: the human names resolve to the installed identity", () => {
+    expect(windowsAppResolverCandidates("edge browser")).toEqual({
+      candidates: ["msedge.exe", "edge browser.exe", "edge browser"],
+      startAppNeedle: "edge",
+    });
+    expect(windowsAppResolverCandidates("Microsoft Edge")).toEqual({
+      candidates: ["msedge.exe", "Microsoft Edge.exe", "Microsoft Edge"],
+      startAppNeedle: "edge",
+    });
+    expect(windowsAppResolverCandidates("google chrome")).toEqual({
+      candidates: ["chrome.exe", "google chrome.exe", "google chrome"],
+      startAppNeedle: "chrome",
+    });
+  });
+
+  it("already-canonical names dedupe (the alias never duplicates the raw name)", () => {
+    expect(windowsAppResolverCandidates("msedge.exe")).toEqual({
+      candidates: ["msedge.exe"],
+      startAppNeedle: "edge",
+    });
+    expect(windowsAppResolverCandidates("msedge")).toEqual({
+      candidates: ["msedge.exe", "msedge"],
+      startAppNeedle: "edge",
+    });
+    expect(windowsAppResolverCandidates("chrome")).toEqual({
+      candidates: ["chrome.exe", "chrome"],
+      startAppNeedle: "chrome",
+    });
+  });
+
+  it("unknown names pass through on their own identity (never a forced guess)", () => {
+    expect(windowsAppResolverCandidates("Spotify")).toEqual({
+      candidates: ["Spotify.exe", "Spotify"],
+      startAppNeedle: "spotify",
+    });
+    // Case-insensitive alias match (the key normalizes whitespace, the
+    // raw name keeps its own spelling for the verbatim last resort).
+    expect(windowsAppResolverCandidates("  EDGE   BROWSER ")).toEqual({
+      candidates: ["msedge.exe", "EDGE   BROWSER.exe", "EDGE   BROWSER"],
+      startAppNeedle: "edge",
+    });
+    // The common shells/utilities the brief names.
+    expect(windowsAppResolverCandidates("notepad").candidates[0]).toBe("notepad.exe");
+    expect(windowsAppResolverCandidates("cmd").candidates[0]).toBe("cmd.exe");
+    expect(windowsAppResolverCandidates("powershell").candidates[0]).toBe("powershell.exe");
+    expect(windowsAppResolverCandidates("pwsh").candidates[0]).toBe("pwsh.exe");
+    expect(windowsAppResolverCandidates("explorer").startAppNeedle).toBe("file explorer");
+  });
+
+  it("the .exe-suffix convention (the App Paths key format) — never double-suffixed", () => {
+    const notepad = windowsAppResolverCandidates("notepad");
+    expect(notepad.candidates).toEqual(["notepad.exe", "notepad"]);
+    const withExe = windowsAppResolverCandidates("some-tool.exe");
+    expect(withExe.candidates).toEqual(["some-tool.exe"]);
+  });
+});
+
+describe("R131-C (C2): the launch script carries the resolver LADDER inside ONE capsule", () => {
+  it("Get-Command → registry App Paths (HKLM then HKCU) → Get-StartApps (exact then contains) → the raw name", async () => {
+    const run = fakeRun("OK");
+    await windowsBackend.launch(run, { name: "edge browser", activate: false });
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    // Leg 1: Get-Command over the candidates.
+    expect(script).toContain("Get-Command $c -ErrorAction Stop");
+    expect(script).toContain("$cands = @('msedge.exe', 'edge browser.exe', 'edge browser')");
+    // Leg 2: the registry App Paths, HKLM FIRST then HKCU (Chrome is
+    // commonly a per-user install).
+    expect(script).toContain("'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\'");
+    expect(script).toContain("'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\'");
+    expect(script).toContain("Get-ItemProperty -Path ($root + $c) -ErrorAction Stop");
+    expect(script).toContain("$def = $ap.'(default)'");
+    // Leg 3: Get-StartApps by the display-name needle (exact, then substring).
+    expect(script).toContain("$apps = Get-StartApps -ErrorAction Stop");
+    expect(script).toContain("$needle = 'edge'");
+    expect(script).toContain("$a.Name.ToLower() -eq $needle");
+    expect(script).toContain("$a.Name.ToLower().Contains($needle)");
+    expect(script).toContain('Start-Process ("shell:AppsFolder\\" + $match.AppID)');
+    // Leg 4: the raw name verbatim (the pre-R131 last resort, unchanged).
+    expect(script).toContain("Start-Process -FilePath $name");
+    // ONE capsule for the whole ladder.
+    expect(run.capsules).toHaveLength(1);
+  });
+
+  it("the resolution failure lines NAME the identity they resolved / the trail they tried", async () => {
+    const run = fakeRun("ERR:resolved 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' via AppPaths:msedge.exe - Start-Process failed: The system cannot find the file specified");
+    const result = await windowsBackend.launch(run, { name: "edge browser", activate: false });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("could not launch 'edge browser'");
+      expect(result.error).toContain("resolved 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' via AppPaths:msedge.exe");
+      expect(result.error).toContain("Start-Process failed");
+    }
+    const noRes = fakeRun("ERR:no-resolution (tried Get-Command + registry App Paths for [msedge.exe, edge browser.exe, edge browser], Get-StartApps for 'edge', and the raw name) - the app may not be installed: The system cannot find the file specified");
+    const result2 = await windowsBackend.launch(noRes, { name: "edge browser", activate: false });
+    expect(result2.ok).toBe(false);
+    if (!result2.ok) {
+      expect(result2.error).toContain("no-resolution");
+      expect(result2.error).toContain("[msedge.exe, edge browser.exe, edge browser]");
+      expect(result2.error).toContain("the app may not be installed");
+    }
+  });
+
+  it("the bundle-id leg stays FIRST and exits early (the AUMID the model explicitly gave)", async () => {
+    const run = fakeRun("OK");
+    await windowsBackend.launch(run, { name: "whatsapp", bundleId: "5319275A.WhatsAppDesktop_2gk5p7ccbatxr", activate: false });
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    expect(script).toContain('Start-Process "shell:AppsFolder\\5319275A.WhatsAppDesktop_2gk5p7ccbatxr"');
+    expect(run.capsules).toHaveLength(1);
+  });
+});
+
+/* ── R131-C (C3): the csc-free UIAutomation SetFocus fallbacks ───────────────
+ * The ledger: focus_window refused 'ERR:u32-unavailable' before any
+ * actuation attempt on the owner's Add-Type-dead host, and the canned
+ * recovery answered "the window may have closed" — a cause that had nothing
+ * to do with the actual error. Both focus paths now run the UIA SetFocus
+ * ladder when the U32 compile is dead; the failures name which paths ran. */
+describe("R131-C (C3): focusWindow — the UIA SetFocus fallback", () => {
+  it("the U32 raise first, the UIA FromHandle → SetFocus back-up, errors naming BOTH paths", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.focusWindow(run, 197266);
+    expect(result).toEqual({ ok: true });
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    // The U32 raise (guarded by $script:U32_OK — NOT the hard U32_GUARD
+    // exit: a dead compile must fall THROUGH to the UIA ladder).
+    expect(script).toContain("if ($script:U32_OK) {");
+    expect(script).toContain("[void][U32]::BringWindowToTop($h)");
+    expect(script).toContain("$u32Focused = [U32]::SetForegroundWindow($h)");
+    expect(script).not.toContain("'ERR:U32-unavailable (the Add-Type helper did not compile on this host - this action is unavailable)'");
+    // The UIA fallback: FromHandle + SetFocus (no csc).
+    expect(script).toContain("Add-Type -AssemblyName UIAutomationClient");
+    expect(script).toContain("$el = [System.Windows.Automation.AutomationElement]::FromHandle($h)");
+    expect(script).toContain("$el.SetFocus()");
+    // The honest failures name the paths that ran.
+    expect(script).toContain("'ERR:u32-unavailable (the Add-Type helper did not compile on this host and the UIAutomation FromHandle lookup found no window for this id)'");
+    expect(script).toContain("'ERR:focus-failed (SetForegroundWindow returned false and the UIAutomation SetFocus failed: '");
+  });
+
+  it("parse: OK → ok:true; the ERR shapes surface the backend's own text (capped)", async () => {
+    expect(await windowsBackend.focusWindow(fakeRun("OK"), 197266)).toEqual({ ok: true });
+    const err = await windowsBackend.focusWindow(
+      fakeRun("ERR:u32-unavailable (the Add-Type helper did not compile on this host) and the UIAutomation SetFocus failed: ElementNotAvailableException"),
+      197266,
+    );
+    expect(err).toEqual({
+      ok: false,
+      error: "u32-unavailable (the Add-Type helper did not compile on this host) and the UIAutomation SetFocus failed: ElementNotAvailableException",
+    });
+  });
+});
+
+describe("R131-C (C3): activate — the UIA SetFocus activation backs up the U32 ladder", () => {
+  it("the dead-compile branch: FromHandle → SetFocus, verified by the control-view TreeWalker climb to the top-level NativeWindowHandle", async () => {
+    const run = fakeRun("ACTIVE");
+    const result = await windowsBackend.activate(run, 4012, 197266);
+    expect(result).toEqual({ ok: true, active: true });
+    const script = decodeCapsuleScript(run.capsules[0]!);
+    // The branch runs BEFORE any [U32]:: call — a dead compile never
+    // touches the U32 ladder (the hard guard is gone; the pid/hwnd
+    // resolution needs no U32).
+    const branchAt = script.indexOf("if (-not $script:U32_OK) {");
+    const firstU32Call = script.indexOf("[U32]::GetForegroundWindow()");
+    expect(branchAt).toBeGreaterThan(-1);
+    expect(firstU32Call).toBeGreaterThan(branchAt);
+    expect(script).toContain("Add-Type -AssemblyName UIAutomationClient");
+    expect(script).toContain("$el = [System.Windows.Automation.AutomationElement]::FromHandle($h)");
+    expect(script).toContain("$el.SetFocus()");
+    // The SAME-law postcondition read: climb the focused element's
+    // control-view parents to its top-level window, compare the handle.
+    expect(script).toContain("[System.Windows.Automation.TreeWalker]::ControlViewWalker");
+    expect(script).toContain("$parent = $walker.GetParent($top)");
+    expect(script).toContain("if ([Int64]$top.Current.NativeWindowHandle -eq [Int64]$h) { $verified = $true }");
+    expect(script).toContain("if ($verified) { Write-Output 'ACTIVE' } else { Write-Output 'INACTIVE' }");
+    // The honest failures.
+    expect(script).toContain("'ERR:u32-unavailable (the Add-Type helper did not compile on this host and the UIAutomation FromHandle lookup found no window for this pid)'");
+    expect(script).toContain("'ERR:u32-unavailable (the Add-Type helper did not compile on this host) and the UIAutomation SetFocus failed: '");
+    // The R68-C U32 ladder survives byte-identically BELOW the branch.
+    expect(script).toContain("[void][U32]::AttachThreadInput($curTid, $targetTid, $true)");
+    expect(script).toContain("[void][U32]::ShowWindow($h, 6)");
+    expect(script).toContain("[void][U32]::ShowWindow($h, 9)");
+  });
+
+  it("parse: the UIA branch's ACTIVE/INACTIVE answer the same {ok, active} contract; ERR shapes fail closed", async () => {
+    expect(await windowsBackend.activate(fakeRun("ACTIVE"), 4012, 197266)).toEqual({ ok: true, active: true });
+    expect(await windowsBackend.activate(fakeRun("INACTIVE"), 4012, 197266)).toEqual({ ok: true, active: false });
+    expect(await windowsBackend.activate(fakeRun("ERR:u32-unavailable (the Add-Type helper did not compile on this host) and the UIAutomation SetFocus failed: boom"), 4012, 197266)).toEqual({
+      ok: false,
+      active: false,
+    });
   });
 });

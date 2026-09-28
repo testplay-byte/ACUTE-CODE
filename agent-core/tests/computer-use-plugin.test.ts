@@ -600,7 +600,7 @@ describe("ROUND-69 (4-c-2): observation + auto-refresh frames go inline", () => 
     rasterSpy.mockReturnValue(undefined);
     const tools = await computerUsePlugin.createTools({
       root: tempDir,
-      toolDeps: makeDeps({ emit: (e) => emitLog.push(e) }),
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e), permissionMode: "full" }),
     });
     const click = tools.find((t) => t.name === "left_click")!;
     const result = await click.execute({ target: { type: "coordinate", x: 1, y: 1 } }, { root: tempDir });
@@ -701,6 +701,116 @@ describe("R93: the v2 tool surface — schemas + teachings", () => {
   });
 });
 
+/* ── R131-C (C6): the monitor frame gains the action's POINT + FRAME ID ──────
+ * The owner's overlay ask: "all the actions which it is performing should be
+ * shown on the screen as an overlay first, like it will be tapping here and
+ * then it will tap there" — the SSE computer-use frame now carries the
+ * action's global point and the freshest registered frame id (additive:
+ * older monitors ignore the new fields; the mini window's RENDERING leg is
+ * the flagged follow-up — this pin holds the wire shape only). */
+describe("R131-C (C6): the computer-use monitor frame carries point + frameId (the overlay MVP)", () => {
+  let dispatchSpy: MockInstance<(tool: string, args: Record<string, unknown>) => Promise<DispatchResult>>;
+  let rasterSpy: MockInstance<(frameId: string) => string | undefined>;
+
+  beforeEach(() => {
+    resetRasterCacheForTest();
+    emitLog = [];
+    setVisionSettings(db, { mode: "separate", provider: "openrouter", modelId: "test/vision" });
+    rasterSpy = vi.spyOn(ComputerDispatcher.prototype, "rasterFor").mockReturnValue("cG5nQnl0ZXM=");
+  });
+
+  afterEach(() => {
+    dispatchSpy.mockRestore();
+    rasterSpy.mockRestore();
+  });
+
+  it("a SENT click receipt's point + observation frameId ride the {type:'computer-use'} frame", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    dispatchSpy = vi
+      .spyOn(ComputerDispatcher.prototype, "dispatch")
+      .mockResolvedValue({
+        kind: "receipt",
+        receipt: {
+          schemaVersion: "1",
+          actionSent: true,
+          dispatchStatus: "accepted",
+          retryAction: false,
+          point: { x: 96, y: 96 },
+          observation: { frameId: "f-9", screenChanged: true },
+        },
+      });
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      // permissionMode "full": the consent gate auto-approves the coordinate
+      // click (the gate is NOT under test here — the frame shape is).
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e), permissionMode: "full" }),
+    });
+    const click = tools.find((t) => t.name === "left_click")!;
+    const result = await click.execute({ target: { type: "coordinate", x: 96, y: 96 } }, { root: tempDir });
+    expect(result.ok).toBe(true);
+    const frame = emitLog.find((e) => (e as Record<string, unknown>)["type"] === "computer-use") as
+      | { kind?: string; tool?: string; point?: { x: number; y: number }; frameId?: string }
+      | undefined;
+    expect(frame).toBeDefined();
+    expect(frame!.kind).toBe("receipt");
+    expect(frame!.tool).toBe("left_click");
+    // The overlay coordinate + the raster to paint it on.
+    expect(frame!.point).toEqual({ x: 96, y: 96 });
+    expect(frame!.frameId).toBe("f-9");
+    // The observation frame ALSO went inline as the screenshot thumbnail
+    // (the raster the overlay would paint is route-registered).
+    expect(rasterFor("f-9")).toMatchObject({ pngBase64: "cG5nQnl0ZXM=" });
+  });
+
+  it("a receipt with NO point/frame (returnState none) omits both fields — additive, never fabricated", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    dispatchSpy = vi
+      .spyOn(ComputerDispatcher.prototype, "dispatch")
+      .mockResolvedValue({
+        kind: "receipt",
+        receipt: { schemaVersion: "1", actionSent: true, dispatchStatus: "accepted", retryAction: false },
+      });
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e), permissionMode: "full" }),
+    });
+    const key = tools.find((t) => t.name === "key")!;
+    await key.execute({ text: "tab", appRef: { pid: 1 } }, { root: tempDir });
+    const frame = emitLog.find((e) => (e as Record<string, unknown>)["type"] === "computer-use") as
+      | { kind?: string; point?: unknown; frameId?: unknown }
+      | undefined;
+    expect(frame).toBeDefined();
+    expect(frame!.kind).toBe("receipt");
+    expect(frame!.point).toBeUndefined();
+    expect(frame!.frameId).toBeUndefined();
+  });
+
+  it("a REFUSAL frame keeps the legacy {kind, tool, code} shape (no point — nothing was tapped)", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    dispatchSpy = vi
+      .spyOn(ComputerDispatcher.prototype, "dispatch")
+      .mockResolvedValue({
+        kind: "refusal",
+        refusal: { error: "capability_fail_closed", message: "nope", recovery: "…" },
+      });
+    const tools = await computerUsePlugin.createTools({
+      root: tempDir,
+      toolDeps: makeDeps({ emit: (e) => emitLog.push(e), permissionMode: "full" }),
+    });
+    const click = tools.find((t) => t.name === "left_click")!;
+    const result = await click.execute({ target: { type: "coordinate", x: 1, y: 1 } }, { root: tempDir });
+    expect(result.ok).toBe(false);
+    const frame = emitLog.find((e) => (e as Record<string, unknown>)["type"] === "computer-use") as
+      | { kind?: string; code?: string; point?: unknown; frameId?: unknown }
+      | undefined;
+    expect(frame).toBeDefined();
+    expect(frame!.kind).toBe("refusal");
+    expect(frame!.code).toBe("capability_fail_closed");
+    expect(frame!.point).toBeUndefined();
+    expect(frame!.frameId).toBeUndefined();
+  });
+});
+
 describe("R93: the seeded computer-use skill teaches the v2 loop", () => {
   it("the body carries the mapDelta reading + the relocation-first stale recovery + the tree descent + app_profile", async () => {
     setComputerUseSettings(db, { enabled: true, permission: "act" });
@@ -729,5 +839,31 @@ describe("R93: the seeded computer-use skill teaches the v2 loop", () => {
     expect(seeded.body).toContain("NEVER type credentials");
     expect(seeded.body).toContain("Outward-facing sends are publishing");
     expect(seeded.body).toContain("explicit go-ahead");
+  });
+
+  it("R131-C (C7): the capability honesty — the WEB-tree claim is CONDITIONAL + the launch rule teaches the resolver", async () => {
+    setComputerUseSettings(db, { enabled: true, permission: "act" });
+    const seeded = db
+      .prepare(`SELECT body FROM skills WHERE id = 'skill_builtin_computer_use'`)
+      .get() as { body: string };
+    // The claim keeps its shape ("the WEB accessibility tree IS searched")
+    // but gains the cold-start Chromium conditional: a USER-launched
+    // browser may expose only the window node, with the two honest outs
+    // (launch via open_application so the a11y flag rides, or read the
+    // page through the embedded browser).
+    expect(seeded.body).toContain("the WEB accessibility tree IS searched");
+    expect(seeded.body).toContain("HONEST LIMIT (R131)");
+    expect(seeded.body).toContain("may expose ONLY the window node");
+    expect(seeded.body).toContain("launch it yourself via open_application");
+    expect(seeded.body).toContain("--force-renderer-accessibility");
+    expect(seeded.body).toContain("the embedded browser (browser_control)");
+    // The launch rule teaches the resolver (the EXACT-name-only law is
+    // retired — the resolver resolves installed identities now; a failure
+    // names the identity it chose, and the never-substitute law stays).
+    expect(seeded.body).toContain("Windows resolves installed identities");
+    expect(seeded.body).toContain("canonical aliases like \"edge browser\"");
+    expect(seeded.body).toContain("a failure names the identity the resolver chose");
+    expect(seeded.body).toContain("Never substitute a different running app");
+    expect(seeded.body).not.toContain("character-for-character");
   });
 });

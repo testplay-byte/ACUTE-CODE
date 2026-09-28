@@ -664,8 +664,12 @@ const psStdinCapsule = (script: string, stdin: string, timeoutMs = 12000): Comma
  */
 export const LONG_TYPE_THRESHOLD = 300;
 
-/** R67-C: a bare probe capsule (NO preamble) — the tiny Add-Type compile
- * probe rides this; probe scripts must not drag the U32 preamble in. */
+/** R67-C: a bare probe capsule (the ENCODER adds NO preamble of its own —
+ * whatever script text it is given rides verbatim). R131-C (C1): the
+ * readiness probe's addType leg deliberately passes the FULL production
+ * preamble + its assertion through this factory (the REAL compile path, no
+ * double preamble); the PS_OK/UIA liveness legs pass bare one-liners that
+ * must not pay the preamble at all. */
 const rawPsCapsule = (script: string, timeoutMs = 20000): CommandCapsule => ({
   program: WINDOWS_PS_PROGRAM,
   args: [
@@ -1309,23 +1313,105 @@ Write-Output 'OK'
     // screen-reader poke — the PokeChromium WM_GETOBJECT nudge then finds an
     // ALREADY-BUILT tree, and the model's get_app_state/find_elements stop
     // depending on poke timing). Non-browser targets are launched UNCHANGED.
-    const a11yArgs = chromiumBrowserExecutable(name) ? " -ArgumentList '--force-renderer-accessibility'" : "";
+    // R131-C (C2): the flag decision now covers the RESOLVED identity too —
+    // "edge browser" resolves to msedge.exe, and the agent-launched start
+    // must carry the flag regardless of which spelling the user used.
+    const resolution = windowsAppResolverCandidates(name);
+    const isBrowser =
+      chromiumBrowserExecutable(name) || resolution.candidates.some((c) => chromiumBrowserExecutable(c));
+    const a11yArgs = isBrowser ? " -ArgumentList '--force-renderer-accessibility'" : "";
+    // R131-C (C2 — the app resolver): the owner's field report — 'edge
+    // browser' / 'Microsoft Edge' both failed with "The system cannot find
+    // the file specified" because Start-Process -FilePath "<name>" VERBATIM
+    // only resolves PATH + shell-registered names (msedge is on NEITHER).
+    // The resolver ladder, in order, inside ONE capsule:
+    //   1. Get-Command <candidate> — PATH resolution (cmd, powershell,
+    //      notepad, pwsh…);
+    //   2. the registry App Paths (HKLM then HKCU — Chrome is commonly a
+    //      per-user install) — THE canonical Windows app-identity registry
+    //      ('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\
+    //      <exe>' (default) = the full install path);
+    //   3. Get-StartApps by name → 'shell:AppsFolder\<AUMID>' — the
+    //      store/packaged apps;
+    //   4. the raw name verbatim — the pre-R131 last resort, unchanged.
+    // The candidates come from the PURE windowsAppResolverCandidates helper
+    // (the canonical alias map + the name itself — pinned by construction);
+    // every failure line NAMES the identity it resolved and failed on, so
+    // the refusal's recovery derives from the ACTUAL error (the old
+    // self-contradictory "never retry variant spellings / retry the resolved
+    // identity" pair dies at dispatch.ts).
+    const candsArray = resolution.candidates.map((c) => `'${escapePsString(c)}'`).join(", ");
     const script = `
-try {
-  if ('${spec.bundleId ?? ""}' -ne '') {
+$name = '${escapePsString(name)}'
+$needle = '${escapePsString(resolution.startAppNeedle)}'
+$cands = @(${candsArray})
+if ('${escapePsString(spec.bundleId ?? "")}' -ne '') {
+  try {
     Start-Process "shell:AppsFolder\\${spec.bundleId}" -ErrorAction Stop
-  } else {
-    Start-Process -FilePath "${escapePsString(name)}"${a11yArgs} -ErrorAction Stop
+    Write-Output 'OK'
+  } catch { Write-Output ("ERR:bundle-id '${escapePsString(spec.bundleId ?? "")}' failed: " + $_.Exception.Message) }
+  exit 0
+}
+$resolved = ''
+$via = ''
+foreach ($c in $cands) {
+  if ($resolved -ne '') { break }
+  try {
+    $cmd = Get-Command $c -ErrorAction Stop
+    if ($null -ne $cmd -and $cmd.Source) { $resolved = [string]$cmd.Source; $via = 'Get-Command:' + $c }
+  } catch {}
+  if ($resolved -eq '') {
+    foreach ($root in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\', 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\')) {
+      try {
+        $ap = Get-ItemProperty -Path ($root + $c) -ErrorAction Stop
+        $def = $ap.'(default)'
+        if ($def) { $resolved = [string]$def; $via = 'AppPaths:' + $c }
+      } catch {}
+      if ($resolved -ne '') { break }
+    }
   }
+}
+if ($resolved -ne '') {
+  try {
+    Start-Process -FilePath $resolved${a11yArgs} -ErrorAction Stop
+    Write-Output 'OK'
+  } catch {
+    Write-Output ("ERR:resolved '" + $resolved + "' via " + $via + " - Start-Process failed: " + $_.Exception.Message)
+  }
+  exit 0
+}
+try {
+  $apps = Get-StartApps -ErrorAction Stop
+  $match = $null
+  foreach ($a in $apps) {
+    if ($null -ne $a.Name -and $a.Name.ToLower() -eq $needle) { $match = $a; break }
+  }
+  if ($null -eq $match) {
+    foreach ($a in $apps) {
+      if ($null -ne $a.Name -and $a.Name.ToLower().Contains($needle)) { $match = $a; break }
+    }
+  }
+  if ($null -ne $match) {
+    try {
+      Start-Process ("shell:AppsFolder\\" + $match.AppID)${a11yArgs} -ErrorAction Stop
+      Write-Output 'OK'
+    } catch {
+      Write-Output ("ERR:resolved '" + $match.Name + "' via Get-StartApps (AUMID " + $match.AppID + ") - Start-Process failed: " + $_.Exception.Message)
+    }
+    exit 0
+  }
+} catch {}
+try {
+  Start-Process -FilePath $name${a11yArgs} -ErrorAction Stop
   Write-Output 'OK'
 } catch {
-  Write-Output ("ERR:" + $_.Exception.Message)
+  Write-Output ("ERR:no-resolution (tried Get-Command + registry App Paths for [" + ($cands -join ', ') + "], Get-StartApps for '" + $needle + "', and the raw name) - the app may not be installed: " + $_.Exception.Message)
 }
 `;
-    const result = await run(psCapsule(script, 15000));
+    const result = await run(psCapsule(script, 20000));
     const out = result.stdout.trim();
     if (out === "OK") return { ok: true, active: spec.activate };
-    return { ok: false, error: `could not launch '${name}': ${out.slice(0, 200)}` };
+    return { ok: false, error: `could not launch '${name}': ${out.replace(/^ERR:/, "").trim().slice(0, 300)}` };
   },
 
   async activate(run, pid, windowId) {
@@ -1346,13 +1432,51 @@ try {
     // VISIBLY FLICKERS (minimize + restore) — a one-frame flicker is the
     // honest price of a verified activation when the polite sequence
     // failed; only then, and only once, does the window flash.
+    //
+    // R131-C (C3 — the focus fallback): the U32 guard made this whole
+    // ladder U32-ONLY — on the owner's Add-Type-dead host EVERY activation
+    // (open_application activate:true, and withForegroundRetry's self-heal
+    // for every raw-input call) refused before any actuation attempt. The
+    // UIA SetFocus ladder now backs up the U32 path: when the compile is
+    // dead, AutomationElement.FromHandle(hwnd).SetFocus() (the SAME
+    // csc-free assemblies the a11y walk and windowsWindowActionScript ride)
+    // takes the activation, verified by the SAME-law postcondition read —
+    // climb the focused element's control-view parents to its TOP-LEVEL
+    // window and compare NativeWindowHandle (the foreground truth without
+    // user32). Healthy hosts never enter the branch (byte-identical
+    // capsules — the pid/hwnd resolution moved ABOVE the branch, which
+    // needs no U32).
     const script = `
-${U32_GUARD}
 $wins = Get-Process -Id ${pid} -ErrorAction SilentlyContinue
 if ($null -eq $wins) { Write-Output 'ERR:not-running'; exit 0 }
 $h = [IntPtr]${windowId ?? 0}
 if ($h -eq [IntPtr]::Zero) { $h = $wins.MainWindowHandle }
 if ($h -eq [IntPtr]::Zero) { Write-Output 'ERR:no-window'; exit 0 }
+if (-not $script:U32_OK) {
+  # R131-C (C3): the UIA SetFocus activation — no csc needed.
+  Add-Type -AssemblyName UIAutomationClient
+  $el = $null
+  try { $el = [System.Windows.Automation.AutomationElement]::FromHandle($h) } catch { $el = $null }
+  if ($null -eq $el) { Write-Output 'ERR:u32-unavailable (the Add-Type helper did not compile on this host and the UIAutomation FromHandle lookup found no window for this pid)'; exit 0 }
+  try { $el.SetFocus() } catch { Write-Output ('ERR:u32-unavailable (the Add-Type helper did not compile on this host) and the UIAutomation SetFocus failed: ' + $_.Exception.Message); exit 0 }
+  Start-Sleep -Milliseconds 200
+  $verified = $false
+  try {
+    $fel = [System.Windows.Automation.AutomationElement]::FocusedElement
+    if ($null -ne $fel) {
+      $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+      $top = $fel
+      for ($i = 0; $i -lt 40; $i++) {
+        $parent = $walker.GetParent($top)
+        if ($null -eq $parent -or $parent -eq [System.Windows.Automation.AutomationElement]::RootElement) { break }
+        $top = $parent
+      }
+      if ([Int64]$top.Current.NativeWindowHandle -eq [Int64]$h) { $verified = $true }
+    }
+  } catch {}
+  if ($verified) { Write-Output 'ACTIVE' } else { Write-Output 'INACTIVE' }
+  exit 0
+}
 if ([U32]::GetForegroundWindow() -eq $h) { Write-Output 'ACTIVE'; exit 0 }
 $targetTid = [U32]::GetWindowThreadProcessId($h, [ref]([uint32]0))
 $curTid = [System.AppDomain]::GetCurrentThreadId()
@@ -1425,18 +1549,48 @@ if ([U32]::ShowWindow($h, ${cmd})) { Write-Output 'OK' } else { Write-Output 'ER
   },
 
   async focusWindow(run, windowId) {
+    // R131-C (C3 — the focus fallback): the owner's Add-Type-dead host made
+    // this tool U32-ONLY (the guard refused 'ERR:u32-unavailable' before any
+    // actuation attempt) while windowsWindowActionScript's 'focus' action
+    // ALREADY carried a working csc-free UIA path in the SAME file —
+    // AutomationElement.FromHandle(hwnd).SetFocus(), the UIA SetFocus ladder
+    // the a11y walk's own assemblies load (no Add-Type, no csc). focusWindow
+    // now runs BOTH paths: the U32 raise (BringWindowToTop +
+    // SetForegroundWindow) first on healthy hosts, the UIA SetFocus as the
+    // back-up whenever the U32 path is unavailable OR its call returned
+    // false (the OS refused the steal — UIA SetFocus works cross-process
+    // where SetForegroundWindow's foreground-eligibility rules fail). Only
+    // BOTH failing refuses — and the error names which paths ran, so
+    // dispatch's recovery derives from the ACTUAL cause.
     const script = `
-${U32_GUARD}
-if (-not $script:U32_OK) { Write-Output 'ERR:u32-unavailable'; exit 0 }
 $h = [IntPtr]${windowId}
 if ($h -eq [IntPtr]::Zero) { Write-Output 'ERR:no-window'; exit 0 }
-[void][U32]::BringWindowToTop($h)
-if ([U32]::SetForegroundWindow($h)) { Write-Output 'OK' } else { Write-Output 'ERR:focus-failed' }
+$u32Focused = $false
+if ($script:U32_OK) {
+  [void][U32]::BringWindowToTop($h)
+  $u32Focused = [U32]::SetForegroundWindow($h)
+}
+if ($u32Focused) { Write-Output 'OK'; exit 0 }
+# The UIA SetFocus fallback — no csc needed (the walk's own assemblies).
+Add-Type -AssemblyName UIAutomationClient
+$el = $null
+try { $el = [System.Windows.Automation.AutomationElement]::FromHandle($h) } catch { $el = $null }
+if ($null -eq $el) {
+  if (-not $script:U32_OK) { Write-Output 'ERR:u32-unavailable (the Add-Type helper did not compile on this host and the UIAutomation FromHandle lookup found no window for this id)'; exit 0 }
+  Write-Output 'ERR:focus-failed (SetForegroundWindow returned false and the UIAutomation FromHandle lookup found no element for this window)'; exit 0
+}
+try {
+  $el.SetFocus()
+  Write-Output 'OK'
+} catch {
+  if (-not $script:U32_OK) { Write-Output ('ERR:u32-unavailable (the Add-Type helper did not compile on this host) and the UIAutomation SetFocus failed: ' + $_.Exception.Message); exit 0 }
+  Write-Output ('ERR:focus-failed (SetForegroundWindow returned false and the UIAutomation SetFocus failed: ' + $_.Exception.Message + ')'); exit 0
+}
 `;
-    const result = await run(psCapsule(script, 8000));
+    const result = await run(psCapsule(script, 12000));
     const out = result.stdout.trim();
     if (out === "OK") return { ok: true };
-    return { ok: false, error: out.startsWith("ERR:") ? out.slice(4) : "focus failed" };
+    return { ok: false, error: out.startsWith("ERR:") ? out.slice(4, 304) : "focus failed" };
   },
 
   // R94-E (PART 2): the WINDOW ACTOR. One capsule resolves the target (an
@@ -1831,8 +1985,19 @@ Write-Output ($p.X.ToString() + "," + $p.Y.ToString())
     // PowerShell session died before emitting JSON") was a dead compile
     // the probe could not see; addTypeOk now reports it honestly (the
     // PS_OK probe above would also fail for a fully dead PowerShell, but
-    // a compile-only failure leaves PS_OK green). The probe rides a BARE
-    // capsule (no preamble — it must not drag the U32 compile in).
+    // a compile-only failure leaves PS_OK green).
+    //
+    // ROUND-131 (R131-C, C1 — the probe tells the truth): the addType leg
+    // compiles the REAL U32 TypeDefinition and asserts the guard's own
+    // success token — the probe and production share ONE compile path. The
+    // old probe compiled a TRIVIAL 'public class AcuteProbe {}' (it would
+    // succeed on hosts where the ~90-line U32 P/Invoke preamble fails), so
+    // addTypeOk:true coexisted with "U32-unavailable" refusals from every
+    // window/input tool — the probe LIED about the exact thing it existed
+    // to report. Now the probe script IS the production preamble + the
+    // assertion: addTypeOk:false honestly means "the U32 helper will not
+    // compile on this host" (and the compiled-failure detail rides the
+    // notes via the preamble's own $script:U32_ERR capture).
     const probe = await run(psCapsule(`Write-Output 'PS_OK'`, 8000));
     if (probe.code !== 0 || !probe.stdout.includes("PS_OK")) {
       return {
@@ -1845,10 +2010,14 @@ Write-Output ($p.X.ToString() + "," + $p.Y.ToString())
     const uia = await run(
       psCapsule(`try { Add-Type -AssemblyName UIAutomationClient; Write-Output 'UIA_OK' } catch { Write-Output 'UIA_FAIL' }`, 10000),
     );
+    // The REAL-preamble compile probe: the script text is the production
+    // preamble VERBATIM (its one Add-Type -TypeDefinition IS the compile
+    // every U32-dependent capsule rides), plus the guard assertion. Rides a
+    // BARE capsule so the preamble is not doubled.
     const addType = await run(
       rawPsCapsule(
-        `try { Add-Type -TypeDefinition 'public class AcuteProbe {}'; Write-Output 'ADDTYPE_OK' } catch { Write-Output 'ADDTYPE_FAIL' }`,
-        15000,
+        `${PS_PREAMBLE}\nif ($script:U32_OK) { Write-Output 'ADDTYPE_OK' } else { Write-Output ('ADDTYPE_FAIL:' + (AddTypeErr)) }`,
+        20000,
       ),
     );
     const notes: string[] = [];
@@ -1856,8 +2025,13 @@ Write-Output ($p.X.ToString() + "," + $p.Y.ToString())
     if (accessibility !== "granted") notes.push("UIAutomationClient assembly failed to load");
     const addTypeOk = addType.code === 0 && addType.stdout.includes("ADDTYPE_OK");
     if (!addTypeOk) {
+      // The preamble's own $script:U32_ERR capture rides the failure line
+      // (capped ~300 chars by AddTypeErr) — the next field report says WHY
+      // csc failed on that machine, not just THAT it failed.
+      const detail = addType.stdout.match(/ADDTYPE_FAIL:(.*)/);
+      const why = detail !== null && detail[1] !== undefined && detail[1].trim() !== "" ? ` (${detail[1].trim().slice(0, 200)})` : "";
       notes.push(
-        "Add-Type -TypeDefinition (the csc compile behind list_apps/list_windows) failed — enumeration falls back to Get-Process or refuses honestly; the U32 walk is unavailable",
+        `Add-Type -TypeDefinition (the REAL U32 preamble compile — the same TypeDefinition every window/input capsule rides) failed${why}: the U32 helper will not compile on this host — list_apps/list_windows fall back to the UIA/Get-Process walks, and raw input, activation, and the U32 window paths refuse honestly. window_action still acts through the UIAutomation fallback`,
       );
     }
     return {
@@ -1865,7 +2039,17 @@ Write-Output ($p.X.ToString() + "," + $p.Y.ToString())
       screenCapture: "granted", // GDI capture needs no grant; UIPI caveats ride notes
       backendKind: "windows",
       addTypeOk,
-      notes: notes.length > 0 ? notes : ["UIPI: elevated targets are refused before dispatch (fail-closed, not silent)"],
+      // R131-C (C7 — the capability honesty): the probe does NOT verify the
+      // web-tree depth of a Chromium page; for a USER-launched browser the
+      // tree may expose only the window node. Never claimed as verified.
+      webTree: "unverified",
+      notes:
+        notes.length > 0
+          ? notes
+          : [
+              "UIPI: elevated targets are refused before dispatch (fail-closed, not silent)",
+              "webTree: unverified — the probe does not walk a browser's web accessibility tree; a USER-launched Chromium may expose only the window node (launch browsers via open_application so --force-renderer-accessibility rides, or read the page through the embedded browser)",
+            ],
     };
   },
 };
@@ -2404,6 +2588,82 @@ function psVkArray(name: string, vks: number[]): string {
 export function chromiumBrowserExecutable(name: string): boolean {
   const base = (name.trim().replace(/\\/g, "/").split("/").pop() ?? "").toLowerCase();
   return base === "msedge" || base === "msedge.exe" || base === "chrome" || base === "chrome.exe";
+}
+
+/* ── R131-C (C2): the Windows app-identity RESOLVER (pure, testable) ─────────
+ * The owner's field ledger: open_application('edge browser') and
+ * open_application('Microsoft Edge') both failed "The system cannot find the
+ * file specified" — Start-Process -FilePath "<name>" VERBATIM resolves only
+ * PATH + shell-registered names, and msedge is on neither. The resolver's
+ * CANDIDATE GENERATION lives here in pure TypeScript (pinned by construction
+ * — PowerShell never runs in this sandbox); the capsule-side execution
+ * (Get-Command → registry App Paths → Get-StartApps → raw name) lives in
+ * launch(). */
+interface CanonicalWindowsApp {
+  /** The exe identity Windows knows the app by (App Paths key / PATH name). */
+  exe: string;
+  /** The Get-StartApps display-name needle (the store-app fallback leg). */
+  startAppNeedle: string;
+}
+
+/**
+ * R131-C (C2): the canonical alias map — the human names the owner actually
+ * says, mapped to the exe identity Windows registers. Deliberately SMALL:
+ * the browsers the a11y flag cares about + the common shells/utilities;
+ * everything else resolves through Get-Command/App Paths/Get-StartApps on
+ * its own name. This is app-IDENTITY resolution, never app SUBSTITUTION —
+ * "edge browser" and "Microsoft Edge" are the same installed Edge.
+ */
+const WINDOWS_APP_ALIASES: Record<string, CanonicalWindowsApp> = {
+  edge: { exe: "msedge.exe", startAppNeedle: "edge" },
+  "edge browser": { exe: "msedge.exe", startAppNeedle: "edge" },
+  "microsoft edge": { exe: "msedge.exe", startAppNeedle: "edge" },
+  msedge: { exe: "msedge.exe", startAppNeedle: "edge" },
+  "msedge.exe": { exe: "msedge.exe", startAppNeedle: "edge" },
+  chrome: { exe: "chrome.exe", startAppNeedle: "chrome" },
+  "google chrome": { exe: "chrome.exe", startAppNeedle: "chrome" },
+  "chrome.exe": { exe: "chrome.exe", startAppNeedle: "chrome" },
+  notepad: { exe: "notepad.exe", startAppNeedle: "notepad" },
+  explorer: { exe: "explorer.exe", startAppNeedle: "file explorer" },
+  "file explorer": { exe: "explorer.exe", startAppNeedle: "file explorer" },
+  cmd: { exe: "cmd.exe", startAppNeedle: "command prompt" },
+  "command prompt": { exe: "cmd.exe", startAppNeedle: "command prompt" },
+  powershell: { exe: "powershell.exe", startAppNeedle: "powershell" },
+  pwsh: { exe: "pwsh.exe", startAppNeedle: "powershell" },
+};
+
+/** The resolver's pure output: what launch()'s capsule will try, in order. */
+export interface WindowsAppResolution {
+  /** Ordered exe candidates for the Get-Command + App Paths legs. */
+  candidates: string[];
+  /** The Get-StartApps name needle (the store-app fallback leg). */
+  startAppNeedle: string;
+}
+
+/**
+ * R131-C (C2): generate the resolver's candidates for a launch name —
+ * the canonical alias's exe FIRST (when the name is one Windows knows a
+ * human spelling for), then the name with an .exe suffix (the App Paths
+ * convention), then the raw name (Get-Command / the last-resort verbatim
+ * Start-Process). Case-insensitively deduped, order preserved. Exported for
+ * the construction pins.
+ */
+export function windowsAppResolverCandidates(rawName: string): WindowsAppResolution {
+  const trimmed = rawName.trim();
+  const key = trimmed.toLowerCase().replace(/\s+/g, " ");
+  const alias = WINDOWS_APP_ALIASES[key];
+  const candidates: string[] = [];
+  if (alias !== undefined && alias.exe.toLowerCase() !== key) candidates.push(alias.exe);
+  if (!/\.exe$/i.test(trimmed)) candidates.push(`${trimmed}.exe`);
+  candidates.push(trimmed);
+  const seen = new Set<string>();
+  const unique = candidates.filter((c) => {
+    const k = c.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return { candidates: unique, startAppNeedle: alias?.startAppNeedle ?? key };
 }
 
 export function windowsElementActionScript(

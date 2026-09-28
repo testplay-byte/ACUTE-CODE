@@ -1304,28 +1304,33 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // EXACT title/pid from the observation tools (never guessed), and
     // window_action is the one tool for window-state requests (the old
     // "minimize the current window" task had no actor at all).
-    ident("- **Windows:** identify windows by exact title/pid from list_apps / windows_overview — never guess. window_action (minimize/maximize/restore/focus/close; target:'foreground' = the current window) is the actor for window-state requests.");
-    ident("- **Observe → act → verify:** get_app_state (the accessibility tree) before acting; element targets ({type:\"element\"}) are the primary path — semantic and background-safe (never steals the user's focus).");
+    ident("- **Windows:** identify windows by exact title/pid from list_apps / windows_overview — never guess. window_action (minimize/maximize/restore/focus/close; target:'foreground' = current window) is the window-state actor.");
+    ident("- **Observe → act → verify:** get_app_state (the accessibility tree) before acting; element targets ({type:\"element\"}) are the primary path — semantic and background-safe (no focus steal).");
     // ROUND-66 (R66, B2): find_elements — big Chromium trees need SEARCH,
     // not full-tree reads and not screenshots. (R94-G: tightened — the
     // kind-filter/index details live in the tool's own schema.)
     ident("- **Big apps** (browsers, Edge, VS Code): find_elements {appRef, query} searches the accessibility tree by name substring — locate one control in a huge window that way, then left_click its index.");
     // ROUND-68 (R68-C): the Chromium poke made browser trees REAL — teach
     // the model that BROWSER CONTENT IS SEARCHABLE.
-    ident("- **Browser content is searchable:** Edge/Chrome pages expose their real element tree — find_elements {appRef, query:'Wikipedia'} finds links/buttons by name (the web tree is activated automatically before every walk); element targets are the primary path for browser content, screenshots only when the tree genuinely misses.");
+    // ROUND-131 (R131-C, C7 — the capability honesty): the ONE honest line
+    // about the cold-start Chromium caveat — a USER-launched browser may
+    // expose only the window node (Chromium builds the web tree lazily);
+    // the prompt's other lines were tightened to pay for it (no pinned
+    // substring changed).
+    ident("- **Browser content is searchable:** Edge/Chrome pages expose their real element tree — find_elements {appRef, query:'Wikipedia'} finds links/buttons by name (the web tree is activated automatically before every walk); element targets are the primary path for browser content, screenshots only when the tree genuinely misses. A USER-launched browser may expose only the window node — launch it via open_application (the a11y flag rides) or read the page with browser_control.");
     // ROUND-67 (R67, the owner's Tab-walk technique): the element-discovery
     // fallback when find_elements/screenshot loops stall.
-    ident("- **Tab-walk discovery:** when find_elements comes back empty, press key \"tab\" repeatedly — each key receipt names the focused element (Tab walks the focusable controls one by one).");
+    ident("- **Tab-walk discovery:** when find_elements comes back empty, press key \"tab\" repeatedly — each key receipt names the focused element.");
     // ROUND-69 (R69, task 4-c-2): CHAIN DISCIPLINE — the receipt's
     // observation IS the verification read; the screenshot-after-action
     // loop is structurally unfed (R69) and must stay untaught here.
-    ident("- **Chain discipline:** every action receipt carries an observation — a fresh frame id, screenChanged, focusedElementName, and the active app's title. Do not screenshot or zoom after acting: read the receipt's observation instead.");
+    ident("- **Chain discipline:** every action receipt carries an observation — fresh frame id, screenChanged, focusedElementName, active app title. Do not screenshot or zoom after acting: read the receipt's observation instead.");
     ident("- If the observation says the screen is unchanged, your action may not have registered — check focusedElementName, adjust strategy, or switch to element targeting. Element-first beats coordinate guessing.");
     ident("- After navigation (Enter, links), call wait() — its receipt reports what changed while you waited. A screen_unchanged refusal means: act or change strategy — do not re-capture.");
-    ident("- Coordinates ({type:\"coordinate\"}) are the fallback: pixels copied unchanged from the latest returned raster. Never pre-scale, never attach app_ref/state_id to them.");
+    ident("- Coordinates ({type:\"coordinate\"}) are the fallback: pixels copied unchanged from the latest raster. Never pre-scale, never attach app_ref/state_id to them.");
     ident("- Receipts are not promises: action_sent=true means it may have happened — the receipt's observation is the first verification read; an external oracle (file exists, exit code) is the strong one.");
-    ident("- Refusals are self-teaching: read the named reason and follow its recovery (frontmost_pid_mismatch → the auto-activation failed: re-observe, retry once; a dead app_ref → re-resolve it from list_apps — pids change). Never replay a sent action; two identical failures = change strategy.");
-    ident("- Raw input (typing, keys, coordinate clicks) needs the target frontmost — the raw-input tools activate their target app automatically (a mismatch refusal means the activation itself failed); set_value is the preferred write.");
+    ident("- Refusals are self-teaching: read the named reason and follow its recovery (frontmost_pid_mismatch → the auto-activation failed: re-observe, retry once; a dead app_ref → re-resolve it from list_apps). Never replay a sent action; two identical failures = change strategy.");
+    ident("- Raw input (typing, keys, clicks) needs the target frontmost — the raw-input tools activate their target app automatically (a mismatch refusal means the activation itself failed); set_value is the preferred write.");
     ident("- Destructive/hard-to-reverse actions need explicit user go-ahead. NEVER type credentials. stop_computer_control ends the session — no further computer-use calls after it.");
     // ROUND-65 (R65): the SURFACE BOUNDARY — the owner's live 0.63.0 run had
     // the agent narrate an embedded-browser_navigation as "I opened Edge on

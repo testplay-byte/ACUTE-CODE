@@ -294,3 +294,125 @@ describe("ROUND-68 (R68-C): describeRaster retries 429/5xx (terminal 4xx fails f
     expect([...VISION_RETRY_DELAYS_MS]).toEqual([1500, 3000]);
   });
 });
+
+/* ── R131-C (C4): the vision catch — TRANSPORT throws never escape ───────────
+ * The owner's ledger: a dead relay endpoint surfaced as a bare
+ * "TypeError: fetch failed" — attempt() handled only HTTP-level failures,
+ * so a DNS / connection-refused throw ESCAPED describeRaster entirely (no
+ * retry ladder, no recovery hint, violating the relay's own never-throws
+ * contract). A transport throw is now a RETRYABLE failure envelope naming
+ * the cause; a 200 whose body is unparseable is terminal (retrying the
+ * same broken body is pointless) — never a thrown TypeError either way. */
+describe("R131-C (C4): describeRaster catches the TRANSPORT throws (never a bare TypeError)", () => {
+  /** A fetch that THROWS the first `throwTimes` calls, then succeeds. */
+  function throwingFetch(throwTimes: number, successBody: string, cause = "fetch failed"): VisionFetch & { callCount: () => number } {
+    let calls = 0;
+    const fetchImpl: VisionFetch = async (_url, _init) => {
+      calls += 1;
+      if (calls <= throwTimes) throw new TypeError(cause);
+      return new Response(successBody, { status: 200, statusText: "OK" });
+    };
+    return Object.assign(fetchImpl, { callCount: () => calls });
+  }
+
+  const COMPLETION = JSON.stringify({ choices: [{ message: { content: "the dialog after the blip" } }] });
+
+  it("a transport throw ONCE then success → the retry ladder RECOVERS the observation (the envelope is retryable)", async () => {
+    setVisionRetryDelaysForTest([0, 0]);
+    try {
+      const fetch = throwingFetch(1, COMPLETION);
+      const keyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER_VISION: "k" });
+      const result = await describeRaster(
+        { db, keyring, fetchImpl: fetch },
+        { mode: "separate", providerId: "openrouter", modelId: "m" },
+        { imageBase64: "aa==", instruction: "x" },
+      );
+      expect("error" in result).toBe(false);
+      if (!("error" in result)) expect(result.text).toContain("the dialog after the blip");
+      expect(fetch.callCount()).toBe(2); // the throw was RETRIED, not fatal
+    } finally {
+      resetVisionRetryDelaysForTest();
+    }
+  });
+
+  it("a transport throw on EVERY attempt → vision_request_failed with the honest cause line (never a thrown TypeError)", async () => {
+    setVisionRetryDelaysForTest([0, 0]);
+    try {
+      const fetch = throwingFetch(5, COMPLETION, "getaddrinfo ENOTFOUND relay.example");
+      const keyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER_VISION: "k" });
+      const result = await describeRaster(
+        { db, keyring, fetchImpl: fetch },
+        { mode: "separate", providerId: "openrouter", modelId: "m" },
+        { imageBase64: "aa==", instruction: "x" },
+      );
+      expect("error" in result && result.code).toBe("vision_request_failed");
+      if ("error" in result) {
+        expect(result.error).toContain("vision relay transport failure");
+        expect(result.error).toContain("getaddrinfo ENOTFOUND relay.example");
+        expect(result.error).toContain("(retryable)");
+      }
+      expect(fetch.callCount()).toBe(3); // attempt + both retries engaged
+    } finally {
+      resetVisionRetryDelaysForTest();
+    }
+  });
+
+  it("a NON-Error throw is stringified honestly (never 'undefined' or '[object Object]')", async () => {
+    setVisionRetryDelaysForTest([0, 0]);
+    try {
+      let calls = 0;
+      const fetchImpl: VisionFetch = async () => {
+        calls += 1;
+        throw "the socket died"; // eslint-disable-line no-restricted-syntax -- the pin: a non-Error throw
+      };
+      const keyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER_VISION: "k" });
+      const result = await describeRaster(
+        { db, keyring, fetchImpl: fetchImpl },
+        { mode: "separate", providerId: "openrouter", modelId: "m" },
+        { imageBase64: "aa==", instruction: "x" },
+      );
+      expect("error" in result && result.code).toBe("vision_request_failed");
+      if ("error" in result) expect(result.error).toContain("vision relay transport failure: the socket died");
+      expect(calls).toBe(3);
+    } finally {
+      resetVisionRetryDelaysForTest();
+    }
+  });
+
+  it("a 200 whose body is UNPARSEABLE JSON → the TERMINAL honest envelope (retrying a broken body is pointless)", async () => {
+    setVisionRetryDelaysForTest([0, 0]);
+    try {
+      const fetch = makeFetch("<html>gateway garbage</html>", 200);
+      const keyring = new ProviderKeyring({ ACUTE_PROVIDER_OPENROUTER_VISION: "k" });
+      const result = await describeRaster(
+        { db, keyring, fetchImpl: fetch },
+        { mode: "separate", providerId: "openrouter", modelId: "m" },
+        { imageBase64: "aa==", instruction: "x" },
+      );
+      expect("error" in result && result.code).toBe("vision_request_failed");
+      if ("error" in result) expect(result.error).toContain("vision relay returned an unparseable body");
+      expect(fetch.calls).toHaveLength(1); // terminal — never retried
+    } finally {
+      resetVisionRetryDelaysForTest();
+    }
+  });
+
+  it("the ANTHROPIC wire format rides the SAME transport catch (both formats share attempt())", async () => {
+    setVisionRetryDelaysForTest([0, 0]);
+    try {
+      const anthropicBody = JSON.stringify({ content: [{ type: "text", text: "recovered via anthropic" }] });
+      const fetch = throwingFetch(1, anthropicBody, "connect ECONNREFUSED");
+      const keyring = new ProviderKeyring({ ACUTE_PROVIDER_ANTHROPIC: "ak" });
+      const result = await describeRaster(
+        { db, keyring, fetchImpl: fetch },
+        { mode: "main", providerId: "anthropic", modelId: "claude-sonnet-4" },
+        { imageBase64: "aGVsbG8=", instruction: "what do you see" },
+      );
+      expect("error" in result).toBe(false);
+      if (!("error" in result)) expect(result.text).toBe("recovered via anthropic");
+      expect(fetch.callCount()).toBe(2);
+    } finally {
+      resetVisionRetryDelaysForTest();
+    }
+  });
+});

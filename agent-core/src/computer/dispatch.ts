@@ -136,6 +136,7 @@ import {
   appCandidates,
   appNotFound,
   capabilityFailClosed,
+  consecutiveCapabilityFailures,
   elementStaleChanged,
   elementStaleSuperseded,
   frameChanged,
@@ -242,6 +243,19 @@ const SPAM_CONSECUTIVE_LIMIT = 3;
  * full-frame Hamming > 4 bits vs the pre-action frame (the spam guard's
  * near-identical bar) means the screen VISIBLY changed. */
 const OBSERVATION_CHANGED_HAMMING = 4;
+
+/* ── R131-C (C5): the consecutive-failure circuit breaker ──────────────────
+ * The field ledger's defect: nothing stopped N consecutive
+ * capability_fail_closed / frontmost_pid_mismatch refusals with zero
+ * progress (only the screenshot-spam guard existed, and it guarded
+ * captures, not failures). Three consecutive failures of the class with no
+ * successful action in between trips the breaker; the next call answers
+ * the honest stop-and-report refusal. Exported for the pin tests. */
+export const CONSECUTIVE_FAILURE_BREAKER_LIMIT = 3;
+/** The refusal codes the breaker counts (the ledger's zero-progress class —
+ * the capability itself failing closed, or the foreground gate refusing
+ * after a failed auto-activation). */
+const BREAKER_REFUSAL_CODES = new Set<Refusal["error"]>(["capability_fail_closed", "frontmost_pid_mismatch"]);
 
 /** The R69 auto-refresh outcome that rides the receipt (types.ts Receipt). */
 export interface FrameRefreshInfo {
@@ -358,6 +372,10 @@ export class ComputerDispatcher {
    * suite can run hundreds of dispatches without each paying the real
    * 600ms — production never touches it. */
   observationSettleMs = OBSERVATION_SETTLE_MS;
+  /** R131-C (C5): consecutive capability_fail_closed / frontmost_pid_mismatch
+   * refusals with zero successful actions between (the circuit breaker's
+   * counter — see CONSECUTIVE_FAILURE_BREAKER_LIMIT). */
+  private consecutiveCapabilityFailures = 0;
 
   constructor(opts: DispatcherOptions) {
     this.backend = opts.backend;
@@ -377,6 +395,23 @@ export class ComputerDispatcher {
     // re-observation of a screen that may have changed (attempt-level: a
     // refused mutation resets too — generous, never over-refusing).
     if (MUTATING_TOOLS.has(tool)) this.consecutiveIdenticalCaptures = 0;
+    // R131-C (C5): the consecutive-failure CIRCUIT BREAKER — the field
+    // ledger's defect: nothing stopped N consecutive
+    // capability_fail_closed / frontmost_pid_mismatch refusals with ZERO
+    // progress between them (the model looped observe→refuse→observe→refuse
+    // to the turn's end). After BREAKER_LIMIT consecutive failures of that
+    // class with no successful action in between, the NEXT call answers the
+    // honest stop-and-report refusal BEFORE any backend work runs. Any SENT
+    // action resets the counter (stop_computer_control's receipt counts —
+    // the honest end clears the breaker). Keyed per RUN: the dispatcher is
+    // constructed once per agent turn (createTools), so a new turn starts
+    // clean. Data results (observations) are neutral — the ledger's loop had
+    // plenty of successful observations around its zero-progress failures.
+    const breaker =
+      this.consecutiveCapabilityFailures >= CONSECUTIVE_FAILURE_BREAKER_LIMIT && tool !== "stop_computer_control"
+        ? consecutiveCapabilityFailures(this.consecutiveCapabilityFailures)
+        : null;
+    const breakerRefusal = breaker !== null ? { kind: "refusal" as const, refusal: breaker.refusal } : null;
     // R69 (task 4-c-2): the PRE-STATE for the auto-observation — the
     // frontmost title read BEFORE the action (titleChanged's baseline; the
     // pre-FRAME needs no capture: the last registered frame IS the
@@ -387,12 +422,26 @@ export class ComputerDispatcher {
     // (posture honesty) not a mutation the observe-only posture will refuse.
     const requestedReturnState = args["returnState"] ?? args["return_state"];
     const autoObserve =
+      breakerRefusal === null &&
       OBSERVATION_TOOLS.has(tool) &&
       (requestedReturnState === undefined || requestedReturnState === "compact") &&
       !(MUTATING_TOOLS.has(tool) && !this.allowMutations);
     const preTitle = autoObserve ? await this.frontmostAppState() : null;
     const started = Date.now();
-    const result = await this.route(tool, args);
+    const result = breakerRefusal ?? (await this.route(tool, args));
+    // R131-C (C5): the breaker ACCOUNTING (the breaker's own refusal is not
+    // a capability failure — the count stays at the truth of what happened):
+    //   · a refusal of the BREAKER class increments (the breaker's own
+    //     stop-and-report refusal excepted — it IS the breaker, not a failure);
+    //   · a SENT action resets to zero (progress happened);
+    //   · everything else (data results, other refusal codes) is neutral.
+    if (result.kind === "refusal" && result.refusal.payload?.circuitBreaker === true) {
+      // the breaker's own refusal — no increment, no reset
+    } else if (result.kind === "refusal" && BREAKER_REFUSAL_CODES.has(result.refusal.error)) {
+      this.consecutiveCapabilityFailures += 1;
+    } else if (result.kind === "receipt" && result.receipt.actionSent) {
+      this.consecutiveCapabilityFailures = 0;
+    }
     // R69 (task 4-c-2): attach the auto-observation to SENT action receipts
     // (refusals carry none — nothing happened). Attached BEFORE the audit
     // journal line so the journal records the receipt the model actually
@@ -1895,7 +1944,11 @@ export class ComputerDispatcher {
         refusal: {
           error: "capability_fail_closed",
           message: `focus_window failed on window ${windowId}: ${result.error ?? "unknown error"}`,
-          recovery: "Use a real windowId from windows_overview/list_windows; the window may have closed.",
+          // R131-C (C3): the recovery derives from the ACTUAL error — the old
+          // canned "the window may have closed" line answered U32-unavailable
+          // failures (the Add-Type-dead host) with a WRONG cause. The backend
+          // error names which paths ran (U32 vs the UIA fallback).
+          recovery: focusFailureRecovery(result.error),
           payload: { windowId },
         },
       };
@@ -1972,7 +2025,10 @@ export class ComputerDispatcher {
         refusal: {
           error: "capability_fail_closed",
           message: `window_action '${action}' failed on ${targetDesc}: ${result.error ?? "unknown error"}`,
-          recovery: "Use a real windowId from windows_overview/list_windows; the window may have closed, or (Windows) the Add-Type/csc compile and the UIA fallback are both unavailable — run request_access and read addTypeOk.",
+          // R131-C (C3): derived from the ACTUAL error (the same helper
+          // focus_window rides) — the window-gone hint appears only for the
+          // no-window error class, never as a blanket guess.
+          recovery: windowActionFailureRecovery(action, result.error),
           payload: { action, ...(isForeground ? { target: "foreground" } : { windowId }) },
         },
       };
@@ -2136,7 +2192,13 @@ export class ComputerDispatcher {
         refusal: {
           error: "could_not_launch",
           message: `open_application could not launch '${spec.name ?? spec.bundleId}': ${outcome.error ?? "unknown"}`,
-          recovery: "Verify the EXACT app name/bundle_id the user gave (character-for-character; never translate, shorten, or retry variant spellings), then launch once more via the resolved identity. Do not substitute a different app.",
+          // R131-C (C2/C3): the recovery derives from the ACTUAL resolution
+          // outcome — the old line self-contradicted (it forbade variant
+          // spellings AND instructed a "resolved identity" retry in the same
+          // breath). The backend's error names the identity the resolver chose
+          // and the OS error for it (or the honest no-resolution trail), so
+          // the recovery branches on which world the model is in.
+          recovery: launchFailureRecovery(outcome.error, spec.name),
           payload: { name: spec.name },
         },
       };
@@ -2348,7 +2410,11 @@ export class ComputerDispatcher {
         }
         return { kind: "refusal", refusal: capabilityFailClosed(`hover failed: ${moved.error}`).refusal };
       }
-      return this.applyRefresh({ kind: "receipt", receipt: receipt(true, "accepted", false) }, resolved.refresh);
+      // R131-C (C6): the hover point rides the receipt (the overlay coordinate).
+      return this.applyRefresh(
+        withActionPoint({ kind: "receipt", receipt: receipt(true, "accepted", false) }, resolved.global),
+        resolved.refresh,
+      );
     }
     return this.applyRefresh({ kind: "receipt", receipt: receipt(false, "accepted", false) }, resolved.refresh);
   }
@@ -2371,7 +2437,10 @@ export class ComputerDispatcher {
     // R69: stale frames auto-refresh here (resolveCoordinateAction).
     const resolved = await this.resolveCoordinateAction(targetRes.target);
     if (!resolved.ok) return resolved.refusal;
-    this.session.record("intent", `Scrolling ${direction} at (${targetRes.target.x},${targetRes.target.y})`, "scroll");
+    this.session.record("intent", `Scrolling ${direction} at (${targetRes.target.x},${targetRes.target.y})`, "scroll", {
+      // R131-C (C6): the point as data (the ring's intent detail).
+      point: { x: Math.round(resolved.global.x), y: Math.round(resolved.global.y) },
+    });
     // R68-C: frontmost auto-retry (the frame-owner pid scopes the gate).
     const result = await this.withForegroundRetry(resolved.frame.ownerAtCapture.pid, undefined, () =>
       this.backend.rawScroll(this.run, resolved.global, direction, amount),
@@ -2383,7 +2452,11 @@ export class ComputerDispatcher {
       }
       return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "scroll failed").refusal };
     }
-    return this.applyRefresh({ kind: "receipt", receipt: receipt(true, "accepted", false) }, resolved.refresh);
+    // R131-C (C6): the scroll point rides the receipt (the overlay coordinate).
+    return this.applyRefresh(
+      withActionPoint({ kind: "receipt", receipt: receipt(true, "accepted", false) }, resolved.global),
+      resolved.refresh,
+    );
   }
 
   private async toolDrag(args: Record<string, unknown>): Promise<DispatchResult> {
@@ -2447,7 +2520,12 @@ export class ComputerDispatcher {
     }
 
     if (consumedStateId !== undefined) this.session.markConsumed(consumedStateId);
-    this.session.record("intent", `Dragging to (${toGlobal.x},${toGlobal.y})`, "left_click_drag");
+    this.session.record("intent", `Dragging to (${toGlobal.x},${toGlobal.y})`, "left_click_drag", {
+      // R131-C (C6): the drag's points as data (from + to — the overlay can
+      // animate along the gesture).
+      point: { x: Math.round(fromGlobal.x), y: Math.round(fromGlobal.y) },
+      toPoint: { x: Math.round(toGlobal.x), y: Math.round(toGlobal.y) },
+    });
     // R68-C: frontmost auto-retry — the drag scope's window (element path)
     // or the frame owner (coordinate path) scopes the gate + activation.
     const scopeWindowId = fromRes.target.type === "element" ? this.session.getSnapshot(fromRes.target.stateId)?.snapshot.window.windowId : undefined;
@@ -2462,7 +2540,12 @@ export class ComputerDispatcher {
       return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "drag failed").refusal };
     }
     return this.applyRefresh(
-      { kind: "receipt", receipt: receipt(true, "accepted", false) },
+      withActionPoint(
+        { kind: "receipt", receipt: receipt(true, "accepted", false) },
+        // R131-C (C6): the drag's SOURCE point (the gesture's start marker —
+        // the to-point rides the ring's intent detail as toPoint).
+        fromGlobal,
+      ),
       fromRefresh ?? toRefresh,
     );
   }
@@ -2488,7 +2571,10 @@ export class ComputerDispatcher {
         global = resolved.global;
         pid = resolved.frame.ownerAtCapture.pid;
       }
-      this.session.record("intent", `Pressing mouse down at (${global.x},${global.y})`, "left_mouse_down");
+      this.session.record("intent", `Pressing mouse down at (${global.x},${global.y})`, "left_mouse_down", {
+        // R131-C (C6): the point as data (the ring's intent detail).
+        point: { x: Math.round(global.x), y: Math.round(global.y) },
+      });
       // R68-C: frontmost auto-retry (element path: the snapshot's window;
       // coordinate path: the frame owner).
       const scopeWindowId = targetRes.target.type === "element" ? this.session.getSnapshot(targetRes.target.stateId)?.snapshot.window.windowId : undefined;
@@ -2503,7 +2589,8 @@ export class ComputerDispatcher {
         return { kind: "refusal", refusal: capabilityFailClosed(result.error ?? "mouse down failed").refusal };
       }
       this.session.holdButton({ pid, windowId: 0 }, global);
-      return { kind: "receipt", receipt: receipt(true, "accepted", false) };
+      // R131-C (C6): the press point rides the receipt (the overlay coordinate).
+      return withActionPoint({ kind: "receipt", receipt: receipt(true, "accepted", false) }, global);
     }
     // UP: cleanup-release only (doc 02 §3.9) — must follow OUR down.
     const held = this.session.takeHeldForRelease();
@@ -2896,13 +2983,19 @@ export class ComputerDispatcher {
    * element's click/verify counters advance (the receipt's
    * targetVerificationStatus is the oracle: "matched" (semantic paths) or
    * "unverified" (element-routed raw clicks — the click still counts).
+   *
+   * R131-C (C6): the element's CENTER rides the receipt as its point (when
+   * the snapshot carried bounds) — the overlay coordinate for semantic
+   * presses, set_value writes, and selects, the same truth the raw-click
+   * path stamps.
    */
   private elementReceipt(
     scope: { snapshot: Snapshot; element: Element; window: WindowScope },
     status: Receipt["targetVerificationStatus"],
   ): DispatchResult {
     this.recordElementOutcome(scope, status);
-    return { kind: "receipt", receipt: receipt(true, "accepted", false, status) };
+    const center = elementCenter(scope.element);
+    return withActionPoint({ kind: "receipt", receipt: receipt(true, "accepted", false, status) }, center);
   }
 
   /** R93: recordActionOutcome's dispatcher wrapper (db-optional, throw-proof). */
@@ -2977,6 +3070,10 @@ export class ComputerDispatcher {
       "intent",
       `Clicking ${button === "right" ? "right" : ""}(${global.x},${global.y})${element ? ` — '${element.name}'` : ""}`,
       button === "right" ? "right_click" : "left_click",
+      // R131-C (C6): the point as DATA on the ring's intent record too — the
+      // polled monitor side sees the same structured coordinate the SSE frame
+      // carries (the label always had it as text).
+      { point: { x: Math.round(global.x), y: Math.round(global.y) } },
     );
     // R68-C (C2): the frontmost auto-retry — the OLD plain gate refusal is
     // replaced by activate + gate-retry ONCE (the frame-owner pid scopes
@@ -2994,10 +3091,13 @@ export class ComputerDispatcher {
     // R69 (4-c-2, D5): element-routed raw clicks (middle/right on element
     // targets, left_click's event path) carry the element's name — the model
     // learns what the click actuated.
+    // R131-C (C6): the click's GLOBAL point rides the receipt (the overlay
+    // coordinate — additive, stamped here so EVERY raw click path gets it).
     const clicked: Receipt = receipt(true, "accepted", false, "unverified");
     if (element !== undefined && element.name.trim() !== "") {
       clicked.hitElementName = element.name.trim().slice(0, 120);
     }
+    clicked.point = { x: Math.round(global.x), y: Math.round(global.y) };
     return { kind: "receipt", receipt: clicked };
   }
 
@@ -3137,6 +3237,8 @@ export class ComputerDispatcher {
     this.selectedDisplay = 1;
     this.consecutiveIdenticalCaptures = 0;
     this.lastCaptureForegroundPid = null;
+    // R131-C (C5): the breaker counter resets with the dispatcher state.
+    this.consecutiveCapabilityFailures = 0;
   }
 }
 
@@ -3144,6 +3246,64 @@ export class ComputerDispatcher {
 
 function parseStrategy(raw: unknown): "auto" | "a11y" | "event" {
   return raw === "a11y" || raw === "event" ? raw : "auto";
+}
+
+/* ── R131-C (C3): the ERROR-DERIVED recoveries ───────────────────────────────
+ * The field ledger's defect: focus_window failed with "U32-unavailable (the
+ * Add-Type helper did not compile)" and the recovery answered "the window may
+ * have closed" — a canned cause that had nothing to do with the actual error.
+ * These helpers derive the recovery from the backend's OWN error text (the
+ * addTypeError threading pattern noAccessibleWindowRefusal established at
+ * R94-E): the window-gone hint appears only for the no-window error class,
+ * the Add-Type/csc hint only for the compile-failure class, and everything
+ * else names the honest unknown. */
+/** Does the error name the Add-Type/csc compile-failure class? */
+function isAddTypeDeadError(error: string): boolean {
+  return /u32-unavailable|add-?type|did not compile|csc/i.test(error);
+}
+
+/** focus_window's recovery, derived from the backend's actual error. */
+function focusFailureRecovery(error: string | undefined): string {
+  const err = error ?? "";
+  if (isAddTypeDeadError(err)) {
+    return "The U32 helper did not compile on this host (run request_access and read addTypeOk) — the UIAutomation SetFocus fallback ran and failed too, as the message says. Report the focus failure to the user with the error text; window_action {action:'focus'} on the same target rides the same fallback and is unlikely to differ.";
+  }
+  if (/no-window/i.test(err)) {
+    return "That windowId resolved to no window — it may have closed. Re-list with windows_overview or list_windows and use a fresh id.";
+  }
+  return "Use a real windowId from windows_overview/list_windows. The message names the actual failure (SetForegroundWindow refused the steal and the UIAutomation SetFocus fallback failed) — an elevated target (uipi_blocked class) or a destroyed window are the usual causes; read it before retrying.";
+}
+
+/** window_action's recovery, derived from the backend's actual error. */
+function windowActionFailureRecovery(action: string, error: string | undefined): string {
+  const err = error ?? "";
+  if (isAddTypeDeadError(err)) {
+    return "The Add-Type/csc compile is dead on this host AND the UIAutomation fallback failed (run request_access and read addTypeOk) — report the failure to the user with the error text; do not retry the same action on this host.";
+  }
+  if (/no-window|no-foreground/i.test(err)) {
+    return "That windowId resolved to no window — it may have closed. Re-list with windows_overview or list_windows and use a fresh id (or target:'foreground').";
+  }
+  if (/window-pattern-unavailable/i.test(err)) {
+    return `The window does not expose the UIA WindowPattern, so ${action} needs the U32 path on this host — run request_access and read addTypeOk; if the compile is dead, report the limitation honestly.`;
+  }
+  return "Use a real windowId from windows_overview/list_windows; the message names the actual OS error — read it before retrying.";
+}
+
+/**
+ * R131-C (C2): open_application's recovery, derived from the resolver's
+ * ACTUAL outcome. The Windows backend's error names either the identity it
+ * resolved and failed on ("resolved 'C:\\...\\msedge.exe' via AppPaths:…
+ * Start-Process failed: …" / the Get-StartApps AUMID variant) or the honest
+ * no-resolution trail. The old line self-contradicted (forbade variant
+ * spellings AND instructed a resolved-identity retry); this one branches on
+ * which world the model is actually in.
+ */
+function launchFailureRecovery(error: string | undefined, name: string | undefined): string {
+  const err = error ?? "";
+  if (/resolved/i.test(err)) {
+    return "The resolver DID land on an installed identity and the message names it plus the OS error — the failure is Windows refusing to start that app (permissions, policy, or a broken install), not a naming miss. Report the resolved identity and error to the user; do not retry the same identity blindly and never substitute a different app.";
+  }
+  return `The resolver found no installed identity for '${name ?? "(no name)"}' (the message lists what was tried: Get-Command, the registry App Paths, Get-StartApps, and the raw name) — the app is likely not installed under that name. Verify the exact app name with the user (or ask for a full path); never substitute a different app.`;
 }
 
 /**
@@ -3164,6 +3324,23 @@ function withHitElementName(
       ...result.receipt,
       hitElementName: hit.name.trim().slice(0, 120),
     },
+  };
+}
+
+/**
+ * R131-C (C6): stamp the action's GLOBAL point onto a receipt (additive) —
+ * the structured coordinate the monitor SSE frames carry so the overlay can
+ * paint the "tapping here" marker (the ring's intent labels always had it
+ * as TEXT ("Clicking (x,y)"); this is the same truth, exposed as data).
+ */
+function withActionPoint(
+  result: DispatchResult,
+  point: { x: number; y: number } | null,
+): DispatchResult {
+  if (result.kind !== "receipt" || point === null) return result;
+  return {
+    ...result,
+    receipt: { ...result.receipt, point: { x: Math.round(point.x), y: Math.round(point.y) } },
   };
 }
 

@@ -121,65 +121,86 @@ export async function describeRaster(
   // Returns the parsed text, a TERMINAL error (no retry), or a RETRYABLE
   // marker: HTTP 429 or 5xx (the rate-limit/overload class the owner's
   // trace hit; every other non-OK — 4xx auth/shape errors — fails fast).
+  //
+  // R131-C (C4 — the vision catch): TRANSPORT throws are caught here too.
+  // The owner's ledger: a dead relay endpoint surfaced as a bare
+  // "TypeError: fetch failed" — attempt() handled only HTTP-level failures,
+  // so a DNS / connection-refused / TLS throw ESCAPED describeRaster
+  // entirely (no retry ladder, no recovery hint, violating the relay's own
+  // never-throws contract). A transport throw is now a RETRYABLE failure
+  // envelope naming the cause — the existing retry ladder engages and the
+  // agent gets the honest "vision relay transport failure" line instead of
+  // a raw TypeError.
   const attempt = async (): Promise<
     { ok: true; text: string } | { ok: false; retryable: boolean; error: string }
   > => {
     let response: Response;
-    if (apiFormat === "anthropic-messages") {
-      response = await fetchImpl(`${baseUrl}/messages`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: config.modelId,
-          max_tokens: 600,
-          system: RELAY_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: request.instruction },
-                {
-                  type: "image",
-                  source: { type: "base64", media_type: "image/png", data: request.imageBase64 },
-                },
-              ],
-            },
-          ],
-        }),
-      });
-    } else {
-      // chat-completions (OpenRouter / OpenAI / Google's compat endpoint).
-      response = await fetchImpl(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: config.modelId,
-          max_tokens: 600,
-          messages: [
-            {
-              role: "system",
-              content: RELAY_SYSTEM_PROMPT,
-            },
-            {
-              role: "user",
-              content: [
-                { type: "text", text: request.instruction },
-                {
-                  type: "image_url",
-                  image_url: { url: `data:image/png;base64,${request.imageBase64}` },
-                },
-              ],
-            },
-          ],
-        }),
-      });
+    try {
+      if (apiFormat === "anthropic-messages") {
+        response = await fetchImpl(`${baseUrl}/messages`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: config.modelId,
+            max_tokens: 600,
+            system: RELAY_SYSTEM_PROMPT,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: request.instruction },
+                  {
+                    type: "image",
+                    source: { type: "base64", media_type: "image/png", data: request.imageBase64 },
+                  },
+                ],
+              },
+            ],
+          }),
+        });
+      } else {
+        // chat-completions (OpenRouter / OpenAI / Google's compat endpoint).
+        response = await fetchImpl(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: config.modelId,
+            max_tokens: 600,
+            messages: [
+              {
+                role: "system",
+                content: RELAY_SYSTEM_PROMPT,
+              },
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: request.instruction },
+                  {
+                    type: "image_url",
+                    image_url: { url: `data:image/png;base64,${request.imageBase64}` },
+                  },
+                ],
+              },
+            ],
+          }),
+        });
+      }
+    } catch (cause) {
+      // The transport itself threw (DNS, connection refused, TLS, the
+      // socket dying mid-request) — retryable: the next attempt may land.
+      const causeText = cause instanceof Error ? cause.message : String(cause);
+      return {
+        ok: false,
+        retryable: true,
+        error: `vision relay transport failure: ${causeText.slice(0, 200)} (retryable)`,
+      };
     }
     if (!response.ok) {
       const detail = (await response.text().catch(() => "")).slice(0, 200);
@@ -191,21 +212,31 @@ export async function describeRaster(
       };
     }
     let text: string;
-    if (apiFormat === "anthropic-messages") {
-      const body = (await response.json()) as { content?: Array<{ type: string; text?: string }> };
-      text = (body.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n").trim();
-    } else {
-      const body = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>;
-      };
-      const content = body.choices?.[0]?.message?.content;
-      if (typeof content === "string") {
-        text = content.trim();
-      } else if (Array.isArray(content)) {
-        text = content.map((c) => c.text ?? "").join("\n").trim();
+    try {
+      if (apiFormat === "anthropic-messages") {
+        const body = (await response.json()) as { content?: Array<{ type: string; text?: string }> };
+        text = (body.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n").trim();
       } else {
-        text = "";
+        const body = (await response.json()) as {
+          choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>;
+        };
+        const content = body.choices?.[0]?.message?.content;
+        if (typeof content === "string") {
+          text = content.trim();
+        } else if (Array.isArray(content)) {
+          text = content.map((c) => c.text ?? "").join("\n").trim();
+        } else {
+          text = "";
+        }
       }
+    } catch (err) {
+      // A 200 whose body is not parseable JSON — terminal (retrying the
+      // same broken body is pointless); honest, never a thrown TypeError.
+      return {
+        ok: false,
+        retryable: false,
+        error: `vision relay returned an unparseable body: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200),
+      };
     }
     if (text === "") {
       return { ok: false, retryable: false, error: "the vision model returned no text" };
