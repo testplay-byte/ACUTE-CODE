@@ -92,8 +92,8 @@ windows-sys = { version = "0.59", features = [
 # TWO webview2_com_sys versions in the graph, and ICoreWebView2 stops being
 # one type (E0308 at the controller cast). The "=0.38.2" pin forces the
 # SAME version wry uses: one sys crate, one windows-core, unified types.
-webview2-com = "=0.38.2"
-windows = { version = "0.61" }
+webview2-com = "0.39"
+windows = { version = "0.62" }
 
 # ROUND-100 (R100-B, ADR-0031): the Linux key store — the freedesktop Secret
 # Service (gnome-keyring/KWallet, encrypted at rest by the desktop keyring

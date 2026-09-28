@@ -1262,6 +1262,13 @@ mod downloads {
                 // docs.rs). wry 0.55.1's own DownloadStarting registration
                 // is the in-tree-family precedent (the same create + `&mut
                 // i64` token form).
+                // R131 gate-fix (the local cross-compile catch): the
+                // handler's closure OWNS its captures (EventClosure's
+                // 'static bound), so `tab_id` moves into it — clone the log
+                // leg's copy BEFORE the move (the E0382 the audits and the
+                // linux-only checks could not see; the windows-target
+                // cargo check caught it).
+                let log_tab_id = tab_id.clone();
                 let handler = DownloadStartingEventHandler::create(Box::new(move |_, args| {
                     download_starting(&app, &tab_id, args)
                 }));
@@ -1271,7 +1278,7 @@ mod downloads {
                 let mut token: i64 = 0;
                 if let Err(e) = core4.add_DownloadStarting(&handler, &mut token) {
                     crate::sidecar::log_line(&format!(
-                        "browser: download pipeline registration failed (tab \"{tab_id}\"): {e}"
+                        "browser: download pipeline registration failed (tab \"{log_tab_id}\"): {e}"
                     ));
                 }
             }
