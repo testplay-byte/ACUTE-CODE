@@ -9,6 +9,43 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
 
+## [0.124.0] — 2026-09-28 — the update calm + the chat fit + the meter's truth + the browser leap
+
+### The update experience calms down (Windows)
+- **Updating no longer flashes terminals everywhere.** The update supervisor's background probes (the 500ms process checks and the completion toast) now run with no console window at all — dozens of flashing black boxes per update are gone.
+- **The update asks for administrator permission when it needs it.** When a silent install is refused (a write-locked target, a protected install path), the installer now retries ONCE with the standard Windows elevation prompt — the OS itself asks you; a healthy per-user update never prompts at all.
+- **Restarting after an update has one owner.** The app's own relauncher and the external supervisor no longer race each other; the launcher's fallback no longer uninstalls and reinstalls twice when one install went wrong — one retry, with a human-readable reason.
+
+### The chat fits the window (desktop)
+- **The conversation column has a real minimum width.** Shrinking the session window now stops at a floor where the composer's toolbar always fits on ONE line — the attach button and the operation-mode picker never jump up to a second row, even while a turn is running with a queued message waiting.
+- **Your sent messages use the space they have.** At the narrow end the bubble now fills the reading column's width (with its normal padding); when the window is wide the cap keeps the left third open as before. The timestamp · copy · revert actions moved BELOW the message (right-aligned, on hover) instead of squeezing it from the left side.
+- **The Scratchpad stays at the bottom when the sidebar is collapsed.** The collapsed rail now shows the Scratchpad as its own dedicated tile at the very bottom — never mixed into the project tiles, never counted in the rail's project cap, no matter how the projects are sorted.
+
+### The context meter tells the truth while the model works (all surfaces)
+- **The live number is the real one.** During a multi-step tool turn the meter used to show the SUM of every internal step's input (~4 steps × 200k read as ~900k "used"); it now shows the newest provider request's own input+output — what a follow-up would actually re-send. The compaction gate reads the same truth, so a long tool turn can no longer trip premature auto-compaction. (Billing keeps the honest sum — two numbers for two purposes.)
+
+### The browser grows up (desktop)
+- **Right-click → Save image as… works.** The embedded browser's native context menu is enabled and downloads flow through a real pipeline into the project's `.acute/downloads/` folder — with the app's own never-overwrite naming and a quiet completion toast in the panel.
+- **The agent can download files itself.** A first-class `download` action fetches a URL with the page's own cookies and user-agent and saves it to the same folder, with a content-type + magic-byte verdict in the result.
+- **The browser panel is drag-resizable.** Grab the right edge, the bottom edge, or a corner; the height you set persists. The webview follows instantly.
+- **Eight tool truths from the field ledger.** A click that triggers navigation now reports success (with the landing URL) instead of "the job vanished"; `wait` succeeds when the URL matches even while the page is still loading (and its timeout says WHICH condition failed); `read_dom` no longer pollutes element text with CSS/JS bodies and can page through long pages (offset/range); `eval`'s "unexpected payload: null" explains itself (the page navigated / the script returned undefined); `type` echoes whether YOU asked for a submit; typos in action names get a "did you mean" hint; page titles arrive natively; and one navigation no longer counts twice in the history.
+
+### The workspace + the agent's own tools (all platforms)
+- **Selecting a folder sets it up properly.** A new project folder gets the app's own hidden workspace — `.acute/` with `downloads/`, `tools/`, `memory/`, and `tmp/` — created idempotently, healed on re-open, never touching your actual files; the file explorer lists `.acute` so you can browse what's yours.
+- **The agent can build tools for itself.** A new built-in skill teaches it to write Python/Node tools into `.acute/tools/`, register them in the tools index, verify them once, and REUSE them whenever the task recurs; project approval rules can now be granted as a prefix (one grant covers a tool with any arguments — the destructive-command safety net is untouched).
+- **The terminal tells the truth about a dead project folder.** A missing working directory now says so by name instead of the baffling "cannot find cmd.exe"; `list_dir` names the directory it listed.
+
+### The computer-use skill gets honest (Windows)
+- **The readiness probe can no longer lie.** The capability probe now compiles the REAL window-management helper (not a trivial test class), so "ready" means ready.
+- **Installed apps resolve by name.** "Edge", "Microsoft Edge", or "edge browser" all find the installed browser (through the alias map, PATH, the registry's App Paths, and the store-apps list).
+- **Failures speak, and futile loops stop.** Window focus works without the compile-dependent path (a UIA fallback); screenshot relay failures name their cause and retry; after three consecutive capability failures with no progress the agent is told to STOP and report instead of hammering; and every action's screen coordinates now flow to the floating monitor (the overlay's backbone).
+
+### The ledger + the theme (all surfaces)
+- **The self-feedback ledger's telemetry no longer lies about why the anchor is missing** — "turn died before first reply" only appears when nothing completed; a mid-compaction checkpoint and a garbage-row tail each say what they are. Ledger entries now classify issues as application defects, model errors, or capability gaps.
+- **Mono Stone's white-on-white is dead.** The three hardcoded white-ink CTAs now derive their ink from the theme's contrast pair; letter tiles pick their ink by the hue's own luminance (amber and lime get dark ink); Mono Stone's recessed surfaces are finally achromatic (neutral grays at the same depth, not warm taupe).
+- **Opening an image in the right sidebar renders PIXELS.** The file viewer and the explorer pane render PNG/JPEG/GIF/WebP through the existing bytes route (loading and failure states included); other binaries get an honest "binary file" notice instead of mojibake.
+- **Mobile tool cards faded to the quiet register** — thinner desaturated family stripes, secondary-text titles, the recessed surface; failures and live work stay full-strength.
+
 ## [0.123.0] — 2026-09-26 — the composer fit + the mobile tool groups + the live meter
 
 ### The chat composer fits (desktop)

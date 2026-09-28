@@ -497,3 +497,26 @@ is the round's OWN gate per the owner's directive. Rust changes
 - The mini-bots architecture is NOT built (the owner's explicit future
   scope) — only the base systems (the workspace, the tools convention,
   the honest capabilities) that it will stand on.
+
+---
+
+## §5 The waves as they landed
+
+- **Wave T** (r131-t @ b52c320) — the context meter's live truth: the finish frame's TWO numbers (the LAST step = context truth → the carriers/anchor/meter/compaction gate; the SUM = billing → totalInputTokens/usage_events); +14 pins; CONTEXT-METER.md amended.
+- **Wave P** (r131-p @ 524122c) — the floor (CHAT_MIN_WIDTH 240→400, measured), the user bubble's actions-below + the width tiers, the Scratchpad rail's dedicated bottom tile + the backend order; +2 root pins +1 core pin; SCREENS/COMPONENTS amended.
+- **Wave U** (r131-u @ 56b6b28) — the update calm: windowsHide on every supervisor spawn, the ONE-retry runas elevation legs (Rust + launcher), the restart ladder's single-owner grace handshake, the launcher's single-retry + opt-in repair; supervisor test 31/31 + launcher 45/45; the Rust legs CI-verified only.
+- **Wave TH** (r131-th @ 93b6b78) — the three white-ink CTAs on the §1d pair, the letter tiles' luminance ink, the mono-neutral surface derivation (data-derived, foreign-id-proven), the FileImagePreview branch in both viewers + the binary guard; +16 pins; design-audit R1 down 2.
+- **Wave B-core** (r131-bc @ c92d00b) — the 8 tool truths (click re-probe, navigation-aware wait, read_dom's innerText+offset cursor, eval diagnostics, type echo, nearest-match, the redirect-collapse window) + the first-class `download` ACTION with the `browser-download` frame + the three-file lockstep; +38 pins; the golden fixture r131.
+- **Wave B-ui** (r131-bu @ 563fe75, orchestrator-completed) — the panel's drag-resize (right/bottom/corner handles + the persisted height), the Rust download pipeline (with_webview + add_DownloadStarting + the context menu + browser_tab_set_download_dir), the title probe, the download toasts, the eval null diagnostics; +67 pins; the Rust legs CI-verified only.
+- **Wave F** (r131-f @ 36f4cf3) — the `.acute/` scaffold (ensureProjectWorkspace: fresh/resume/heal + the marker), the create-tool skill + the approvals prefix tier (denylist-supreme intact), the cwd pre-check + list_dir's path echo; +47 pins; PROJECT-MEMORY/EXTENSIBILITY amended.
+- **Wave C** (r131-c @ a399170, orchestrator-completed) — the real-preamble probe, the app resolver ladder, the CSC-free UIA focus fallback + the honest recoveries, the vision transport catch, the circuit breaker, the SSE frames' points (the overlay's backbone), the capability honesty; +38 pins; PLUS the r127-usage-hourly time-bomb flake fixed (the morning-only failure).
+- **Wave M** (r131-m @ a93eff0) — the mobile tool cards' faded register (1.5px stripes, 0.5 family fade over the well, secondary titles; failures/live full-strength); +7 pins; DESIGN.md §9.
+- **Wave L** (main @ 44d6007, orchestrator inline) — the anchor's four reasons + the telemetry's honest phrases; the reviewer's capability-gap axis; +2 pins.
+- **Wave X** (r131-x, the coherence wave) — the downloads alignment to `.acute/downloads/` (both B paths + the pins + the tree's owner-browsable exception, the F pin retired with the record), the CONTEXT-METER stamp, the frame-union promotion, the overlay's seed (the store/frames carry the points + the pill's coordinate legend), the mobile mono assessment (no hazards).
+
+## §6 The close-out verification
+
+- **The gate stack** (read with the orchestrator's own eyes): root tsc CLEAN · FULL root vitest 298 files / 5,393 tests (5,378 passed + 15 skipped) · agent-core tsc CLEAN · FULL agent-core 170 files / 3,225 tests · mobile tsc CLEAN + CI=1 jest 48 suites / 1,115 tests · eslint 0 · design-audit clean at-or-below baseline · docs:check 285/0/0 · version:check 7/7 at 0.124.0.
+- **THE LIVE BATTERY (the round's own gate — the owner's local-testing directive):** the R120-H battery on the REAL sidecar with the provided OpenRouter key and the free `nvidia/nemotron-3.5-lightning:free` model — TWO real turns through the real SSE pipeline: the default task (create_dir + write_file + read_file, the file verified on disk "hello", the honest final answer, exit path "final answer") PASS, and a custom task (hello.md created + read back + the exact content quoted) PASS-in-substance (the script's hardcoded assertion checked the default file — the tool calls, the frames and the answer prove the work). The item-43 honest-stop law and the meter's live polling proven live.
+- **Honest caveats (pre-declared + discovered):** the Rust legs (update.rs elevation, browser.rs downloads) are cargo-check-verified on CI only (ADR-0012); the Windows COM paths, the UAC flow, the app resolver, the focus fallback and the overlay's desktop rendering verify on the owner's device pass; the desktop mini-window's raster-overlay marker (the full "tapping here" painting) is the flagged next rendering leg — the coordinates + frameId flow end-to-end and the web pill renders the legend; the agent-browser visual walkthrough (the R130-E pattern at full scope) did not fit this session's budget — the UI waves are pin-level verified, with the structural pins (the floor math, the actions-below DOM, the rail tile, the viewer branch) carrying the contracts.
+
