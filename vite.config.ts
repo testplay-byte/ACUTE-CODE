@@ -81,6 +81,19 @@ export default defineConfig({
     //   · maxWorkers 2 — caps the fork pool below the runner's vCPU count,
     //     leaving the main process real headroom (wall-time cost on CI is
     //     the honest price of stability; failures still print full diffs).
-    ...(process.env.CI ? { reporters: ["dot"], maxWorkers: 2 } : {}),
+    //
+    // ROUND-132 (R132-V close, run 36420727066): the patch #2 budget no
+    // longer holds at the suite's grown size — the SAME signature returned
+    // (all 5,392 tests GREEN, one `[vitest-worker]: Timeout calling
+    // "onTaskUpdate"`, exit 1) with maxWorkers 2 in place. The evidence
+    // narrows the mechanism to a MAIN-process stall (no test timed out —
+    // a worker-side sync block would have failed its own testTimeout 30s
+    // first): half the stdout fan-in, half the CPU contention, maximal
+    // headroom for the RPC responder. maxWorkers drops 2 → 1 on CI: the
+    // measured local cost is +33% wall (328s → 438s at 5,460 tests), the
+    // Windows-runner projection ~15→~18min — the honest price of a
+    // deterministic gate (the Release workflow runs this same suite inside
+    // its quality gate; a flake there kills an automated publish).
+    ...(process.env.CI ? { reporters: ["dot"], maxWorkers: 1 } : {}),
   },
 });

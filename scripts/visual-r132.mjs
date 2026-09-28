@@ -202,7 +202,7 @@ for (let i = 0; i < 60; i++) {
     if (/done|failed|complete/i.test(m[1]) && Number(m[2]) > 0) break;
   }
 }
-const liveShot = ab("screenshot", join(REPO, "shots", "r132", "mini-section-live.png"));
+ab("screenshot", join(REPO, "shots", "r132", "mini-section-live.png"));
 await turnPromise;
 // The settled section after the turn fully lands. The turn's WorkingSection
 // mounts COLLAPSED after a watched turn completes (the R37/R132-MA-ui
@@ -217,7 +217,7 @@ await sleep(600);
 const expandClick = ab("eval", "(() => { const btn = document.querySelector('[aria-label$=\"Expand work.\"]'); if (btn) { btn.click(); return 'expanded'; } return 'no-header'; })()");
 await sleep(900);
 const settledProbe = ab("eval", "document.querySelector('[data-testid=mini-agent-section]') ? 'yes:status=' + (document.querySelector('[data-testid=mini-agent-status]')?.textContent ?? '?') : 'no'");
-const settledShot = ab("screenshot", join(REPO, "shots", "r132", "mini-section-settled.png"));
+ab("screenshot", join(REPO, "shots", "r132", "mini-section-settled.png"));
 const settledOk = /yes:/.test(settledProbe.out);
 const turnMiniFrames = turnFrames.filter((f) => String(f?.type).startsWith("mini-agent."));
 if (sawLive && settledOk) {
@@ -232,7 +232,7 @@ if (sawLive && settledOk) {
 // register screenshot. The rows' law is pinned (transcript suites); the
 // screenshot is the eyeball evidence.
 await sleep(500);
-const rowsShot = ab("screenshot", join(REPO, "shots", "r132", "tool-rows.png"));
+ab("screenshot", join(REPO, "shots", "r132", "tool-rows.png"));
 pass("W3", "the tool-row register screenshot captured (tool-rows.png — the no-section law rides the pinned suites; the eyeball evidence lands here)");
 
 // ── W4: the chat floor — the composer at three widths ───────────────────────
