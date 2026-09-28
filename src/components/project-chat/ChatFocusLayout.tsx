@@ -61,23 +61,28 @@ import type { Project } from "../../lib/api";
  * ROUND-131 (R131-P, owner: "we should set a limit to the minimum width of
  * the session window on the PC" — the R51-c toolbar wrap fired at the 240
  * floor and moved the upload button + the operation mode to a second line):
- * the floor rises to the measured ONE-LINE floor for the toolbar's WIDEST
- * anchor state (busy + queue). The measurement, at a 400px chat column:
- * the composer box ≈ 358px (dock pl-3.5 + pr-2.5 = 24, border ≈ 2, toolbar
- * px-2 = 16); the busy anchor's icon-only state (Continue 28 + Stop 28 +
- * Queue 28 + 3 gaps ≈ 92) + the left cluster icon-only (60) + the right
- * cluster at the 358px tier (donut 28 + model 80 + thinking 28 + gaps
- * ≈ 148) ≈ 308px — fits with ≥24px daylight. The idle state fits with
- * ~90px daylight. The queue button is already icon-only at 28px (no label
- * tier to add), so no anchor state exceeds the idle width.
+ * the floor rose to the measured one-line floor for the toolbar's WIDEST
+ * anchor state (busy + queue) — 400.
+ * ROUND-132 (owner: "the minimum chat area width was in place, but… a little
+ * bit too much. It could be made a bit more smaller, like a bit more
+ * flexible"): the floor drops 400 → 360 — measured, not guessed. At a 360px
+ * chat column the composer @container is ≈ 332px, so EVERY collapse tier has
+ * already fired (model logo-only at @max-[350px] — the R89-D2 owner-
+ * sanctioned tier; mode @max-[560px]; thinking @max-[500px]; Continue
+ * @max-[460px]; dock @max-[420px]) and the one-line floor is 242px of
+ * toolbar inner width vs ≈ 316 available (the 360 column minus dock 24 +
+ * borders ≈ 4 + toolbar px-2 16): **74px of daylight, zero new collapse
+ * tiers.** The queue button stays icon-only at 28px (no label tier — the
+ * R131-P audit), so no anchor state exceeds the idle width. The trade-off
+ * the owner accepted with the R89-D2 tier: below a ≈378px column the model
+ * pill is logo-only (the name hidden at the extreme).
  * Feasibility at the Tauri window floor (minWidth 1000): the app sidebar's
  * widest state is the FIXED w-60 (240px; the rail is w-14 = 56), so the
  * ChatFocusLayout container still gets 1000 − 8·2 (shell p-2) − 240 − 8
- * (gap-2) = 736px — the floor's worst row (400 + 13 chrome + 36 sliver =
- * 449) fits with ~287px to spare (a hypothetical 360px sidebar — the
- * wave brief's conservative leg — still lands at 809 < 1000). The floor is
- * always reachable at every window the shell allows. */
-const CHAT_MIN_WIDTH = 400;
+ * (gap-2) = 736px — the floor's worst row (360 + 13 chrome + 36 sliver =
+ * 409) fits with ~327px to spare. The floor is always reachable at every
+ * window the shell allows. */
+const CHAT_MIN_WIDTH = 360;
 /** The resize handle's footprint. */
 const HANDLE_WIDTH = 5;
 /** The gap between the chat card and the sidebar card. R100-D (research
@@ -104,8 +109,8 @@ export function sidebarWidthCap(containerWidth: number): number {
 /** ROUND-43: the chat column's min-width. Hard CHAT_MIN_WIDTH whenever that
  * fits at all (the sidebar yields first — R42). It softens ONLY when the
  * container is so narrow that even floor + chrome + the sidebar's collapse
- * sliver cannot fit (≲449px container with the R131-P 400px floor — was
- * ≲289px at the R87-A1 240px floor): physics wins rather than forcing a
+ * sliver cannot fit (≲409px container with the R132 360px floor — was
+ * ≲449px at the R131-P 400px floor): physics wins rather than forcing a
  * horizontal overflow. Never drops below 160px.
  * Invariant: chatMinWidthFor(w) + CHROME_WIDTH + SIDEBAR_SLIVER_WIDTH ≤ w. */
 export function chatMinWidthFor(containerWidth: number | null): number {

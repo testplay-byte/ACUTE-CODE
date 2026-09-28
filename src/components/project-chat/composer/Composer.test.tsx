@@ -594,7 +594,10 @@ describe("Composer: toolbar inside the box (owner spec B)", () => {
     // area stays as the R51-c absurd-width emergency fallback ONLY.
     // R131-P (the floor round): the ONE-LINE contract is now owned by the
     // LAYOUT FLOOR — ChatFocusLayout's CHAT_MIN_WIDTH rose 240 → 400 (the
-    // measured widest-anchor fit; see its geometry suite), so above the
+    // measured widest-anchor fit; see its geometry suite), then R132
+    // dropped it to 360 (the owner's "a bit more flexible" — at 360 every
+    // collapse tier has fired incl. the model logo-only @max-[350px] tier
+    // and the one-line floor is 242px vs ≈316 available), so above the
     // floor the wrapping area can NEVER be tight enough to wrap: the wrap
     // exists for the sub-floor physics band + the freeform mini windows,
     // never for a draggable PC session window. This structure pin (anchor
@@ -2659,8 +2662,10 @@ describe("Composer: the action anchor + queue-send (ROUND-78 R78-B/R78-D)", () =
     expect(screen.queryByRole("button", { name: "Send message" })).toBeNull();
     // R131-P (the belt-and-braces audit): the QUEUE button is ICON-ONLY at
     // 28px (w-7 h-7, two glyphs, NO label span) — the widest anchor state
-    // (Continue icon-only + Stop + Queue) is exactly the state the 400px
-    // floor was measured against, so no anchor state exceeds the idle
+    // (Continue icon-only + Stop + Queue) is exactly the state the chat
+    // floor was measured against (R131-P 400px; R132 re-measured at the
+    // 360px floor where every pill tier has fired and the one-line floor
+    // is 242px vs ≈316 available), so no anchor state exceeds the idle
     // width and no additional collapse tier was needed on the queue leg.
     expect(queue.className).toContain("w-7");
     expect(queue.className).toContain("h-7");

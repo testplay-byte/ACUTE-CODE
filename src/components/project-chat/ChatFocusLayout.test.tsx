@@ -61,31 +61,32 @@ describe("ChatFocusLayout (Round 33 — headerless chat panel)", () => {
 //      chat-floor(480)+handle+gaps+280 ≈ 771px was the layout's minimum — any
 //      narrower container overflowed (sidebar clipped off-screen).
 
-describe("ChatFocusLayout geometry math (Round 43 + R131-P 400px floor)", () => {
+describe("ChatFocusLayout geometry math (Round 43 + R132 360px floor)", () => {
   it("sidebarWidthCap has NO floor — the sidebar yields before the chat does", () => {
     // Large container: the cap is generous; the sidebar keeps its stored
     // width and the CHAT absorbs the extra space. R87-A1 halved the
     // ROUND-42 480px floor to 240; R131-P raised it 240 → 400 (the measured
-    // one-line floor for the composer toolbar's WIDEST anchor state —
-    // busy: Continue icon-only 28 + Stop 28 + Queue 28 + 3 gaps ≈ 92, plus
-    // the left cluster icon-only 60 + the right cluster at the 358px
-    // composer-box tier ≈ 148 → ≈ 308px inside the ≈ 358px box the 400px
-    // column buys: dock pl-3.5+pr-2.5 = 24, border ≈ 2, toolbar px-2 = 16
-    // — ≥24px daylight; the idle state fits with ~90px). Every cap shrank
-    // by the same 160 the floor grew.
-    expect(sidebarWidthCap(2254)).toBe(1841);
-    expect(sidebarWidthCap(1134)).toBe(721);
+    // one-line floor for the composer toolbar's WIDEST anchor state);
+    // R132 (owner: "a little bit too much… a bit more smaller, like a bit
+    // more flexible") dropped it 400 → 360 — measured: at a 360px column
+    // the composer @container is ≈ 332, every collapse tier has fired
+    // (model logo-only @max-[350px] — the R89-D2 owner-sanctioned tier),
+    // and the one-line floor is 242px of toolbar inner width vs ≈ 316
+    // available — 74px of daylight, zero new collapse tiers. Every cap
+    // grew by the same 40 the floor shrank.
+    expect(sidebarWidthCap(2254)).toBe(1881);
+    expect(sidebarWidthCap(1134)).toBe(761);
     // Tight container (a 900px window with the app sidebar open ≈ 594px):
     // the cap keeps dropping — the R42 280px floor (→ 771px row, overflow)
     // is gone.
-    expect(sidebarWidthCap(594)).toBe(181);
-    // The cap only hits 0 when even the 400px floor + 13px chrome can't
-    // fit (R131-P: was 253-bound at the R87-A1 240px floor; the boundary
-    // moved to 413 = 400 + 13).
+    expect(sidebarWidthCap(594)).toBe(221);
+    // The cap only hits 0 when even the 360px floor + 13px chrome can't
+    // fit (R131-P: was 253-bound at the R87-A1 240px floor, then 413 at
+    // the 400px floor; the R132 boundary moved to 373 = 360 + 13).
     expect(sidebarWidthCap(250)).toBe(0);
-    expect(sidebarWidthCap(413)).toBe(0);
-    expect(sidebarWidthCap(414)).toBe(1);
-    expect(sidebarWidthCap(500)).toBe(87);
+    expect(sidebarWidthCap(373)).toBe(0);
+    expect(sidebarWidthCap(374)).toBe(1);
+    expect(sidebarWidthCap(500)).toBe(127);
   });
 
   it("the row can never overflow: chat floor + chrome + sidebar ≤ container (every width)", () => {
@@ -101,24 +102,24 @@ describe("ChatFocusLayout geometry math (Round 43 + R131-P 400px floor)", () => 
       expect(row).toBeLessThanOrEqual(w);
     }
     // And while the container can fit the chat floor at all, the cap alone
-    // already guarantees it (sidebar yields first — R42 behaviour). R131-P:
-    // floor(400) + chrome(13) fits from 413px up (was 253 at the 240 floor).
-    for (let w = 413; w <= 2560; w += 7) {
-      expect(sidebarWidthCap(w) + 400 + 13).toBeLessThanOrEqual(w);
+    // already guarantees it (sidebar yields first — R42 behaviour). R132:
+    // floor(360) + chrome(13) fits from 373px up (was 413 at the 400 floor).
+    for (let w = 373; w <= 2560; w += 7) {
+      expect(sidebarWidthCap(w) + 360 + 13).toBeLessThanOrEqual(w);
     }
   });
 
-  it("chatMinWidthFor keeps the 400px floor whenever it fits, softening only when physics demands", () => {
-    expect(chatMinWidthFor(null)).toBe(400); // pre-measurement render
-    expect(chatMinWidthFor(2560)).toBe(400);
-    expect(chatMinWidthFor(1134)).toBe(400);
-    expect(chatMinWidthFor(594)).toBe(400); // sidebar yields, NOT the chat
-    expect(chatMinWidthFor(500)).toBe(400); // the one-line floor fits
-    // Below chat(400)+chrome(13)+sidebar-sliver(36)=449 the floor softens so
-    // the row still fits rather than overflowing (R131-P: was 289-bound at
-    // the R87-A1 240px floor — the whole 320px band that used to hold the
-    // hard floor now softens).
-    expect(chatMinWidthFor(440)).toBe(391);
+  it("chatMinWidthFor keeps the 360px floor whenever it fits, softening only when physics demands", () => {
+    expect(chatMinWidthFor(null)).toBe(360); // pre-measurement render
+    expect(chatMinWidthFor(2560)).toBe(360);
+    expect(chatMinWidthFor(1134)).toBe(360);
+    expect(chatMinWidthFor(594)).toBe(360); // sidebar yields, NOT the chat
+    expect(chatMinWidthFor(500)).toBe(360); // the one-line floor fits
+    expect(chatMinWidthFor(440)).toBe(360); // fits: 440 > 409 (R132 band)
+    // Below chat(360)+chrome(13)+sidebar-sliver(36)=409 the floor softens so
+    // the row still fits rather than overflowing (R131-P: was 449-bound at
+    // the 400px floor; R132 moved the band down 40).
+    expect(chatMinWidthFor(390)).toBe(341);
     expect(chatMinWidthFor(320)).toBe(271);
     expect(chatMinWidthFor(280)).toBe(231);
     expect(chatMinWidthFor(200)).toBe(160); // the hard lower bound
@@ -195,29 +196,29 @@ describe("ChatFocusLayout rendered geometry (Round 43)", () => {
       el.className.includes("rounded-2xl"),
     ) as HTMLElement | undefined) ?? null;
 
-  it("chat keeps its 400px floor at every measured width that can fit it", async () => {
+  it("chat keeps its 360px floor at every measured width that can fit it", async () => {
     const projects = await getFixtureProjects().list();
     renderWithProviders(<ChatFocusLayout project={projects[0]} />);
 
     // Wide container: floor applies verbatim.
     act(() => MockResizeObserver.fire(1200));
-    expect(chatCard()?.style.minWidth).toBe("400px");
+    expect(chatCard()?.style.minWidth).toBe("360px");
 
     // 900px-window container (594px): the SIDEBAR yields — the chat floor is
     // untouched (R42 behaviour preserved; the R43 fix removed the 280px cap
     // floor that used to make this container overflow).
     act(() => MockResizeObserver.fire(594));
-    expect(chatCard()?.style.minWidth).toBe("400px");
+    expect(chatCard()?.style.minWidth).toBe("360px");
   });
 
   it("softens the chat floor only when the container cannot fit floor+chrome+sliver", async () => {
     const projects = await getFixtureProjects().list();
     renderWithProviders(<ChatFocusLayout project={projects[0]} />);
-    // R131-P: with the 400px floor, softening only starts below a 449px
-    // container (400 + 13 chrome + 36 sliver — R100-D: 13px chrome). The
-    // softened VALUE at a given sub-449 width is unchanged by the floor
-    // raise (container − 49) — only the band that holds the HARD floor
-    // narrowed.
+    // R131-P: with the 400px floor, softening only started below a 449px
+    // container; R132 moved the band to 409 (360 + 13 chrome + 36 sliver —
+    // R100-D: 13px chrome). The softened VALUE at a given sub-409 width is
+    // unchanged by the floor move (container − 49) — only the band that
+    // holds the HARD floor narrowed by 40.
     act(() => MockResizeObserver.fire(280));
     expect(chatCard()?.style.minWidth).toBe("231px");
   });
