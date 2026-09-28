@@ -13,6 +13,8 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-shell",
+ "webview2-com",
+ "windows",
  "windows-sys 0.59.0",
 ]
 
