@@ -81,3 +81,25 @@ export async function popoutInitialUrl(): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * R132-BD (BD4): the DOWNLOAD DIR `open_browser_window` stashed for this
+ * window's content tab (null when the pop-out was opened without a bound
+ * project). The pop-out has NO project context of its own (popout.html is
+ * a standalone page with no sidecar connection), so the panel — which knows
+ * the bound project — hands the dir over through the command's stash exactly
+ * like the initial URL. Callers register it via nativeTabSetDownloadDir
+ * (validated + recorded + profile-pushed on the Rust side like any tab),
+ * BEFORE the content webview is created when they can, so the download
+ * pipeline + the save-as dialog default right from the first save.
+ */
+export async function popoutDownloadDir(): Promise<string | null> {
+  const invoke = nativeInvoke();
+  if (invoke === null) return null;
+  try {
+    const dir = await invoke("popout_download_dir");
+    return typeof dir === "string" && dir !== "" ? dir : null;
+  } catch {
+    return null;
+  }
+}

@@ -366,10 +366,15 @@ Windows-only, CI-verified per ADR-0012) — both halves land the same
 - **`browser_tab_set_download_dir(tab_id, dir)`** — the command that
   tells Rust where THIS tab's downloads land. Rust never knows the project
   root (the sidecar owns project state), so the PANEL resolves the bound
-  project's `rootPath` and registers `<root>/downloads` on mount; a tab
-  that never got one falls back to the app's download dir. Validation is
-  honest (absolute path required, created recursively); the registration
+  project's `rootPath` and registers `<root>/.acute/downloads` on mount; a
+  tab that never got one falls back to the app's download dir. Validation
+  is honest (absolute path required, created recursively); the registration
   survives webview re-creation (the map is per tab id, not per webview).
+  R132-BD (BD1): the SAME dir is pushed onto the shared profile's
+  `DefaultDownloadFolderPath` (the save-as dialog's default folder), and
+  R132-BD (BD4): the POP-OUT registers its content tab the same way (the
+  panel hands the dir over through `open_browser_window`'s stash — the
+  pop-out page has no project context of its own).
 - **The `DownloadStarting` handler** (registered per webview via
   `with_webview` → ICoreWebView2_4): `Handled(true)` +
   `ResultFilePath = <dir>/<suggested name>` with the attachments-style
@@ -377,9 +382,19 @@ Windows-only, CI-verified per ADR-0012) — both halves land the same
   bytes are not down yet; a fully-consumed series refuses by reusing the
   base name and surfacing the failed write as an interrupted download,
   never a silent overwrite). A `browser-download` TAURI event
-  (`{tab_id, state, path, file_name, received_bytes, total_bytes}` —
-  starting → completed/interrupted) reaches the panel, which presents a
-  quiet fading status line; Rust stays THIN.
+  (`{tab_id, state, path, file_name, received_bytes, total_bytes,
+  interrupt_reason?}` — starting → completed/interrupted) reaches the
+  panel, which presents a quiet fading status line NAMING the interrupt
+  cause (R132-BD BD3: `InterruptReason` read off the operation itself);
+  Rust stays THIN.
+- **R132-BD (BD2) — the SAVE-AS family**: right-click → "Save image as…"
+  rides WebView2's save-as APIs (NOT DownloadStarting — Microsoft scopes
+  the two families explicitly), so the same `with_webview` pass registers
+  `add_SaveAsUIShowing` (ICoreWebView2_25) and steers the dialog's default
+  `SaveAsFilePath` to `<dir>/<suggested name>` — never canceling, never
+  suppressing the dialog: the owner picks the final name, it just STARTS
+  in the project's download folder (and the profile's default folder —
+  BD1 — covers the runtimes without the save-as API).
 - **Non-Windows degrades honestly**: the command answers
   "downloads are Windows-only in this build" and the panel logs it once
   and swallows it — the agent-side `download` ACTION still works

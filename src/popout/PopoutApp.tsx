@@ -11,6 +11,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Copy,
+  Download,
   ExternalLink,
   Globe,
   LoaderCircle,
@@ -23,7 +24,9 @@ import { useThemeStyles } from "../lib/use-theme-styles";
 import {
   nativeTabGo,
   nativeTabSetBounds,
+  nativeTabSetDownloadDir,
   nativeTabSetVisible,
+  onBrowserDownload,
   onBrowserNavigated,
   openExternalUrl,
 } from "../lib/native-browser";
@@ -33,6 +36,7 @@ import { GutterScrollbar } from "./GutterScrollbar";
 import {
   createPopoutTab,
   popoutCurrentUrl,
+  popoutDownloadDir,
   popoutInitialUrl,
   POPOUT_TAB_ID,
 } from "./popout-tab";
@@ -88,6 +92,12 @@ import {
 /** The title-bar identity label (mirrors Rust's .title("Acute Browser")). */
 const POPOUT_IDENTITY = "ACUTE BROWSER";
 
+/** R132-BD (BD4): the download notice's visible duration before it clears
+ * (the panel toast's own 5.5s hold — one quiet line, no fade phase: the
+ * pop-out has no toast machinery, so the notice is a transient status line
+ * in the chrome, deliberately simpler than the panel's fading toast). */
+const DOWNLOAD_NOTICE_MS = 5500;
+
 /** Every window promise is logged and swallowed — chrome never crashes. */
 function onWindowError(action: string): (err: unknown) => void {
   return (err) => {
@@ -97,6 +107,23 @@ function onWindowError(action: string): (err: unknown) => void {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * R132-BD (BD4): compact byte formatting for the download notice line (the
+ * panel toast's own B → KiB → MiB → GiB ladder, restated locally — the
+ * pop-out imports nothing from the panel's module).
+ */
+function formatNoticeBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KiB", "MiB", "GiB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 10 || unit === 0 ? Math.round(value) : Math.round(value * 10) / 10} ${units[unit]}`;
 }
 
 export function PopoutApp() {
@@ -115,6 +142,12 @@ export function PopoutApp() {
   const [currentUrl, setCurrentUrl] = useState<string | null>(null);
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // R132-BD (BD4): the download notice line (the pop-out's own feedback for
+  // its content tab's native downloads — the panel toast's quiet twin). One
+  // line at a time; the timer ref clears the previous hold so a rapid
+  // starting→completed pair never stacks two lines.
+  const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
+  const downloadNoticeTimer = useRef<number | null>(null);
 
   // ── title bar: maximize/restore state (the TitleBar.tsx pattern) ─────────
   // The window can maximize/restore from OUTSIDE our buttons (drag-region
@@ -188,12 +221,36 @@ export function PopoutApp() {
     };
   }, [shell, syncBounds]);
 
+  // ── R132-BD (BD4): the content tab's DOWNLOAD DIR registration ─────────
+  // The pop-out has NO project context of its own (popout.html is a
+  // standalone page — no sidecar connection, no projectId), so the panel
+  // hands the bound project's download dir over through the
+  // `open_browser_window` command's stash, exactly like the initial URL.
+  // Registering it through the normal browser_tab_set_download_dir command
+  // gives the pop-out's saves the FULL pipeline parity: the per-tab dir in
+  // Rust (DownloadStarting routes there), the shared profile's
+  // DefaultDownloadFolderPath (the save-as dialog defaults there), and the
+  // honest non-Windows refusal — logged once, never a crash. Idempotent;
+  // re-read on popout-navigate so a project-switch re-pop-out steers at the
+  // NEW project's folder.
+  const applyDownloadDir = useCallback(async () => {
+    const dir = await popoutDownloadDir();
+    if (dir === null) return;
+    nativeTabSetDownloadDir(POPOUT_TAB_ID, dir).catch(onWindowError("set_download_dir"));
+  }, []);
+
   // ── boot: adopt a surviving webview, or create one at the stashed URL ──
   useEffect(() => {
     if (shell === null) return;
     const windowLabel = shell.window.getCurrentWindow().label;
     let disposed = false;
     (async () => {
+      // R132-BD (BD4): the download dir FIRST — registering it before the
+      // webview exists means Rust's create-time register() pass applies the
+      // profile default folder immediately (both orders work: the command
+      // itself re-applies when the webview already exists).
+      await applyDownloadDir();
+      if (disposed) return;
       // A SURVIVING webview (page reload — the webview belongs to the WINDOW,
       // not this document) keeps its position: adopt it, don't yank the user
       // back to the stashed URL.
@@ -230,7 +287,7 @@ export function PopoutApp() {
     return () => {
       disposed = true;
     };
-  }, [shell, syncBounds]);
+  }, [shell, syncBounds, applyDownloadDir]);
 
   // Navigate = the idempotent create (an existing webview just navigates) —
   // the same contract the panel rides, so the address bar works both before
@@ -265,6 +322,48 @@ export function PopoutApp() {
       // R58-b focus guard: the field is NEVER reset mid-edit.
       if (!urlFocusedRef.current) setDraft(url);
     });
+  }, [shell]);
+
+  // ── R132-BD (BD4): the content tab's DOWNLOAD notices ──────────────────
+  // The Rust browser-download event (the same channel the panel toast
+  // rides) filtered to OUR tab: starting → the quiet "downloading" line,
+  // completed → the saved line with its byte size, interrupted → the
+  // honest failure WITH the reason when the wire carried one (BD3). The
+  // line holds DOWNLOAD_NOTICE_MS then clears; a new event replaces the
+  // hold immediately (the timer ref is always the CURRENT hold).
+  useEffect(() => {
+    if (shell === null) return;
+    const holdNotice = (line: string): void => {
+      if (downloadNoticeTimer.current !== null) {
+        window.clearTimeout(downloadNoticeTimer.current);
+      }
+      setDownloadNotice(line);
+      downloadNoticeTimer.current = window.setTimeout(() => {
+        downloadNoticeTimer.current = null;
+        setDownloadNotice(null);
+      }, DOWNLOAD_NOTICE_MS);
+    };
+    const unlisten = onBrowserDownload((tabId, info) => {
+      if (tabId !== POPOUT_TAB_ID) return;
+      if (info.state === "starting") {
+        holdNotice(`Downloading ${info.fileName}…`);
+      } else if (info.state === "completed") {
+        holdNotice(`Saved ${info.fileName} (${formatNoticeBytes(info.receivedBytes)})`);
+      } else {
+        holdNotice(
+          info.interruptReason !== null
+            ? `${info.fileName} — the download was interrupted — ${info.interruptReason}`
+            : `${info.fileName} — the download was interrupted`,
+        );
+      }
+    });
+    return () => {
+      unlisten();
+      if (downloadNoticeTimer.current !== null) {
+        window.clearTimeout(downloadNoticeTimer.current);
+        downloadNoticeTimer.current = null;
+      }
+    };
   }, [shell]);
 
   // ── open_browser_window / navigate_browser racing this page's mount ────
@@ -537,7 +636,20 @@ export function PopoutApp() {
 
       {/* A failed invoke surfaces HERE, never inside the content area — the
           content webview is a native layer floating ABOVE anything this page
-          renders there, so an in-area banner would be invisible under it. */}
+          renders there, so an in-area banner would be invisible under it.
+          R132-BD (BD4): the download notice rides the SAME slot (a quiet
+          status line under the URL bar — one line, auto-clearing, never an
+          alert). */}
+      {downloadNotice !== null ? (
+        <div
+          role="status"
+          data-testid="popout-download-notice"
+          className="flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-[11px] font-medium bg-well text-secondary"
+        >
+          <Download size={12} className="shrink-0" aria-hidden />
+          <span className="flex-1 truncate">{downloadNotice}</span>
+        </div>
+      ) : null}
       {error !== null ? (
         <div
           role="alert"

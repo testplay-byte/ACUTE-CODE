@@ -529,10 +529,10 @@ export function onBrowserNavigated(callback: (tabId: string, url: string) => voi
 // ── ROUND-131 (R131-B-ui, BU2/BU3): the native downloads ───────────────────
 
 /**
- * R131-B-ui (BU2): `<root>/downloads` — the per-project download dir the
- * Rust `browser_tab_set_download_dir` command records for the tab (the
- * ROUND-115-pinned save location: "when a 'save this download' affordance
- * lands, its save location is pinned: <projectRoot>/downloads/"). Pure;
+ * R131-B-ui (BU2): `<root>/.acute/downloads` — the per-project download dir
+ * the Rust `browser_tab_set_download_dir` command records for the tab (the
+ * R131-X re-point of the ROUND-115 pin; the scaffold
+ * agent-core/src/storage/workspace.ts creates the same folder). Pure;
  * exported for the tests. Handles both separator styles + trailing
  * separators; an empty/blank root answers "/.acute/downloads" (the Rust
  * side's own absolute-path validation is the real gate).
@@ -572,6 +572,12 @@ export function nativeTabSetDownloadDir(tabId: string, path: string): Promise<vo
  * Rust DownloadStarting handler (state "starting") and its StateChanged
  * follower ("completed" / "interrupted") with the bytes read at emit time.
  * Serde keeps snake_case (same convention as `browser-navigated`).
+ *
+ * R132-BD (BD3): `interruptReason` — WHY an interrupted download died, read
+ * off `ICoreWebView2DownloadOperation::InterruptReason` by the Rust
+ * follower and mapped to a short human phrase there. Null when the wire
+ * omitted it (the starting/completed events) or carried a non-string — the
+ * decode degrades to the bare interrupted class, never rejects the event.
  */
 export interface NativeDownloadInfo {
   /** "starting" | "completed" | "interrupted". */
@@ -584,6 +590,9 @@ export interface NativeDownloadInfo {
   receivedBytes: number;
   /** The total when known (WebView2 answers -1 for unknown). */
   totalBytes: number | null;
+  /** R132-BD (BD3): the interrupt CAUSE ("file access denied" / "network
+   * timeout" / …) on the interrupted state; null everywhere else. */
+  interruptReason: string | null;
 }
 
 /**
@@ -604,25 +613,34 @@ export function onBrowserDownload(callback: (tabId: string, info: NativeDownload
     .listen("browser-download", (event) => {
       const payload = event.payload as Record<string, unknown> | null;
       if (payload === null || typeof payload !== "object") return;
-      const { tab_id, state, path, file_name, received_bytes, total_bytes } = payload as {
+      const { tab_id, state, path, file_name, received_bytes, total_bytes, interrupt_reason } = payload as {
         tab_id?: unknown;
         state?: unknown;
         path?: unknown;
         file_name?: unknown;
         received_bytes?: unknown;
         total_bytes?: unknown;
+        interrupt_reason?: unknown;
       };
       if (typeof tab_id !== "string" || typeof state !== "string" || typeof path !== "string") return;
       if (state !== "starting" && state !== "completed" && state !== "interrupted") return;
       if (typeof file_name !== "string") return;
       if (typeof received_bytes !== "number" || !Number.isFinite(received_bytes)) return;
       if (total_bytes !== null && typeof total_bytes !== "number") return;
+      // R132-BD (BD3): the interrupt reason rides snake_case like every
+      // other field and obeys the SAME strict law — absent (the Rust side
+      // serializes it away when None) or null decode to null; a malformed
+      // non-string value drops the event exactly like a malformed
+      // total_bytes would (the bytes/path truth never rides a field it
+      // never validated).
+      if (interrupt_reason !== undefined && interrupt_reason !== null && typeof interrupt_reason !== "string") return;
       callback(tab_id, {
         state,
         path,
         fileName: file_name,
         receivedBytes: Math.max(0, received_bytes),
         totalBytes: typeof total_bytes === "number" && Number.isFinite(total_bytes) && total_bytes >= 0 ? total_bytes : null,
+        interruptReason: typeof interrupt_reason === "string" ? interrupt_reason : null,
       });
     })
     .then((fn) => {
