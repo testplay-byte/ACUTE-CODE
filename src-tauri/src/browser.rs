@@ -228,7 +228,7 @@ static TAB_LAST_BOUNDS: std::sync::LazyLock<std::sync::Mutex<std::collections::H
 /// app ever opened and dies with the process; a fresh boot re-registers via
 /// the panel's mount effect.
 static TAB_DOWNLOAD_DIRS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<String, std::path::PathBuf>,
+    std::sync::Mutex<std::collections::HashMap<String, std::path::PathBuf>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 /// ROUND-131 (R131-B-ui, BU2): the honest non-Windows refusal — the native
