@@ -216,7 +216,12 @@ describe("R129-SF: the prompt's evidence laws (substring pins)", () => {
       expect(system).toContain("CONFIRMED");
       expect(system).toContain("SUSPECTED");
       expect(system).toContain("Never present a SUSPECTED issue as CONFIRMED");
-      expect(system).toContain("ATTRIBUTION LAW (ROUND-129)");
+      // R131-L re-pin: the attribution law gained the CAPABILITY-GAP axis
+      // (the owner: "explaining whether it was an issue on its side,
+      // whether it was a lack in capabilities") — the law's ID spelling
+      // carries the extension.
+      expect(system).toContain("ATTRIBUTION LAW (ROUND-129, extended ROUND-131)");
+      expect(system).toContain("CAPABILITY GAPS");
       expect(system).toContain("attribute it to the model plainly");
       expect(system).toContain("DEDUP LAW (ROUND-129)");
       // The six-heading contract stays byte-exact (no seventh section).

@@ -76,7 +76,7 @@ import { assembleHistory, resolveTurnBudget } from "./runtime.js";
 import {
   applyCompaction,
   findLatestCompaction,
-  providerUsageAnchor,
+  providerUsageAnchorDetailed,
 } from "./compaction.js";
 import { listSessionEvents } from "../storage/sessions.js";
 
@@ -143,7 +143,7 @@ const FEEDBACK_REPORTER_SYSTEM_PROMPT = [
   "",
   "EVIDENCE LAW (ROUND-129): every issue you report must carry its label — CONFIRMED (the failure/misbehavior is directly visible in the transcript: name the tool and quote the essential error text) or SUSPECTED (an inference from what you observed: say what you saw AND what you infer, separately). Never present a SUSPECTED issue as CONFIRMED, and never file an issue with no visible trace at all.",
   "",
-  "ATTRIBUTION LAW (ROUND-129): separate the APPLICATION's defects from the MODEL's own mistakes. When the root cause is the model's own reasoning — a wrong path it chose, an output it misread, a step it skipped — attribute it to the model plainly; do not file it as an application issue. \"Suggested improvements\" address the application (its tools, UI, defaults) only.",
+  "ATTRIBUTION LAW (ROUND-129, extended ROUND-131): separate the APPLICATION's defects from the MODEL's own mistakes from CAPABILITY GAPS. When the root cause is the model's own reasoning — a wrong path it chose, an output it misread, a step it skipped — attribute it to the model plainly; do not file it as an application issue. When the model needed an ability the application does not yet provide — a tool action that does not exist, a limit that stopped legitimate work (a download path, an element exposure, a timeout budget) — file it as a CAPABILITY GAP and name the missing capability concretely in \"Suggested improvements\" (the application's builders act on those). \"Suggested improvements\" address the application (its tools, UI, defaults, capabilities) only.",
   "",
   "DEDUP LAW (ROUND-129): the PREVIOUSLY REPORTED block lists issue headlines from this ledger's most recent entries. Do not re-narrate a listed issue at length — if it recurred, note it as recurring in one line and spend your words on what is NEW or DIFFERENT this time.",
   "",
@@ -223,7 +223,8 @@ function buildContextTelemetryBlock(
   const seqMessages = assembleHistory(db, params.sessionId);
   const meterMessages =
     latestCompact !== null ? applyCompaction(seqMessages, latestCompact) : seqMessages;
-  const anchor = providerUsageAnchor(events, meterMessages);
+  const anchorDetail = providerUsageAnchorDetailed(events, meterMessages);
+  const anchor = anchorDetail.anchor;
 
   const totalsRow = db
     .prepare(
@@ -247,10 +248,20 @@ function buildContextTelemetryBlock(
       ? `${Math.round((totalsRow.cachedInputTokensRaw / totalsRow.inputTokens) * 100)}%`
       : "not reported";
 
+  // R131-L1 (the ledger's honesty): the used-line phrases the anchor's
+  // ACTUAL null cause — the pre-R131 single phrase "turn died before first
+  // reply" was a lie for two of the three causes (the ledger caught it:
+  // "no provider report yet" on a transcript with many provider replies,
+  // because a mid-session compaction had invalidated the anchors and the
+  // re-anchoring call was still in flight).
   const usedLine =
     anchor !== null
       ? `· context used at last provider call: ${anchor} (provider-anchored)`
-      : "· context used at last provider call: no provider report yet (turn died before first reply)";
+      : anchorDetail.reason === "no-usage-rows"
+        ? "· context used at last provider call: no provider report yet (turn died before first reply)"
+        : anchorDetail.reason === "compaction-boundary"
+          ? "· context used at last provider call: not re-anchored since the last compaction (the post-compaction provider call has not completed a usage-bearing reply)"
+          : "· context used at last provider call: the newest provider rows carried no usable usage numbers (skipped as garbage — the last real measurement stands in the meter)";
   const totalsLine =
     totalsRow.requests > 0
       ? `· session totals at write time: ${totalsRow.inputTokens} in / ${totalsRow.outputTokens} out / ${totalsRow.cachedInputTokens} cached (hit rate ${hitRate}) over ${totalsRow.requests} turns`

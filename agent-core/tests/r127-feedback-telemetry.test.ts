@@ -499,4 +499,62 @@ describe("R127-W7: the feedback reporter's context telemetry", () => {
       db.close();
     }
   });
+
+  // ── R131-L1: the anchor-null REASON pins (the ledger's honesty) ──────────
+  // The pre-R131 telemetry collapsed all three null causes into "turn died
+  // before first reply" — a lie for two of them (the ledger's own entry
+  // flagged it: "no provider report yet" on a transcript with many provider
+  // replies, because a mid-session compaction had invalidated the anchors).
+
+  it("R131-L1 — the COMPACTION-BOUNDARY reason: usage rows exist but the newest valid anchor predates the last compaction → the honest re-anchoring line, NEVER \"turn died before first reply\"", async () => {
+    const db = openDatabase(join(tempDir, `${randomUUID()}.db`));
+    try {
+      // A session WITH provider usage, then a compaction AFTER it (the
+      // re-anchoring call has not landed — the mid-turn/stopped shape).
+      const sessionId = sessionWithTranscript(db, {
+        usage: { inputTokens: 50_000, outputTokens: 1_200 },
+      });
+      appendSessionEvent(db, sessionId, {
+        type: "context.compact",
+        agentId: null,
+        payload: { summary: "the seeded summary", throughSeq: 3, droppedMessages: 2, tokensSaved: 40_000 },
+      });
+      const { chat, inputs } = fakeChat(SIX_SECTION_REPORT);
+      await runFeedbackWriter(
+        { db, keyring: new ProviderKeyring(), chat, dataDir },
+        { ...baseWriterParams(sessionId) },
+      );
+      const content = receivedTranscript(inputs);
+      expect(content).toContain(
+        "· context used at last provider call: not re-anchored since the last compaction (the post-compaction provider call has not completed a usage-bearing reply)",
+      );
+      // The lie is dead: the old single phrase never appears when rows exist.
+      expect(content).not.toContain("turn died before first reply");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("R131-L1 — the GARBAGE-ONLY reason: the newest usage rows are all unusable (the abort encoding) → the honest garbage line, NEVER \"turn died before first reply\"", async () => {
+    const db = openDatabase(join(tempDir, `${randomUUID()}.db`));
+    try {
+      // The R130-C1 honest-abort shape: a usage BLOCK exists but its
+      // counters are the fabricated-zero encoding the anchor skips.
+      const sessionId = sessionWithTranscript(db, {
+        usage: { inputTokens: 0, outputTokens: 0 },
+      });
+      const { chat, inputs } = fakeChat(SIX_SECTION_REPORT);
+      await runFeedbackWriter(
+        { db, keyring: new ProviderKeyring(), chat, dataDir },
+        { ...baseWriterParams(sessionId) },
+      );
+      const content = receivedTranscript(inputs);
+      expect(content).toContain(
+        "· context used at last provider call: the newest provider rows carried no usable usage numbers (skipped as garbage — the last real measurement stands in the meter)",
+      );
+      expect(content).not.toContain("turn died before first reply");
+    } finally {
+      db.close();
+    }
+  });
 });

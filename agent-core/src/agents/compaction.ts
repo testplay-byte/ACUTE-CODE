@@ -567,6 +567,44 @@ export function providerUsageAnchor(
   events: readonly SessionEvent[],
   messages: readonly SeqMessage[],
 ): number | null {
+  return providerUsageAnchorDetailed(events, messages).anchor;
+}
+
+/** ROUND-131 (R131-L1, the ledger's honesty): the REASON the anchor is
+ * null — the feedback telemetry used to collapse all three null causes
+ * into the one phrase "turn died before first reply", which was a lie for
+ * two of them (a mid-session compaction with the re-anchoring call still
+ * in flight, and an all-garbage tail). The reasons:
+ *
+ *   · "anchored"               — a valid post-boundary usage row exists
+ *                                (anchor carries the number + tail).
+ *   · "no-usage-rows"          — not ONE usage-bearing assistant event
+ *                                exists (the original phrase's honest
+ *                                domain: nothing completed yet).
+ *   · "compaction-boundary"    — usage rows exist, but every candidate at
+ *                                or newer than the boundary walk was
+ *                                garbage and the walk crossed the
+ *                                boundary — the post-compaction call has
+ *                                not completed a usage-bearing reply
+ *                                (mid-turn checkpoint right after a
+ *                                compaction; the stopped-turn shape).
+ *   · "garbage-only"           — post-boundary usage rows exist but every
+ *                                inputTokens was ≤0/NaN/non-number (the
+ *                                R130-C1 honest-abort encoding — absence,
+ *                                not zero) — the meter's garbage-skip law
+ *                                applies to the telemetry too.
+ *
+ * PURE (events + messages in) — pinnable without a DB. */
+export type ProviderUsageAnchorReason =
+  | "anchored"
+  | "no-usage-rows"
+  | "compaction-boundary"
+  | "garbage-only";
+
+export function providerUsageAnchorDetailed(
+  events: readonly SessionEvent[],
+  messages: readonly SeqMessage[],
+): { anchor: number | null; reason: ProviderUsageAnchorReason } {
   // R128-W8 (D3b): the compaction boundary — the newest VALID
   // context.compact event's own seq. Everything at-or-before it measured
   // the pre-compaction serialization and is not an honest anchor for the
@@ -585,6 +623,7 @@ export function providerUsageAnchor(
     compactEventSeq = ev.seq;
     break;
   }
+  let sawAnyUsageRow = false;
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
     if (ev.type !== "message.assistant") continue;
@@ -593,11 +632,19 @@ export function providerUsageAnchor(
     // remaining (older) candidate is pre-boundary too — the honest "no
     // anchor" (the estimate fallback; callers already handle null for the
     // no-usage-row case).
-    if (compactEventSeq !== null && ev.seq < compactEventSeq) return null;
+    if (compactEventSeq !== null && ev.seq < compactEventSeq) {
+      // R131-L1: the walk crossed the boundary without finding a valid
+      // post-boundary row — whether the post-boundary assistant events were
+      // usage-less (a mid-turn partial) or garbage (the abort encoding),
+      // the honest cause is the same: the re-anchoring call has not
+      // completed a usage-bearing reply since the compaction.
+      return { anchor: null, reason: "compaction-boundary" };
+    }
     const payload =
       ev.payload !== null && typeof ev.payload === "object" ? (ev.payload as Record<string, unknown>) : null;
     const usage =
       payload !== null && typeof payload.usage === "object" ? (payload.usage as Record<string, unknown>) : null;
+    if (usage !== null) sawAnyUsageRow = true;
     const inputTokens = usage?.inputTokens;
     // Garbage rows (NaN / 0 / negative / non-number) are skipped, not trusted
     // — the walk continues to the next older usage-bearing event (the
@@ -605,9 +652,9 @@ export function providerUsageAnchor(
     if (typeof inputTokens !== "number" || !Number.isFinite(inputTokens) || inputTokens <= 0) continue;
     const tail = messages.filter((m) => m.throughSeq > ev.seq);
     const tailTokens = estimateMessageTokens(tail.map(({ role, content }) => ({ role, content })));
-    return inputTokens + tailTokens;
+    return { anchor: inputTokens + tailTokens, reason: "anchored" };
   }
-  return null;
+  return { anchor: null, reason: sawAnyUsageRow ? "garbage-only" : "no-usage-rows" };
 }
 
 /** One round of the conversation — a group of contiguous messages produced
