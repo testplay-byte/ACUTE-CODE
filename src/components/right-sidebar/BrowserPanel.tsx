@@ -89,6 +89,9 @@ import { buildHandsBootScript } from "../../lib/agent-hands-boot";
 // R94-F: the handler answers with BrowserCommandReply values (typed).
 import { registerBrowserCommandHandler, type BrowserCommandReply } from "../../lib/agent-browser-bridge";
 import { nativeTabEval, nativeWindowMetrics } from "../../lib/native-browser";
+// R132-CU2: the evalJob protocol, extracted verbatim to the shared module
+// (one runner, two consumers — this panel + the agent desk's 'popout' answers).
+import { runEvalJobProtocol } from "../../lib/agent-browser-job";
 // ROUND-95 (R95-C): local-path → file:// normalization for the address bar
 // (the Rust gate + the navigate core + the agent tool all accept file:// now).
 import { normalizeBrowserUrl } from "../../lib/local-url";
@@ -1264,150 +1267,11 @@ export function BrowserPanel({
         const script = typeof payload.script === "string" ? payload.script : "";
         if (script === "") return { ok: false, error: "evalJob: empty script" };
         const installScript = typeof payload.installScript === "string" ? payload.installScript : "";
-
-        /** One page-job state ({done,error,result}) → the final reply, or
-         * "live" when the job is still running (keep polling). */
-        type JobState = { done?: unknown; error?: unknown; result?: unknown };
-        const readJobState = (value: unknown): { reply: BrowserCommandReply } | "live" => {
-          const state = (value ?? {}) as JobState;
-          if (typeof state.error === "string" && state.error !== "") {
-            return { reply: { ok: false, error: `the page job failed: ${state.error}` } };
-          }
-          if (state.done === true) {
-            return { reply: { ok: true, data: { ok: true, value: state.result ?? null } } };
-          }
-          return "live";
-        };
-
-        const POLL_MS = 120;
-        // R90-D1: 60s — the human-paced jobs grew (tap → ~1s → typing at
-        // ~150 WPM → ~1s → Enter; a full 600-char type is ~48s of typing
-        // alone). The agent-core sidecar's outer round-trip budget is 75s.
-        const JOB_BUDGET_MS = 60_000;
-        const pollJob = async (): Promise<BrowserCommandReply> => {
-          const deadline = Date.now() + JOB_BUDGET_MS;
-          for (;;) {
-            await new Promise((r) => setTimeout(r, POLL_MS));
-            const poll = await nativeTabEval(
-              tabId,
-              "return window.__acuteJob ? {done: window.__acuteJob.done, error: (window.__acuteJob.error || null), result: (window.__acuteJob.result === undefined ? null : window.__acuteJob.result)} : {done: true, error: 'the job vanished (the page navigated away)'};",
-            );
-            if (poll === null) {
-              return { ok: false, error: "evalJob poll unavailable — the native browser bridge is not present" };
-            }
-            if (!poll.ok) {
-              return { ok: false, error: poll.error ?? "the job state poll failed" };
-            }
-            const state = readJobState(poll.value);
-            if (state !== "live") return state.reply;
-            if (Date.now() > deadline) {
-              return { ok: false, error: "the page job timed out (60s — the page may be wedged)" };
-            }
-          }
-        };
-
-        /** The R94-F recovery probe: did a job actually start under the
-         * mangled/lost start reply? A confirmed job (done OR live) is
-         * recovered; null means "no job — retry the start". */
-        const probeJob = async (): Promise<BrowserCommandReply | null> => {
-          const probe = await nativeTabEval(
-            tabId,
-            "return (window.__acuteJob ? {exists: true, done: window.__acuteJob.done, error: (window.__acuteJob.error || null), result: (window.__acuteJob.result === undefined ? null : window.__acuteJob.result)} : {exists: false});",
-          );
-          if (probe === null || !probe.ok) return null; // can't confirm — treat as none
-          const probed = (probe.value ?? {}) as { exists?: unknown };
-          if (probed.exists !== true) return null;
-          const state = readJobState(probe.value);
-          if (state !== "live") return state.reply; // already done (or failed) — the answer
-          return pollJob(); // live — the normal polling flow takes over
-        };
-
-        // ── the start phase (at most 3 start evals + 1 install) ──────────
-        let starts = 0;
-        let installRan = false;
-        for (;;) {
-          starts += 1;
-          const start = await nativeTabEval(tabId, script);
-          if (start === null) {
-            return { ok: false, error: "evalJob unavailable — the native browser bridge is not present" };
-          }
-          if (!start.ok) {
-            const message = start.error ?? "the page rejected the hands script";
-            // A timed-out start eval gets the same one-shot recovery (the
-            // job may have started while the reply was lost).
-            if (/timed out/i.test(message) && starts < 2) {
-              const recovered = await probeJob();
-              if (recovered !== null) return recovered;
-              continue; // ONE retry
-            }
-            return { ok: false, error: message };
-          }
-          const value = (start.value ?? {}) as { started?: unknown; needInstall?: unknown; error?: unknown };
-          if (typeof value.error === "string" && value.error !== "") {
-            return { ok: false, error: value.error };
-          }
-          if (value.started === true) return pollJob();
-          if (value.needInstall === true) {
-            if (installRan) {
-              return {
-                ok: false,
-                error: `evalJob: the runtime install did not take (the start still reports needInstall) — got: ${JSON.stringify(value).slice(0, 200)}`,
-              };
-            }
-            if (installScript === "") {
-              return {
-                ok: false,
-                error:
-                  "evalJob: the page reports the hands runtime missing, but this command carries no installScript (the agent-core sidecar is older than this app — restart it and retry)",
-              };
-            }
-            // The ONE-TIME install — the same nativeTabEval path, bounded.
-            const install = await withTimeout(nativeTabEval(tabId, installScript), 12_000, "the hands runtime install");
-            if (install === null) {
-              return { ok: false, error: "evalJob install unavailable — the native browser bridge is not present" };
-            }
-            if (!install.ok) {
-              return { ok: false, error: install.error ?? "the page rejected the runtime installer" };
-            }
-            const installed = (install.value ?? {}) as { installed?: unknown };
-            if (installed.installed !== true) {
-              return {
-                ok: false,
-                error: `evalJob: the runtime installer did not report {installed:true} — got: ${JSON.stringify(install.value ?? null).slice(0, 200)}`,
-              };
-            }
-            installRan = true;
-            continue; // re-run the start once (the runtime is now in the page)
-          }
-          // ── R128-W7a (the belt): a NULL start value is the OLD-FORMAT ──
-          // script shape from an OLDER agent-core sidecar — the Rust
-          // browser_tab_eval wrap turns the script into a function BODY, so
-          // a bare IIFE expression statement's value is discarded and the
-          // envelope answers value:null (the {needInstall}/{started}
-          // handshake can never arrive through that shape). Probe the job
-          // once — a job that started anyway is recovered — then retry the
-          // start once before the honest error below.
-          if ((start.value === null || start.value === undefined) && starts < 2) {
-            const recovered = await probeJob();
-            if (recovered !== null) return recovered;
-            continue; // one retry (with install if the retry asks for it)
-          }
-          // UNEXPECTED start payload — the owner's exact v0.91.0 failure.
-          if (starts < 2) {
-            const recovered = await probeJob();
-            if (recovered !== null) return recovered;
-            continue; // one retry (with install if the retry asks for it)
-          }
-          // R128-W7a: report the value the envelope ACTUALLY carried —
-          // `null` for the discarded-value shapes (JSON.stringify(undefined)
-          // is not a string, so both nullish cases render as "null").
-          const gotRaw = JSON.stringify(start.value);
-          const got = typeof gotRaw === "string" ? gotRaw.slice(0, 200) : "null";
-          return {
-            ok: false,
-            error: `evalJob: unexpected start payload (no job started) — got: ${got}`,
-          };
-        }
+        // R132-CU2: the protocol moved to the SHARED agent-browser-job.ts
+        // (one runner, two consumers — this panel handler and the AGENT
+        // DESK's 'popout' answers in agent-browser-bridge.ts); verbatim
+        // extraction, byte-identical behavior for this panel's tabs.
+        return runEvalJobProtocol(tabId, script, installScript);
       }
       // ── ROUND-124 (R124): screenshot_capture — the STAGED high-res grab ─
       // The owner's ruling: “the screenshots… should be taken in a higher

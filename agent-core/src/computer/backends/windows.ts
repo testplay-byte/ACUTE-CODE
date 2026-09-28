@@ -1341,76 +1341,134 @@ Write-Output 'OK'
     // self-contradictory "never retry variant spellings / retry the resolved
     // identity" pair dies at dispatch.ts).
     const candsArray = resolution.candidates.map((c) => `'${escapePsString(c)}'`).join(", ");
+    // R132-CU1 — THE FOREGROUNDING LAUNCH. The owner's field report: Edge
+    // "opened up in the background" — Start-Process starts the process but
+    // Windows gives it no foreground grant, so the window sits behind
+    // whatever the user is doing. Every start now runs with -PassThru into
+    // $p, and a shared EPILOGUE (bottom of the script) polls for the new
+    // process's main window (bounded ~3s — heavy apps take a beat to create
+    // it) and reports pid + hwnd; the TS side then runs the VERIFIED
+    // activation ladder (activate()) so the app the user asked for is the
+    // one they SEE. The structure changed from exit-per-site to
+    // fall-through-$p: each leg only writes its ERR line and exits on
+    // FAILURE; a successful start flows to the epilogue once.
     const script = `
 $name = '${escapePsString(name)}'
 $needle = '${escapePsString(resolution.startAppNeedle)}'
 $cands = @(${candsArray})
+$p = $null
 if ('${escapePsString(spec.bundleId ?? "")}' -ne '') {
   try {
-    Start-Process "shell:AppsFolder\\${spec.bundleId}" -ErrorAction Stop
-    Write-Output 'OK'
-  } catch { Write-Output ("ERR:bundle-id '${escapePsString(spec.bundleId ?? "")}' failed: " + $_.Exception.Message) }
-  exit 0
+    $p = Start-Process "shell:AppsFolder\\${spec.bundleId}" -PassThru -ErrorAction Stop
+  } catch { Write-Output ("ERR:bundle-id '${escapePsString(spec.bundleId ?? "")}' failed: " + $_.Exception.Message); exit 0 }
 }
 $resolved = ''
 $via = ''
-foreach ($c in $cands) {
-  if ($resolved -ne '') { break }
-  try {
-    $cmd = Get-Command $c -ErrorAction Stop
-    if ($null -ne $cmd -and $cmd.Source) { $resolved = [string]$cmd.Source; $via = 'Get-Command:' + $c }
-  } catch {}
-  if ($resolved -eq '') {
-    foreach ($root in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\', 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\')) {
-      try {
-        $ap = Get-ItemProperty -Path ($root + $c) -ErrorAction Stop
-        $def = $ap.'(default)'
-        if ($def) { $resolved = [string]$def; $via = 'AppPaths:' + $c }
-      } catch {}
-      if ($resolved -ne '') { break }
-    }
-  }
-}
-if ($resolved -ne '') {
-  try {
-    Start-Process -FilePath $resolved${a11yArgs} -ErrorAction Stop
-    Write-Output 'OK'
-  } catch {
-    Write-Output ("ERR:resolved '" + $resolved + "' via " + $via + " - Start-Process failed: " + $_.Exception.Message)
-  }
-  exit 0
-}
-try {
-  $apps = Get-StartApps -ErrorAction Stop
-  $match = $null
-  foreach ($a in $apps) {
-    if ($null -ne $a.Name -and $a.Name.ToLower() -eq $needle) { $match = $a; break }
-  }
-  if ($null -eq $match) {
-    foreach ($a in $apps) {
-      if ($null -ne $a.Name -and $a.Name.ToLower().Contains($needle)) { $match = $a; break }
-    }
-  }
-  if ($null -ne $match) {
+if ($null -eq $p) {
+  foreach ($c in $cands) {
+    if ($resolved -ne '') { break }
     try {
-      Start-Process ("shell:AppsFolder\\" + $match.AppID)${a11yArgs} -ErrorAction Stop
-      Write-Output 'OK'
-    } catch {
-      Write-Output ("ERR:resolved '" + $match.Name + "' via Get-StartApps (AUMID " + $match.AppID + ") - Start-Process failed: " + $_.Exception.Message)
+      $cmd = Get-Command $c -ErrorAction Stop
+      if ($null -ne $cmd -and $cmd.Source) { $resolved = [string]$cmd.Source; $via = 'Get-Command:' + $c }
+    } catch {}
+    if ($resolved -eq '') {
+      foreach ($root in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\', 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\')) {
+        try {
+          $ap = Get-ItemProperty -Path ($root + $c) -ErrorAction Stop
+          $def = $ap.'(default)'
+          if ($def) { $resolved = [string]$def; $via = 'AppPaths:' + $c }
+        } catch {}
+        if ($resolved -ne '') { break }
+      }
     }
+  }
+  if ($resolved -ne '') {
+    try {
+      $p = Start-Process -FilePath $resolved${a11yArgs} -PassThru -ErrorAction Stop
+    } catch {
+      Write-Output ("ERR:resolved '" + $resolved + "' via " + $via + " - Start-Process failed: " + $_.Exception.Message)
+      exit 0
+    }
+  }
+}
+if ($null -eq $p) {
+  try {
+    $apps = Get-StartApps -ErrorAction Stop
+    $match = $null
+    foreach ($a in $apps) {
+      if ($null -ne $a.Name -and $a.Name.ToLower() -eq $needle) { $match = $a; break }
+    }
+    if ($null -eq $match) {
+      foreach ($a in $apps) {
+        if ($null -ne $a.Name -and $a.Name.ToLower().Contains($needle)) { $match = $a; break }
+      }
+    }
+    if ($null -ne $match) {
+      try {
+        $p = Start-Process ("shell:AppsFolder\\" + $match.AppID)${a11yArgs} -PassThru -ErrorAction Stop
+      } catch {
+        Write-Output ("ERR:resolved '" + $match.Name + "' via Get-StartApps (AUMID " + $match.AppID + ") - Start-Process failed: " + $_.Exception.Message)
+        exit 0
+      }
+    }
+  } catch {}
+}
+if ($null -eq $p) {
+  try {
+    $p = Start-Process -FilePath $name${a11yArgs} -PassThru -ErrorAction Stop
+  } catch {
+    Write-Output ("ERR:no-resolution (tried Get-Command + registry App Paths for [" + ($cands -join ', ') + "], Get-StartApps for '" + $needle + "', and the raw name) - the app may not be installed: " + $_.Exception.Message)
     exit 0
   }
-} catch {}
-try {
-  Start-Process -FilePath $name${a11yArgs} -ErrorAction Stop
-  Write-Output 'OK'
-} catch {
-  Write-Output ("ERR:no-resolution (tried Get-Command + registry App Paths for [" + ($cands -join ', ') + "], Get-StartApps for '" + $needle + "', and the raw name) - the app may not be installed: " + $_.Exception.Message)
 }
+# R132-CU1: the epilogue — the fresh launch's MAIN WINDOW, polled for
+# (bounded ~3s, 150ms steps; MainWindowHandle is cached per process object,
+# so each step re-reads a FRESH Get-Process). A start that never produces a
+# window (a tray utility, a headless helper, a store app re-hosting under
+# another process) still reports OK with hwnd=0 — the TS side then skips
+# the activation honestly instead of guessing.
+$lp = 0
+if ($null -ne $p -and $p.Id) { $lp = [int]$p.Id }
+$hwnd = [Int64]0
+if ($lp -gt 0) {
+  $deadline = (Get-Date).AddMilliseconds(3000)
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 150
+    try {
+      $fresh = Get-Process -Id $lp -ErrorAction SilentlyContinue
+      if ($null -ne $fresh -and $fresh.MainWindowHandle -and [Int64]$fresh.MainWindowHandle -ne 0) {
+        $hwnd = [Int64]$fresh.MainWindowHandle
+        break
+      }
+    } catch {}
+  }
+}
+Write-Output ("OK pid=" + $lp + " hwnd=" + $hwnd)
 `;
     const result = await run(psCapsule(script, 20000));
     const out = result.stdout.trim();
-    if (out === "OK") return { ok: true, active: spec.activate };
+    if (out.startsWith("OK")) {
+      // R132-CU1: parse the epilogue's honest postcondition line.
+      const pidMatch = /pid=(\d+)/.exec(out);
+      const hwndMatch = /hwnd=(\d+)/.exec(out);
+      const pid = pidMatch !== null ? Number(pidMatch[1]) : 0;
+      const hwnd = hwndMatch !== null ? Number(hwndMatch[1]) : 0;
+      if (pid > 0) {
+        // The fresh launch gets its window RAISED: the capsule already
+        // polled for the main window; the VERIFIED activation ladder (the
+        // U32 AttachThreadInput + minimize/restore escalation, or the UIA
+        // SetFocus fallback on an Add-Type-dead host — the C3 ladder)
+        // takes it the rest of the way. "It opened up in the background"
+        // dies. The poll's hwnd rides through as windowId (activate
+        // re-resolves it only when 0).
+        const act = await this.activate(run, pid, hwnd > 0 ? hwnd : undefined);
+        return { ok: true, pid, active: act.ok ? act.active : false };
+      }
+      // No pid captured (a shell:AppsFolder start without -PassThru data,
+      // or a launcher that re-hosts): the launch succeeded, the
+      // foregrounding honestly did not run.
+      return { ok: true, active: false };
+    }
     return { ok: false, error: `could not launch '${name}': ${out.replace(/^ERR:/, "").trim().slice(0, 300)}` };
   },
 

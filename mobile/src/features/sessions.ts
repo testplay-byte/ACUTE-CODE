@@ -291,6 +291,24 @@ export type TranscriptItem =
     }
   | { kind: "todo"; key: string; todos: TodoItemView[]; source: "agent" | "user" }
   | {
+      /** R132-MA9 — THE MINI AGENT run: one quiet inline row per run (the
+       * skill + the task's headline → the outcome line), riding the R132-MT
+       * no-section register (full mobile sections are a declared future
+       * round). Live frames and the persisted fold mint the SAME shape —
+       * the reload renders byte-identically. */
+      kind: "mini";
+      key: string;
+      miniId: string;
+      skill: string;
+      task: string;
+      status: "running" | "done" | "failed";
+      /** The completed-action count (the count-only quiet register — the
+       * per-action rows are the desktop section's surface, not mobile's). */
+      actions: number;
+      ok: boolean | null;
+      result: string | null;
+    }
+  | {
       kind: "subagent";
       key: string;
       childSessionId: string;
@@ -687,6 +705,58 @@ export function foldSessionEvents(events: SessionEventWire[]): TranscriptItem[] 
         items.push({ kind: "debug", key: `e${event.seq}`, content, live: false });
         break;
       }
+      // ── R132-MA9 — the MINI AGENT fold: the reload renders byte-identically
+      // to the live run (started mints the row, action bumps the count, done
+      // patches terminal IN PLACE — all keyed by miniId; an orphan
+      // action/done drops honestly, exactly like the live reducer).
+      case "mini_agent.started": {
+        const miniId = readString(payload, "miniId");
+        if (miniId === null) break;
+        const item = {
+          kind: "mini" as const,
+          key: `mini-${miniId}`,
+          miniId,
+          skill: readString(payload, "skill") ?? "custom",
+          task: readString(payload, "task") ?? "",
+          status: "running" as const,
+          actions: 0,
+          ok: null,
+          result: null,
+        };
+        const existing = items.findIndex((it) => it.kind === "mini" && it.miniId === miniId);
+        if (existing >= 0) {
+          items[existing] = item;
+        } else {
+          items.push(item);
+        }
+        break;
+      }
+      case "mini_agent.action": {
+        const miniId = readString(payload, "miniId");
+        if (miniId === null) break;
+        const existing = items.findIndex((it) => it.kind === "mini" && it.miniId === miniId);
+        if (existing < 0) break;
+        const it = items[existing];
+        if (it.kind !== "mini") break;
+        items[existing] = { ...it, actions: it.actions + 1 };
+        break;
+      }
+      case "mini_agent.done": {
+        const miniId = readString(payload, "miniId");
+        if (miniId === null) break;
+        const existing = items.findIndex((it) => it.kind === "mini" && it.miniId === miniId);
+        if (existing < 0) break;
+        const it = items[existing];
+        if (it.kind !== "mini") break;
+        const ok = payload.ok === true;
+        items[existing] = {
+          ...it,
+          status: ok ? "done" : "failed",
+          ok,
+          result: readString(payload, "result"),
+        };
+        break;
+      }
       case "todo.update": {
         const todos = readTodoItems(payload.todos);
         if (todos === null) break;
@@ -821,6 +891,35 @@ export type StreamTurnFrame =
       sessionId: string;
       parentSessionId: string;
       inner: unknown;
+    }
+  | {
+      /** R132-MA9 — the MINI AGENT frames (the parent's own SSE, the
+       * mini_agent.* persisted events' live twins): started opens the row
+       * at its dispatch moment, action bumps the count, done patches
+       * terminal IN PLACE. Attributed by miniId — concurrent minis are
+       * SIBLING rows. */
+      type: "mini-agent.started";
+      miniId: string;
+      skill: string;
+      task: string;
+      model: { providerId: string; modelId: string };
+    }
+  | {
+      type: "mini-agent.action";
+      miniId: string;
+      seq: number;
+      tool: string;
+      argsSummary: string;
+      ok: boolean;
+      outputSummary: string | null;
+    }
+  | {
+      type: "mini-agent.done";
+      miniId: string;
+      ok: boolean;
+      result: string;
+      steps: number;
+      usage: { inputTokens: number; outputTokens: number } | null;
     }
   | {
       type: "agent-question";
@@ -1589,6 +1688,61 @@ export function applyLiveFrame(turn: LiveTurn, frame: Record<string, unknown>, n
           now,
         });
       }
+      break;
+    }
+    case "mini-agent.started": {
+      // R132-MA9 — the row OPENS at its dispatch moment (the R68-A
+      // capture-moment law: the user sees the prompt the main agent gave
+      // while the mini works, not only after it finishes). flushAssistant
+      // keeps the row in the turn's emission order (text → mini → text).
+      flushAssistant();
+      const miniId = typeof frame.miniId === "string" ? frame.miniId : "";
+      if (miniId === "") break; // malformed — never a guess
+      const item = {
+        kind: "mini" as const,
+        key: `mini-${miniId}`,
+        miniId,
+        skill: typeof frame.skill === "string" ? frame.skill : "custom",
+        task: typeof frame.task === "string" ? frame.task : "",
+        status: "running" as const,
+        actions: 0,
+        ok: null,
+        result: null,
+      };
+      const existing = items.findIndex((it) => it.kind === "mini" && it.miniId === miniId);
+      if (existing >= 0) {
+        items[existing] = item;
+      } else {
+        items.push(item);
+      }
+      break;
+    }
+    case "mini-agent.action": {
+      // The count-only quiet register: one row per run, the action bumps
+      // the count (the per-action rows are the desktop section's surface).
+      const miniId = typeof frame.miniId === "string" ? frame.miniId : "";
+      const existing = items.findIndex((it) => it.kind === "mini" && it.miniId === miniId);
+      if (existing < 0) break; // an orphan action drops honestly
+      const it = items[existing];
+      if (it.kind !== "mini") break;
+      items[existing] = { ...it, actions: it.actions + 1 };
+      break;
+    }
+    case "mini-agent.done": {
+      // The terminal patch IN PLACE (the R128-W5 out-of-order law: minis
+      // complete in ANY order; the row keyed by miniId never moves).
+      const miniId = typeof frame.miniId === "string" ? frame.miniId : "";
+      const existing = items.findIndex((it) => it.kind === "mini" && it.miniId === miniId);
+      if (existing < 0) break; // an orphan done drops honestly
+      const it = items[existing];
+      if (it.kind !== "mini") break;
+      const ok = frame.ok === true;
+      items[existing] = {
+        ...it,
+        status: ok ? "done" : "failed",
+        ok,
+        result: typeof frame.result === "string" ? frame.result : null,
+      };
       break;
     }
     case "subagent-event": {

@@ -66,7 +66,10 @@ export function computerUseDisabled(): RefusalOutcome {
   return refuse(
     "computer_use_disabled",
     "Computer use is turned OFF in Settings (the master switch).",
-    "Tell the user to enable it in Settings → Computer Use if they want desktop control, then end the turn. Do not retry.",
+    // R132-CU4: yields instead of ending — the model reports and asks how
+    // to proceed (its non-computer tools remain fully usable; the owner's
+    // "it ended the session on a host issue" defect dies at the root).
+    "Tell the user to enable it in Settings → Computer Use if they want desktop control, then ask how to proceed — your other tools still work. Do not retry computer-use calls this turn.",
   );
 }
 
@@ -307,7 +310,9 @@ export function accessibilityDenied(): RefusalOutcome {
   return refuse(
     "accessibility_denied",
     "OS accessibility permission is not granted to the automation process.",
-    "Tell the user authorization is required (macOS: System Settings → Privacy & Security → Accessibility; Linux: AT-SPI availability) and END the turn. Do not call other computer-use actions or retry the probe.",
+    // R132-CU4: yields, never ends — the permission is a human step, the
+    // model hands it over and stays available (non-computer work continues).
+    "Tell the user authorization is required (macOS: System Settings → Privacy & Security → Accessibility; Linux: AT-SPI availability) and ask how to proceed — your non-computer tools still work. Do not call other computer-use actions or retry the probe.",
   );
 }
 
@@ -315,7 +320,9 @@ export function screenRecordingDenied(): RefusalOutcome {
   return refuse(
     "screen_recording_denied",
     "OS screen-recording permission is not granted; captures and window titles are unavailable.",
-    "Tell the user authorization is required (macOS: Privacy & Security → Screen Recording) and end the turn. Continue with accessibility-tree data only if the task allows.",
+    // R132-CU4: yields, never ends — the a11y path survives, and the model
+    // stays available for whatever else the task needs.
+    "Tell the user authorization is required (macOS: Privacy & Security → Screen Recording) and ask how to proceed. Continue with accessibility-tree data only if the task allows; never loop-retry the capture.",
   );
 }
 
@@ -331,7 +338,9 @@ export function requestAccessRefused(why: string): RefusalOutcome {
   return refuse(
     "request_access_refused",
     `The readiness probe itself failed: ${why}`,
-    "Report and end the turn. Do not loop-probe.",
+    // R132-CU4: yields, never ends — the owner's field symptom was the
+    // model reading a probe failure as a reason to kill the session.
+    "Report the failure to the user with the reason and ask how to proceed. Do not loop-probe; do not end the session yourself — a host/permission problem is a human step, not a reason to stop working.",
   );
 }
 

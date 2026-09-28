@@ -252,10 +252,29 @@ const OBSERVATION_CHANGED_HAMMING = 4;
  * successful action in between trips the breaker; the next call answers
  * the honest stop-and-report refusal. Exported for the pin tests. */
 export const CONSECUTIVE_FAILURE_BREAKER_LIMIT = 3;
-/** The refusal codes the breaker counts (the ledger's zero-progress class —
- * the capability itself failing closed, or the foreground gate refusing
- * after a failed auto-activation). */
-const BREAKER_REFUSAL_CODES = new Set<Refusal["error"]>(["capability_fail_closed", "frontmost_pid_mismatch"]);
+/** The refusal codes the breaker counts (the ledger's zero-progress class).
+ * R131-C (C5): the capability itself failing closed, or the foreground gate
+ * refusing after a failed auto-activation.
+ * R132-CU4 — the HOST-ERROR class joins: the owner's sixth-feedback defect
+ * ("it eventually ended the session, and it said that it was a host issue")
+ * — a DEAD HOST CAPABILITY (policy refusal, a failed readiness probe, OS
+ * permissions, an elevated target, an unsupported backend surface) is
+ * zero-progress by definition: retrying the same class never helps, so
+ * after 3 in a row the breaker answers the stop-and-report refusal and the
+ * model YIELDS to the user instead of looping to the turn's end or killing
+ * the session. A different-tool SUCCESS between failures still resets the
+ * counter (the accounting law below) — only a genuinely stuck run trips. */
+const BREAKER_REFUSAL_CODES = new Set<Refusal["error"]>([
+  "capability_fail_closed",
+  "frontmost_pid_mismatch",
+  // ── R132-CU4: the host-error class ──
+  "host_policy_denied",
+  "request_access_refused",
+  "accessibility_denied",
+  "screen_recording_denied",
+  "unsupported_on_backend",
+  "uipi_blocked",
+]);
 
 /** The R69 auto-refresh outcome that rides the receipt (types.ts Receipt). */
 export interface FrameRefreshInfo {
@@ -2203,7 +2222,15 @@ export class ComputerDispatcher {
         },
       };
     }
-    if (spec.activate && outcome.pid !== undefined) {
+    // R132-CU1: the backend's launch already RAISED the fresh window (the
+    // capsule polls for the main window, then the verified activation ladder
+    // runs inside launch()) — outcome.active is the honest postcondition.
+    // The dispatch-level activation survives ONLY as the FALLBACK for a
+    // launch that could not verify (a window that never appeared in the 3s
+    // poll, or a ladder that answered INACTIVE): one more try when the user
+    // explicitly asked activate:true, then the honest receipt. The old
+    // unconditional re-run activated twice for every activate:true call.
+    if (spec.activate && outcome.pid !== undefined && outcome.active !== true) {
       const act = await this.backend.activate(this.run, outcome.pid);
       return {
         kind: "receipt",
@@ -2212,7 +2239,7 @@ export class ComputerDispatcher {
     }
     return {
       kind: "receipt",
-      receipt: receipt(true, "accepted", false),
+      receipt: receipt(true, outcome.active === true ? "accepted" : "possibly_sent", false),
     };
   }
 

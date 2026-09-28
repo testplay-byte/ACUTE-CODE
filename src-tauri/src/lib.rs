@@ -101,6 +101,11 @@ pub fn run() {
             // can register the content tab's downloads into the bound
             // project's <root>/.acute/downloads (pop-out save parity).
             browser::popout_download_dir,
+            // ROUND-132 (R132-CU2): THE AGENT DESK — the pop-out browser
+            // window in desk mode (always-on-top, the right column of the
+            // primary work area): the agent's own visible screen while the
+            // user keeps their desktop.
+            browser::browser_open_desk,
             // ROUND-58 (R58-b): hand a URL to the OS default browser from
             // Rust — the BrowserPanel's "Open externally" affordance
             // (window.open inside WebView2 is silently swallowed by wry).

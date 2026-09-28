@@ -12,14 +12,16 @@
  * create + the pop-out's initial-URL command are popout-specific.
  */
 
-import { nativeInvoke } from "../lib/native-browser";
+import { nativeInvoke, POPOUT_TAB_ID } from "../lib/native-browser";
 
 /**
- * The fixed browser-tab id of the pop-out's content webview — MUST stay in
- * lockstep with POPOUT_TAB_ID in src-tauri/src/browser.rs (the webview label
- * becomes `acute-tab-popout`).
+ * The fixed browser-tab id of the pop-out's content webview — re-exported
+ * from native-browser.ts (its canonical home since R132-CU2, when the main
+ * app's desk wiring needed it too). MUST stay in lockstep with
+ * POPOUT_TAB_ID in src-tauri/src/browser.rs (the webview label becomes
+ * `acute-tab-popout`).
  */
-export const POPOUT_TAB_ID = "popout";
+export { POPOUT_TAB_ID };
 
 /**
  * Create (idempotently) or navigate the pop-out's content webview.

@@ -1422,7 +1422,11 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     // → <projectRoot>/downloads/, dedupe-named, magic-byte verdict) — the
     // three-file lockstep law (schema enum + this section + the browser-use
     // skill body) all move together.
-    ident("- Actions: navigate, back/forward/reload, set_viewport, read (server-side text), read_dom (structured outline — the way to know the page without screenshots; offset/range pages huge pages), click, type (submit:true submits), press_key (Enter = native form submit), source, eval (the fallback when selectors fail), download (saves a file into the project's downloads/ folder — the panel's own save-as), wait, sequence (multi-step chain in one call), screenshot, get_state, wait_for_verification (bot-wall pause). Full parameters live in the browser_control schema.");
+    // R132-CU2 (CU3): `open_desk` joins the vocabulary (the agent desk — the
+    // owner's "a screen to itself" directive: an always-on-top browser window
+    // beside the user's desktop, driven with sessionId 'popout') — the same
+    // three-file lockstep; the depth lives in the schema + the skill body.
+    ident("- Actions: navigate, back/forward/reload, set_viewport, read (server-side text), read_dom (structured outline — the way to know the page without screenshots; offset/range pages huge pages), click, type (submit:true submits), press_key (Enter = native form submit), source, eval (the fallback when selectors fail), download (saves a file into the project's downloads/ folder — the panel's own save-as), wait, sequence (multi-step chain in one call), screenshot, get_state, wait_for_verification (bot-wall pause), open_desk (opens the AGENT DESK — your own always-on-top browser screen beside the user's desktop; drive it with sessionId 'popout'). Full parameters live in the browser_control schema.");
     // ROUND-94 (R94-G): the workflow discipline for the R94-F actions —
     // the owner's field report had the agent clicking into a page that
     // never settled. Navigate → wait → read_dom → verify BEFORE acting.

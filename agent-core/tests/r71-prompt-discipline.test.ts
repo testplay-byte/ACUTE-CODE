@@ -453,11 +453,16 @@ describe("D6: the size budget (the hard bound + the section window)", () => {
     // by the SUB-AGENTS dedup (−253: the good-uses/supervision/report/
     // result lines shed their quick-task overlap — the mini section now
     // carries that half of the teaching) — measured 25,562 on Linux
-    // (Windows rides ~64 bigger ≈ 25,626; the ceiling keeps ~74 of
+    // (Windows rides ~64 bigger ≈ 25,626).
+    // R132-CU2 (CU3 — the agent desk, the owner's "a screen to itself"
+    // directive): 25,700 → 25,800 — the browser-panel vocabulary line gains
+    // the open_desk clause (+134, the three-file lockstep with the schema
+    // enum + the browser-use skill body) — measured 25,713 on Linux
+    // (Windows rides ~64 bigger ≈ 25,777; the ceiling keeps ~87 of
     // headroom on the platform the R113-f pin composes on). Same
-    // precedent as R96-D/R99-G/R117-c/R127-W6/R131-B: the bound moves to
-    // hold the owner's explicit asks rather than degrading them.
-    expect(composed.length).toBeLessThanOrEqual(25_700);
+    // precedent as R96-D/R99-G/R117-c/R127-W6/R131-B/R132-MA: the bound
+    // moves to hold the owner's explicit asks rather than degrading them.
+    expect(composed.length).toBeLessThanOrEqual(25_800);
     expect(composed.length).toBeGreaterThan(15_000); // the R71 delta is real content, not a gutting
   });
 

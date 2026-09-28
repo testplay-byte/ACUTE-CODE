@@ -284,7 +284,7 @@ describe("R113-f P4: the 24,000 budget holds without a bump", () => {
     // to fit — REVERTED: the r71-e3 trigger-rich law pins the description's
     // 300-500-char shape; the BODY is the progressive-disclosure tier, not
     // the list entry.)
-    expect(composed.length).toBeLessThanOrEqual(25_700); // R132: Linux measures 25,579 (the MINI AGENTS section + vocab line, paid by the SUB-AGENTS dedup); Windows rides ~64 bigger ≈ 25,643 — mirrors r71 D6's 25,700 recalibration
+    expect(composed.length).toBeLessThanOrEqual(25_800); // R132-CU2: Linux measures 25,713 (the open_desk vocabulary clause — the agent desk, the owner's "a screen to itself" directive, riding the three-file lockstep); Windows rides ~64 bigger ≈ 25,777 — mirrors r71 D6's recalibration chain (R96-D/R99-G/R127-W6/R131-B/R132-MA) — the bound holds owner-mandated content, never degrades it
     expect(composed.length).toBeGreaterThanOrEqual(23_000);
   });
 });

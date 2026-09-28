@@ -19,6 +19,10 @@ import { getQueryClient } from "./query-client";
 import { useComputerMonitorStore } from "./computer-monitor-store";
 // R62/D8: the agent-browser bridge — browser-command frames dispatch here.
 import { dispatchBrowserCommand } from "./agent-browser-bridge";
+// R132-CU2: the desk's fixed tab id + the native create-or-navigate the
+// browser-navigate frame's popout leg rides (the desk's webview lives in the
+// pop-out window — no mounted panel will ever drive it from the main app).
+import { nativeDeskNavigate, POPOUT_TAB_ID } from "./native-browser";
 // ROUND-65 (R65): agent browser activity bumps the right-sidebar store so
 // the Browser tab AUTO-OPENS (the owner: after approving a browser action,
 // "the browser never even opened"). right-sidebar-store imports nothing
@@ -1985,6 +1989,22 @@ function handleStreamEvent(
   if (event.type === "browser-navigate") {
     if (typeof event.url === "string" && event.url !== "") {
       useBrowserTabStore.getState().applyAgentNavigation(event.tabId, event.url);
+      // R132-CU2: the DESK's content tab ('popout') — no mounted panel will
+      // ever pick up the store slice's navSeq (the webview belongs to the
+      // pop-out window, not the main app's sidebar), so the frame's leg
+      // ACTUATES the webview itself: nativeTabCreate is the Rust family's
+      // idempotent create-or-navigate (an existing webview just navigates —
+      // the same command the panel's own navigation rides). A closed desk
+      // answers the command's honest rejection, logged quietly — the agent
+      // re-opens the desk with open_desk when the task needs it visible.
+      if (event.tabId === POPOUT_TAB_ID) {
+        nativeDeskNavigate(event.url).catch((err: unknown) => {
+          console.warn(
+            "[stream-store] desk navigate failed (the desk window may be closed):",
+            err instanceof Error ? err.message : String(err),
+          );
+        });
+      }
     }
     return;
   }
