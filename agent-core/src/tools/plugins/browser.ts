@@ -148,6 +148,7 @@ const RELATIVE_LOCAL_FILE_RE = /^[^?#]*\.(?:html?|xhtml|svg|md|txt|json|css|js|m
 // pins assert all three carry the same vocabulary).
 export const BROWSER_CONTROL_ACTIONS: readonly string[] = [
   "navigate",
+  "open_desk",
   "back",
   "forward",
   "reload",
@@ -687,7 +688,9 @@ function buildWaitProbeScript(selector: string): string {
  * must not run mid-chain. Kept in sync with the action enum + the schema's
  * steps description. R131-B: `download` is deliberately NOT a step action
  * (a file save is a terminal side effect, not a page-driving step — call it
- * directly; BROWSER_CONTROL_ACTIONS remains the full vocabulary). */
+ * directly; BROWSER_CONTROL_ACTIONS remains the full vocabulary).
+ * R132-CU2: `open_desk` likewise — opening the agent's own window is a
+ * terminal side effect, never a mid-chain page step. */
 const SEQUENCE_STEP_ACTIONS: ReadonlySet<string> = new Set([
   "navigate",
   "back",
@@ -743,7 +746,7 @@ export const browserPlugin: PluginDefinition = {
         // below now carry it). Round-tags stripped from the model-facing
         // text (kept here in the developer comments).
         description:
-          "Control the user's EMBEDDED BROWSER PANEL — a real in-app browser the user watches live. The panel lives INSIDE the app: browser_control never opens the user's real browsers or touches their desktop, and computer-use tools never drive the panel. Input is visible and human-paced (an agent cursor travels to each target; typing lands word-by-word) — pace actions in order like a person, never in parallel. Omit sessionId to drive this chat session's own tab (auto-opened).\n\n" +
+          "Control the user's EMBEDDED BROWSER PANEL — a real in-app browser the user watches live. The panel lives INSIDE the app: browser_control never opens the user's real browsers or touches their desktop, and computer-use tools never drive the panel. Input is visible and human-paced (an agent cursor travels to each target; typing lands word-by-word) — pace actions in order like a person, never in parallel. Omit sessionId to drive this chat session's own tab (auto-opened); action open_desk opens the AGENT DESK — your own always-on-top browser screen beside the user's desktop (drive it with sessionId 'popout').\n\n" +
           "How to work: (1) search first — navigate to a search engine and type the query, never guess URLs; (2) read_dom first on every new page — its structured outline (selectors, positions, pageState) beats screenshots for knowing the page; (3) navigation settles: after navigate/back/forward/reload, wait (or use sequence, which settles automatically) before interacting; (4) forms: typing alone never submits — type with submit:true, press_key Enter, or click the submit button; (5) bot walls: a '⚠ A verification wall' warning means stop retrying and call wait_for_verification while the owner solves it.\n\n" +
           "The panel's page may differ from a fresh fetch (logins, JS): read for text, eval for the live DOM, screenshot for the page's pixels at a fixed 1280×720 capture resolution (it works even while the browser tab is hidden or the user is elsewhere in the app). Full parameters live in the schema; deep craft lives in read_skill \"browser-use\".",
         inputSchema: jsonSchema({
@@ -752,9 +755,10 @@ export const browserPlugin: PluginDefinition = {
             action: {
               type: "string",
               description:
-                "navigate (open an absolute http(s) URL or a local HTML file — a file:// URL or an absolute local path; docs/source hosts like github.com navigate freely, other hosts ask the owner for permission first) | back | forward | reload (walk that tab's history) | set_viewport (resize the display the user sees — responsive-layout testing) | read (fresh server-side text of the current page; local file:// pages read from disk; works in every mode) | read_dom (structured JSON outline of the LIVE page — title, headings, every visible interactive element with a short CSS selector + text/label/value + x/y/w/h, form field names, and pageState: the URL hash/query + the aria-selected/aria-current tab, so after clicking a section or tab you can re-read and confirm it stuck; include 'all' adds the first 80 text paragraphs; offset/range page the interactive elements on huge pages — the result says 'showing elements N..M of T') | source (the live page's raw material: html/css/scripts) | click (the cursor visibly travels, hovers, then a full real pointer sequence fires at the element; the result reports where focus moved — a cheap effect check; native desktop mode only) | type (human word-by-word typing with real per-character events — React/Vue inputs register it, a ~1s beat after the focusing click; newlines become real Shift+Enter newlines, never an implicit submit; capped at 600 chars per call — split longer texts; native desktop mode only) | press_key (Enter inside a form triggers native form submission) | mouse (pointer ops at exact page coordinates from read_dom — the cursor visibly travels every path; native desktop mode only) | eval (run JavaScript inside the live page and get the value back — the page's own state, logins and JS included; native desktop mode only) | download (save a file into the project's downloads/ folder — fetched with the tab's cookies and the panel's user agent, dedupe-named so nothing is ever overwritten, with a content-type + magic-byte verdict in the result; works in every mode) | wait (probe the live page until its conditions hold — always call it after navigate before clicking/typing; a matched selector/urlContains succeeds even while readyState is still loading) | sequence (atomic multi-step chain in ONE call — steps settle automatically between) | screenshot (captures the page at a FIXED 1280×720 capture resolution — independent of the visible browser panel's size, and works even while the tab is hidden or the user is elsewhere in the app; the vision description needs a vision model, the capture alone does not — pass describe:false for the raw image with no vision pass: use that when you only need the image for the user, or when the vision analysis contradicts DOM evidence, since vision output is advisory, never ground truth; prefer read/read_dom unless pixels are the question; native desktop mode only) | get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab) | wait_for_verification (bot-wall pause: a countdown card opens in the owner's chat while they solve it, then the page is re-checked honestly)",
+                "navigate (open an absolute http(s) URL or a local HTML file — a file:// URL or an absolute local path; docs/source hosts like github.com navigate freely, other hosts ask the owner for permission first) | open_desk (open the AGENT DESK — your own always-on-top browser screen pinned to the right column of the user's monitor, at the given URL; the user keeps their desktop while your web work happens on a screen of your own; drive it afterwards with sessionId 'popout') | back | forward | reload (walk that tab's history) | set_viewport (resize the display the user sees — responsive-layout testing) | read (fresh server-side text of the current page; local file:// pages read from disk; works in every mode) | read_dom (structured JSON outline of the LIVE page — title, headings, every visible interactive element with a short CSS selector + text/label/value + x/y/w/h, form field names, and pageState: the URL hash/query + the aria-selected/aria-current tab, so after clicking a section or tab you can re-read and confirm it stuck; include 'all' adds the first 80 text paragraphs; offset/range page the interactive elements on huge pages — the result says 'showing elements N..M of T') | source (the live page's raw material: html/css/scripts) | click (the cursor visibly travels, hovers, then a full real pointer sequence fires at the element; the result reports where focus moved — a cheap effect check; native desktop mode only) | type (human word-by-word typing with real per-character events — React/Vue inputs register it, a ~1s beat after the focusing click; newlines become real Shift+Enter newlines, never an implicit submit; capped at 600 chars per call — split longer texts; native desktop mode only) | press_key (Enter inside a form triggers native form submission) | mouse (pointer ops at exact page coordinates from read_dom — the cursor visibly travels every path; native desktop mode only) | eval (run JavaScript inside the live page and get the value back — the page's own state, logins and JS included; native desktop mode only) | download (save a file into the project's downloads/ folder — fetched with the tab's cookies and the panel's user agent, dedupe-named so nothing is ever overwritten, with a content-type + magic-byte verdict in the result; works in every mode) | wait (probe the live page until its conditions hold — always call it after navigate before clicking/typing; a matched selector/urlContains succeeds even while readyState is still loading) | sequence (atomic multi-step chain in ONE call — steps settle automatically between) | screenshot (captures the page at a FIXED 1280×720 capture resolution — independent of the visible browser panel's size, and works even while the tab is hidden or the user is elsewhere in the app; the vision description needs a vision model, the capture alone does not — pass describe:false for the raw image with no vision pass: use that when you only need the image for the user, or when the vision analysis contradicts DOM evidence, since vision output is advisory, never ground truth; prefer read/read_dom unless pixels are the question; native desktop mode only) | get_state (currentUrl, title, viewport, canBack/canForward + this chat session's tab) | wait_for_verification (bot-wall pause: a countdown card opens in the owner's chat while they solve it, then the page is re-checked honestly)",
               enum: [
                 "navigate",
+                "open_desk",
                 "back",
                 "forward",
                 "reload",
@@ -906,7 +910,7 @@ export const browserPlugin: PluginDefinition = {
             sessionId: {
               type: "string",
               description:
-                "Browser tab session id — omit to target this chat session's own browser tab (one is opened for you if none exists)",
+                "Browser tab session id — omit to target this chat session's own browser tab (one is opened for you if none exists); pass 'popout' to target the AGENT DESK's content tab (the always-on-top screen opened by action open_desk)",
             },
           },
           required: ["action"],
@@ -1203,6 +1207,84 @@ export const browserPlugin: PluginDefinition = {
               return {
                 ok: true,
                 output: `navigated the embedded browser to ${result.entry?.url ?? url} (history index ${result.index}, canBack ${result.canBack}, canForward ${result.canForward}). The panel follows immediately (a browser tab opens in the user's right sidebar if none is open for this session yet).${noTabHint}${note}`,
+              };
+            }
+            // ── ROUND-132 (R132-CU2): THE AGENT DESK ────────────────────────
+            // The owner's directive: "give the agent a custom environment of
+            // itself … like the user can keep on using his computer as he
+            // wishes, but the agent will be given a custom computer kind of
+            // vibe, like a section in the computer or a screen to itself."
+            // open_desk opens the DESK — the pop-out browser window in desk
+            // mode: always-on-top, the right column of the primary monitor's
+            // work area, a distinct title. The user keeps their desktop; the
+            // agent's web work happens on ITS OWN visible screen. The desk's
+            // content webview is a NORMAL TAB (the fixed 'popout' id), so
+            // every browser_control action with sessionId 'popout' drives it
+            // (navigate, read_dom, click, type, screenshot — the full surface).
+            if (action === "open_desk") {
+              let url = typeof input.url === "string" ? input.url.trim() : "";
+              if (url === "") {
+                return { ok: false, output: "browser_control: action open_desk requires url (the desk's opening page)" };
+              }
+              // The SAME URL contract as navigate: local files open
+              // natively, relative paths are refused with the honest hint,
+              // http(s) rides the host gate + the approval channel.
+              const local = normalizeLocalFileUrl(url);
+              if (local !== null) {
+                url = local;
+              } else if (RELATIVE_LOCAL_FILE_RE.test(url)) {
+                return {
+                  ok: false,
+                  output: `browser_control: open_desk — '${url}' is a relative local path; give an absolute path (C:\\Users\\me\\page.html or /home/me/page.html)`,
+                };
+              }
+              if (/^https?:\/\//i.test(url)) {
+                if (toolDeps === undefined) {
+                  return { ok: false, output: "browser_control: open_desk unavailable — no approval channel in this context" };
+                }
+                const approvalDeps = buildApprovalDeps(toolDeps);
+                const gate = await requestWebFetchApproval(approvalDeps, url, "browser_control");
+                if (!gate.allowed) {
+                  return { ok: false, output: `browser_control: open_desk blocked — ${gate.note}` };
+                }
+              }
+              if (toolDeps === undefined || typeof toolDeps.emit !== "function") {
+                return {
+                  ok: false,
+                  output:
+                    "browser_control: open_desk unavailable — no live stream channel in this context (opening the desk window needs the app UI)",
+                };
+              }
+              // The desk's download dir: the bound project's .acute/downloads
+              // (null when no project is bound — the desk then keeps the app
+              // download dir fallback, honestly). The SAME resolution the
+              // download action uses.
+              let downloadDir: string | null = null;
+              if (toolDeps.db !== undefined) {
+                const projectId =
+                  typeof toolDeps.projectId === "string" && toolDeps.projectId !== "" ? toolDeps.projectId : null;
+                if (projectId !== null) {
+                  const project = getProject(toolDeps.db, projectId);
+                  if (project !== undefined) {
+                    downloadDir = join(project.rootPath, ".acute", "downloads");
+                  }
+                }
+              }
+              try {
+                await sendBrowserCommand(toolDeps.emit, sessionId, "open_desk", { url, downloadDir }, 20_000);
+              } catch (error) {
+                return {
+                  ok: false,
+                  output: `browser_control: open_desk failed — ${error instanceof Error ? error.message : String(error)}`,
+                };
+              }
+              return {
+                ok: true,
+                output:
+                  `the agent desk is open at ${url} — an always-on-top browser screen pinned to the right column of the user's monitor. ` +
+                  "The user keeps their desktop; your web work happens on your own visible screen. " +
+                  "Drive it with browser_control sessionId 'popout' (navigate/read_dom/click/type/screenshot — the full surface); the user watches it live. " +
+                  "When the desk's job is done, say so — the user closes it like any window (it is a normal window to them).",
               };
             }
             if (action === "back" || action === "forward" || action === "reload") {

@@ -171,7 +171,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { BookOpenText, Check, ChevronDown, ChevronUp, CircleX, Copy, FileCode2, Globe, ImageIcon, Layers, RefreshCw, Square, SquareTerminal, Wrench } from "lucide-react-native";
+import { BookOpenText, Bot, Check, ChevronDown, ChevronUp, CircleX, Copy, FileCode2, Globe, ImageIcon, Layers, RefreshCw, Square, SquareTerminal, Wrench } from "lucide-react-native";
 import { useTheme, useChatPrefs, type ToolActivity } from "@/design/theme";
 import { decisionHaptic, selectionHaptic, warningHaptic } from "@/design/haptics";
 import { Badge, LiveCaret, Skeleton, TypeBody, TypeCaption, TypeMicro, TypeMono } from "@/design/primitives";
@@ -551,6 +551,8 @@ export function TranscriptItemView({
       return <TodoCard item={item} />;
     case "subagent":
       return <SubAgentCard item={item} live={subagentLive?.[item.childSessionId]} />;
+    case "mini":
+      return <MiniAgentRow item={item} />;
     case "image":
       return <ImageTile item={item} />;
     case "meta":
@@ -3093,6 +3095,65 @@ function ApprovalMini({
 }
 
 // ── meta / error / debug ────────────────────────────────────────────────────
+
+// ── R132-MA9 — the MINI AGENT row ────────────────────────────────────────────
+//
+// The mobile-scale treatment of the desktop's dedicated section: ONE quiet
+// inline row per mini run — the skill word + the task's headline on the
+// title line, the outcome on a clamped tail line when terminal — riding the
+// R132-MT no-section register VERBATIM (transparent row, the 13px icon in a
+// faded family color, secondary-ink mono-medium title, minHeight 32, no
+// card, no well, no stripe). Full mobile sections are a declared future
+// round — this row is the honest minimal surface the plan called for.
+function MiniAgentRow({ item }: { item: TranscriptItem & { kind: "mini" } }) {
+  const { tokens } = useTheme();
+  const running = item.status === "running";
+  const failed = item.status === "failed";
+  // The partner's one color: the accent at the tool-family fade (the same
+  // quiet register the 13px family icons speak).
+  const miniColor = mixHex(tokens.surfaceWell, tokens.accent, TOOL_FAMILY_FADE);
+  const statusInk = failed ? tokens.danger : running ? tokens.running : tokens.textTertiary;
+  const headline = item.task.trim();
+  const title = `mini · ${item.skill}${headline !== "" ? ` — ${headline}` : ""}`;
+  // The terminal tail: the report's first meaningful line, clamped to 2
+  // (the full report lives on the PC's section; the row carries the
+  // outcome, never the whole document).
+  const tail =
+    item.result !== null && item.result.trim() !== ""
+      ? item.result
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line !== "" && !line.startsWith("#"))
+          .slice(0, 2)
+          .join(" ")
+          .slice(0, 160)
+      : null;
+  const steps = item.actions > 0 ? ` · ${item.actions} step${item.actions === 1 ? "" : "s"}` : "";
+  return (
+    <View style={[styles.toolRow, { backgroundColor: "transparent" }]}>
+      <Bot size={13} color={miniColor} strokeWidth={2.2} />
+      <View style={{ flex: 1 }}>
+        <View style={{ flexDirection: "row", alignItems: "baseline", gap: spacing.xs }}>
+          <TypeMono
+            style={{ color: tokens.textSecondary, fontFamily: fontFamily.monoMedium, flex: 1 }}
+            numberOfLines={1}
+            accessibilityLabel={`mini agent (${item.skill}) ${running ? "running" : failed ? "failed" : "done"}: ${headline}`}
+          >
+            {title}
+          </TypeMono>
+          <TypeMicro style={{ color: statusInk }} numberOfLines={1}>
+            {running ? `running${steps}` : failed ? "failed" : "done"}
+          </TypeMicro>
+        </View>
+        {tail !== null ? (
+          <TypeCaption style={{ color: tokens.textTertiary }} numberOfLines={2}>
+            {tail}
+          </TypeCaption>
+        ) : null}
+      </View>
+    </View>
+  );
+}
 
 function MetaLine({ text }: { text: string }) {
   const { tokens } = useTheme();

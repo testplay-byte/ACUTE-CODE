@@ -2529,6 +2529,36 @@ describe("R131-C (C5): the consecutive-failure circuit breaker", () => {
     const after = await d2.dispatch("list_apps", {});
     expect(after.kind).toBe("data"); // no trip — the class is what counts
   });
+
+  // ── ROUND-132 (R132-CU4): the HOST-error class joins the breaker ─────────
+  // The owner's sixth-feedback defect: "it eventually ended the session, and
+  // it said that it was a host issue" — a dead host capability looped to the
+  // turn's end (or killed the session) instead of stopping and yielding.
+  // Three consecutive host-class refusals with zero successful actions now
+  // trip the SAME stop-and-report breaker.
+  it("R132-CU4: the HOST-error class trips the breaker — 3 host_policy_denied refusals (a dead host capability) → the stop-and-report refusal, never a session-ender", async () => {
+    // The observe-only posture refuses every mutating call with
+    // host_policy_denied BEFORE any backend call — the honest stand-in for
+    // a dead host capability.
+    const d = makeDispatcher(false);
+    const snap = await observe(d);
+    for (let i = 0; i < 3; i++) {
+      const result = await d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+      expect(result.kind === "refusal" && result.refusal.error).toBe("host_policy_denied");
+      expect(result.kind === "refusal" && result.refusal.payload?.circuitBreaker).toBeUndefined();
+    }
+    const fourth = await d.dispatch("left_click", { target: { type: "element", stateId: snap.stateId, index: 1 } });
+    expect(fourth.kind === "refusal" && fourth.refusal.payload?.circuitBreaker).toBe(true);
+    expect(fourth.kind === "refusal" && fourth.refusal.message).toContain(
+      "3 consecutive capability failures with no successful action in between",
+    );
+    // The recovery yields — report + ask the user, never "end the turn".
+    expect(fourth.kind === "refusal" && fourth.refusal.recovery).toContain("Describe to the user what you were trying to do");
+    // stop_computer_control still passes (the ONE exemption — the model must
+    // always be able to end the run HONESTLY, by its own choice).
+    const stop = await d.dispatch("stop_computer_control", { reason: "yielding to the user" });
+    expect(stop.kind).toBe("receipt");
+  });
 });
 
 /* ── R131-C (C6): the action POINT rides the receipt + the monitor frames ──

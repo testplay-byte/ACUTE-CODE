@@ -512,6 +512,13 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // shed their quick-task overlap — the mini section carries that half
     // of the teaching now). NOTHING else moved. Composed length: 25,562
     // (the r71 ceiling re-pinned to 25,700 with the measurement recorded).
+    // R132-CU2 (CU3): the r132 fixture REGENERATED once more (the sanctioned
+    // UPDATE_GOLDEN path, diff READ before committing) — EXACTLY one hunk:
+    // the browser-panel Actions line gains the open_desk clause (the agent
+    // desk, the owner's "a screen to itself" directive, riding the
+    // three-file lockstep with the schema enum + the browser-use skill
+    // body). NOTHING else moved. Composed length: 25,713 (the r71 ceiling
+    // re-pinned to 25,800 with the measurement recorded).
     const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r132.txt"), "utf8").replace(/\r\n/g, "\n");
     const composed = buildProjectSystemPrompt(FULL_CTX).replace(/\r\n/g, "\n");
     expect(composed).toBe(golden);

@@ -567,6 +567,66 @@ export function nativeTabSetDownloadDir(tabId: string, path: string): Promise<vo
   return runCommand("browser_tab_set_download_dir", { tabId, dir: path });
 }
 
+// ── ROUND-132 (R132-CU2): the agent desk ────────────────────────────────────
+
+/**
+ * R132-CU2: the pop-out/desk window's label — MUST stay in lockstep with
+ * BROWSER_WINDOW_LABEL in src-tauri/src/browser.rs ("acute-browser"). Lives
+ * HERE (the lowest layer) so the main app can address the pop-out window
+ * without importing the pop-out page's modules.
+ */
+export const BROWSER_WINDOW_LABEL = "acute-browser";
+
+/**
+ * R132-CU2: the fixed browser-tab id of the pop-out/desk window's content
+ * webview — MUST stay in lockstep with POPOUT_TAB_ID in src-tauri/src/
+ * browser.rs (the webview label becomes `acute-tab-popout`). The canonical
+ * home moved here (popout-tab.ts re-exports it — its own comment was the
+ * lockstep anchor before; the desk needs it from the main app's side too).
+ */
+export const POPOUT_TAB_ID = "popout";
+
+/**
+ * R132-CU2: open (or focus + re-posture) the AGENT DESK — the pop-out
+ * browser window in DESK mode: always-on-top, the right column of the
+ * primary monitor's work area, the distinct "Acute Agent Desk" title.
+ * The Rust command reuses the pop-out's whole open/focus machinery, then
+ * applies the desk posture on top; a plain `open_browser_window` afterwards
+ * clears it (the postures are mutually exclusive — the last mode wins).
+ *
+ * `downloadDir` is the bound project's `.acute/downloads` (null when no
+ * project is bound — the desk then keeps the app download dir fallback,
+ * honestly). It rides the command's stash exactly like the URL does (the
+ * pop-out page registers it for its content tab via browser_tab_set_download_dir).
+ * Outside Tauri this resolves as a safe no-op — the agent-browser-bridge
+ * gates on isNativeBrowserAvailable() FIRST so the honest refusal reaches
+ * the tool instead.
+ */
+export function nativeOpenDesk(url: string, downloadDir: string | null): Promise<void> {
+  return runCommand("browser_open_desk", { url, downloadDir });
+}
+
+/**
+ * R132-CU2: navigate the desk's content webview from the MAIN app — the
+ * browser-navigate SSE frame's popout leg (the store slice's navSeq has no
+ * mounted panel to pick it up: the webview belongs to the pop-out window).
+ * browser_tab_create is idempotent — an existing webview just navigates
+ * (the same command family the panel's own navigation rides); a CREATION
+ * is attached to the pop-out window by its fixed label, never the main
+ * window (a stray main-window webview would be the bug). A closed desk
+ * answers the command's honest rejection, which the caller logs quietly.
+ * hideViewportScrollbar matches the pop-out page's own creation (R60 — the
+ * window paints its gutter scrollbar OUTSIDE the content card).
+ */
+export function nativeDeskNavigate(url: string): Promise<void> {
+  return runCommand("browser_tab_create", {
+    tabId: POPOUT_TAB_ID,
+    url,
+    windowLabel: BROWSER_WINDOW_LABEL,
+    hideViewportScrollbar: true,
+  });
+}
+
 /**
  * R131-B-ui (BU3): the `browser-download` event payload — emitted by the
  * Rust DownloadStarting handler (state "starting") and its StateChanged

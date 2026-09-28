@@ -2354,7 +2354,9 @@ describe("R131-B (defect 6): nearestBrowserAction + the honest refusal", () => {
     // The step vocabulary: everything except `sequence` (no nesting) and
     // `download` (a terminal side effect, deliberately not a step action —
     // pinned through the refusal's own list, the same string the model
-    // sees). Set insertion order differs, so the comparison is sorted.
+    // sees). R132-CU2: `open_desk` joins the exceptions — opening the
+    // agent's own window is a terminal side effect, never a mid-chain step.
+    // Set insertion order differs, so the comparison is sorted.
     const seq = await tool(tools, "browser_control").execute({
       action: "sequence",
       sessionId: "tab-r131-act",
@@ -2364,7 +2366,9 @@ describe("R131-B (defect 6): nearestBrowserAction + the honest refusal", () => {
     const listMatch = /allowed step actions: (.+)\)/.exec(seq.output);
     expect(listMatch).not.toBeNull();
     const stepActions = (listMatch![1] ?? "").split(" | ").map((s) => s.trim()).sort();
-    expect(stepActions).toEqual(BROWSER_CONTROL_ACTIONS.filter((a) => a !== "sequence" && a !== "download").sort());
+    expect(stepActions).toEqual(
+      BROWSER_CONTROL_ACTIONS.filter((a) => a !== "sequence" && a !== "download" && a !== "open_desk").sort(),
+    );
   });
 });
 
@@ -2970,5 +2974,120 @@ describe("R131-B (defect 8): download — the action (real fetch, hermetic upstr
     const noProject = await bcBare.execute({ action: "download", url: `${upstreamBase}/pic.png`, sessionId: "tab-r131-dl8" });
     expect(noProject.ok).toBe(false);
     expect(noProject.output).toContain("project 'proj_browser_tool' was not found");
+  });
+});
+
+// ── ROUND-132 (R132-CU2): the agent desk — the open_desk action ─────────────
+
+describe("R132-CU2: open_desk — the agent's own screen", () => {
+  /** buildTools + the project row the desk's download dir resolves. */
+  async function buildToolsWithDeskProject(deps?: { emit?: (event: unknown) => void }) {
+    const tools = await buildTools(tempDir, deps);
+    db.prepare(
+      "INSERT INTO projects (id, name, root_path, color, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("proj_browser_tool", "Browser Tool", tempDir, "#F59E0B", new Date().toISOString());
+    return tools;
+  }
+
+  it("requires url; a relative local path is refused with the honest hint (the navigate contract)", async () => {
+    const tools = await buildTools(tempDir, { emit: makeRecordingEmit([]) });
+    const bc = tool(tools, "browser_control");
+    const noUrl = await bc.execute({ action: "open_desk" });
+    expect(noUrl.ok).toBe(false);
+    expect(noUrl.output).toContain("requires url");
+    const rel = await bc.execute({ action: "open_desk", url: "page.html" });
+    expect(rel.ok).toBe(false);
+    expect(rel.output).toContain("relative local path");
+  });
+
+  it("fails closed without a live stream channel (opening a window needs the app UI)", async () => {
+    const tools = await buildTools(tempDir);
+    const bc = tool(tools, "browser_control");
+    const result = await bc.execute({ action: "open_desk", url: "file:///tmp/desk-index.html" });
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("no live stream channel");
+  });
+
+  it("sends the bridge command {url, downloadDir} — the project's .acute/downloads — and teaches the 'popout' driving surface", async () => {
+    const sent: Array<{ action: string; payload: Record<string, unknown> }> = [];
+    const emit = (event: unknown): void => {
+      const frame = event as {
+        type?: string;
+        commandId?: string;
+        action?: string;
+        payload?: Record<string, unknown>;
+      };
+      if (frame.type === "browser-command" && typeof frame.commandId === "string") {
+        if (frame.action === "open_desk") {
+          sent.push({ action: "open_desk", payload: frame.payload ?? {} });
+          queueMicrotask(() => {
+            resolveBrowserCommand(frame.commandId as string, { ok: true, data: { url: "https://en.wikipedia.org/" } });
+          });
+          return;
+        }
+        // every other bridge command answers generically (the wall probe's
+        // eval never fires here — no navigation happened).
+        queueMicrotask(() => {
+          resolveBrowserCommand(frame.commandId as string, { ok: false, error: "unrelated" });
+        });
+      }
+    };
+    const tools = await buildToolsWithDeskProject({ emit });
+    const bc = tool(tools, "browser_control");
+    const result = await bc.execute({ action: "open_desk", url: "https://en.wikipedia.org/" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("the agent desk is open at https://en.wikipedia.org/");
+    expect(result.output).toContain("sessionId 'popout'");
+    // The command rode the bridge with the desk's opening URL + the
+    // project's hidden download folder (null when no project — pinned below).
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.payload).toMatchObject({ url: "https://en.wikipedia.org/" });
+    expect(sent[0]!.payload.downloadDir).toBe(join(tempDir, ".acute", "downloads"));
+  });
+
+  it("no project bound ⇒ downloadDir rides null (the app download dir fallback, honestly)", async () => {
+    const sent: Array<{ payload: Record<string, unknown> }> = [];
+    const emit = (event: unknown): void => {
+      const frame = event as {
+        type?: string;
+        commandId?: string;
+        action?: string;
+        payload?: Record<string, unknown>;
+      };
+      if (frame.type === "browser-command" && typeof frame.commandId === "string") {
+        if (frame.action === "open_desk") {
+          sent.push({ payload: frame.payload ?? {} });
+          queueMicrotask(() => {
+            resolveBrowserCommand(frame.commandId as string, { ok: true, data: { url: "https://en.wikipedia.org/" } });
+          });
+        }
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    const result = await bc.execute({ action: "open_desk", url: "https://en.wikipedia.org/" });
+    expect(result.ok).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.payload.downloadDir ?? null).toBeNull();
+  });
+
+  it("a bridge failure surfaces honestly (the window command's own error)", async () => {
+    const emit = (event: unknown): void => {
+      const frame = event as { type?: string; commandId?: string; action?: string };
+      if (frame.type === "browser-command" && typeof frame.commandId === "string" && frame.action === "open_desk") {
+        queueMicrotask(() => {
+          resolveBrowserCommand(frame.commandId as string, {
+            ok: false,
+            error: "open_desk unavailable — the agent desk needs the desktop shell (not the web dev server)",
+          });
+        });
+      }
+    };
+    const tools = await buildTools(tempDir, { emit });
+    const bc = tool(tools, "browser_control");
+    const result = await bc.execute({ action: "open_desk", url: "https://en.wikipedia.org/" });
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("open_desk failed");
+    expect(result.output).toContain("the desktop shell");
   });
 });

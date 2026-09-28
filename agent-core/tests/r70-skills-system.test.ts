@@ -588,20 +588,24 @@ describe("R70-b D2: the seven new built-in skills", () => {
     },
   );
 
-  it("browser-use: body 800–3,000 chars (R131-B re-calibration), ≤ 60 lines, description ≤ 500 — the browser-leap lockstep lives here", () => {
+  it("browser-use: body 800–3,800 chars (R132-CU2 re-calibration), ≤ 60 lines, description ≤ 500 — the browser-leap lockstep lives here", () => {
     // R70-b measured 2,191 — riding the top of the 2,200 band for eleven
     // rounds. R131-B (round-131.md §1 Wave B, defect 8's three-file law)
     // adds the download discipline section + the read_dom offset/range
     // paging sentence + the type requested-vs-observed echo — measured
     // 2,947. The band moves to 3,000 (the R127-W6 budget precedent: the
-    // bound holds owner-mandated content, never degrades it); the ≤ 60
-    // LINE discipline is untouched (26 measured) — the growth is CONTENT,
-    // not sprawl.
+    // bound holds owner-mandated content, never degrades it).
+    // R132-CU2 (CU3): the AGENT DESK section — the owner's explicit "a
+    // screen to itself" directive — adds the what/when/driving/window laws
+    // (~810 chars, compacted once from the first draft's ~1,000); measured
+    // 3,763, the band moves to 3,800 on the same precedent. The ≤ 60 LINE
+    // discipline is untouched (32 measured) — the growth is CONTENT, not
+    // sprawl.
     const skill = getSkill(db, "skill_builtin_browser_use");
     expect(skill).toBeDefined();
     const body = skill?.body ?? "";
     expect(body.length).toBeGreaterThanOrEqual(800);
-    expect(body.length).toBeLessThanOrEqual(3000);
+    expect(body.length).toBeLessThanOrEqual(3800);
     expect(body.trim().split("\n").length).toBeLessThanOrEqual(60);
     expect(body.startsWith("# Skill: browser-use")).toBe(true);
     expect((skill?.description ?? "").length).toBeGreaterThan(60);
@@ -611,6 +615,10 @@ describe("R70-b D2: the seven new built-in skills", () => {
     expect(body).toContain("downloads/ folder");
     expect(body).toContain("offset/range walks the interactive elements");
     expect(body).toContain("submit requested: false/true");
+    // The R132-CU2 desk teachings are IN the body (the same lockstep).
+    expect(body).toContain("open_desk {url}");
+    expect(body).toContain("sessionId 'popout'");
+    expect(body).toContain("always-on-top");
   });
 
   it("the bodies teach the intended disciplines (content pins)", () => {

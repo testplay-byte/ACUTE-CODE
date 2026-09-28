@@ -211,8 +211,11 @@ Main-agent only. Never delegate Computer Use to a subagent (subagents lack the s
 ## Tab-walk discovery (R67)
 - Pressing key "tab" highlights the next focusable control on screen, and every key receipt names the FOCUSED element — walk Tab repeatedly to discover what is interactive when find_elements comes back empty or names cannot identify the target, then act on the element you reached. Combine with find_elements (search by name) when the app is big.
 
-## The embedded browser is NOT a desktop app
+## The embedded browser is NOT a desktop app — and the desk owns your web work
 - The app's EMBEDDED browser panel (the right-sidebar webview) is driven ONLY with browser_control (read_dom → click/type the returned selector paths) — NEVER with these computer-use tools. If the task is a web page, it is browser_control work; computer use is for the user's REAL apps.
+- YOUR OWN SCREEN for web work is the AGENT DESK (browser_control action open_desk): an always-on-top browser window beside the user's desktop. Web work you want the user to watch belongs THERE or in the sidebar panel — drive it with browser_control sessionId 'popout'.
+- REAL-DESKTOP computer use is for what the user EXPLICITLY wants on THEIR desktop (their apps, their files, their windows — named by them or unambiguously part of the request). Do not colonize their desktop for work that belongs on your own surfaces; do not launch apps they did not ask for.
+- A host problem (a dead capability, a permission wall) is REPORTED and yielded to the user — never a reason to end the session yourself: describe what failed, ask how to proceed, keep working with the tools that still run.
 
 ## Discipline
 - type REPLACES a field's contents (select first to insert). set_value is the preferred semantic write. Prefer set_value/perform_action over raw input.
@@ -370,6 +373,12 @@ Terse sections:
 export const BROWSER_USE_SKILL_BODY = `# Skill: browser-use
 
 The embedded browser panel (browser_control) — a real webview the user watches live. It is NOT the user's desktop: never narrate panel actions as machine actions.
+
+## The agent desk — your own screen
+- open_desk {url} opens the AGENT DESK: an always-on-top browser window in the right column of the user's monitor. Your web work happens on a screen of your own; the user keeps their desktop.
+- WHEN: multi-step web work the user will watch (research, form journeys, downloads). A single quick read stays in the sidebar panel.
+- Drive it with browser_control sessionId 'popout' (navigate, read_dom, click, type, screenshot — the full surface; it shares the panel's profile, so logins persist).
+- It is a normal window to the user — movable, closable. A closed desk answers honestly; re-open it with open_desk at the last URL when the task still needs it. The user's REAL browsers stay theirs (open_application is for apps they explicitly asked you to launch on their desktop).
 
 ## Core loop
 1. navigate to the absolute http(s) URL — or a LOCAL FILE (file:// URL or an absolute local path like C:\Users\me\page.html — local HTML opens natively in the panel). Omit sessionId → it drives THIS session's own tab (auto-opened in the panel).

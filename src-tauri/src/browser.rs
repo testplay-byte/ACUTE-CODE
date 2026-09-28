@@ -470,6 +470,30 @@ const POPOUT_WORK_AREA_FRACTION: f64 = 0.70;
 /// empty window.
 static POPOUT_PENDING_URL: Mutex<Option<String>> = Mutex::new(None);
 
+/// ROUND-132 (R132-CU2, the AGENT DESK): the desk's width fraction of the
+/// primary monitor's WORK AREA (the right-side column the desk occupies —
+/// "a section in the computer or a screen to itself", the owner's words).
+const DESK_WORK_AREA_FRACTION: f64 = 0.38;
+/// R132-CU2: the desk's minimum width (logical px) — below this a page is
+/// not usable even in the quietest layouts.
+const DESK_MIN_W: f64 = 480.0;
+
+/// ROUND-132 (R132-CU2): the AGENT DESK geometry — the right-side column
+/// of the primary monitor's work area. PURE (unit-testable like
+/// clamp_popout_size): (x, y, w, h) in LOGICAL px derived from the work
+/// area's logical size. The width is DESK_WORK_AREA_FRACTION of the work
+/// area, floored at DESK_MIN_W — on ordinary monitors the fraction stays
+/// well under half the screen (a quiet side column); on a narrow monitor
+/// the FLOOR legitimately exceeds 45% (usability beats proportion — the
+/// owner would rather read the page than keep the math tidy), and the work
+/// width itself is the hard cap (the desk never asks for more screen than
+/// exists).
+fn desk_geometry(work_w: f64, work_h: f64) -> (f64, f64, f64, f64) {
+    let w = (work_w * DESK_WORK_AREA_FRACTION).max(DESK_MIN_W).min(work_w);
+    let h = work_h;
+    (work_w - w, 0.0, w, h)
+}
+
 /// ROUND-132 (R132-BD, BD4): the DOWNLOAD DIR the pop-out's content webview
 /// should save into — stashed by `open_browser_window` on EVERY call (the
 /// panel, which knows the bound project, passes
@@ -655,6 +679,19 @@ pub async fn open_browser_window(
     // navigation target.)
     if let Some(existing) = app.get_webview_window(BROWSER_WINDOW_LABEL) {
         let _ = existing.set_focus();
+        // R132-CU2: LEAVING DESK MODE — a plain pop-out is a normal window:
+        // never always-on-top, the standard title + minimum size restored
+        // (browser_open_desk tightened them for the desk posture; whatever it
+        // set, this is the reset). The failures are cosmetic, not load-bearing
+        // (the window still navigates below) — best-effort `let _` on purpose,
+        // unlike the desk's own mapped errors (entering a posture half-way
+        // would be dishonest; leaving it half-way is a cosmetic twitch).
+        let _ = existing.set_always_on_top(false);
+        let _ = existing.set_title("Acute Browser");
+        {
+            use tauri::LogicalSize;
+            let _ = existing.set_min_size(Some(LogicalSize::new(POPOUT_MIN_W, POPOUT_MIN_H)));
+        }
         if let Some(content) = app.get_webview(&tab_label(POPOUT_TAB_ID)) {
             let parsed = parse_web_url(&url)?;
             content
@@ -720,6 +757,88 @@ pub fn popout_initial_url() -> Result<Option<String>, String> {
 #[tauri::command]
 pub fn popout_download_dir() -> Result<Option<String>, String> {
     popout_download_dir_stash()
+}
+
+/// `browser_open_desk(url, download_dir)` — ROUND-132 (R132-CU2): THE AGENT
+/// DESK. The owner's directive: "give the agent a custom environment of
+/// itself, like how Z code gives a custom environment of itself, like a
+/// browser of itself and such. Like the user can keep on using his computer
+/// as he wishes, but the agent will be given a custom computer kind of
+/// vibe, like a section in the computer or a screen to itself."
+///
+/// The desk is the POP-OUT browser window in DESK MODE: opened (or
+/// focused+repositioned) at the given URL, ALWAYS ON TOP, occupying the
+/// RIGHT column of the primary monitor's work area — a visible screen the
+/// AGENT owns (its browser tab, its downloads, its actions overlay-able)
+/// while the user's own desktop stays theirs. The agent drives the desk's
+/// content webview with the SAME browser_control tools as the panel (the
+/// pop-out's content tab is a normal tab), and the desktop screenshot sees
+/// it (always-on-top keeps it visible over the user's apps).
+///
+/// Async for the same main-thread discipline as `open_browser_window` (the
+/// WebviewWindowBuilder build blocks on the main event loop).
+#[tauri::command]
+pub async fn browser_open_desk(app: AppHandle, url: String, download_dir: Option<String>) -> Result<(), String> {
+    // The desk reuses the pop-out's whole open/focus machinery (the stashes
+    // + the create path) — then applies the desk posture on top. NOTE the
+    // ordering: open_browser_window's EXISTING-WINDOW branch clears the desk
+    // posture (always-on-top off, title + min size restored — a plain
+    // pop-out is a normal window), so THIS function's application below is
+    // always the LAST write: the window ends in desk mode whether it was
+    // closed, a plain pop-out, or already a desk.
+    open_browser_window(app.clone(), url, download_dir).await?;
+
+    let window = app
+        .get_webview_window(BROWSER_WINDOW_LABEL)
+        .ok_or_else(|| "the desk window did not survive its own open".to_string())?;
+
+    // ALWAYS ON TOP — the desk stays visible over the user's apps (the
+    // agent's screen reads as a screen while the user keeps their desktop).
+    window
+        .set_always_on_top(true)
+        .map_err(|e| format!("desk always-on-top failed: {e}"))?;
+
+    // The RIGHT-COLUMN geometry (logical px from the primary monitor's work
+    // area — the same scale conversion popout_initial_size uses).
+    let (x, y, w, h) = match app.primary_monitor() {
+        Ok(Some(monitor)) if monitor.scale_factor().is_finite() && monitor.scale_factor() > 0.0 => {
+            let scale = monitor.scale_factor();
+            let work = monitor.work_area();
+            desk_geometry(
+                work.size.width as f64 / scale,
+                work.size.height as f64 / scale,
+            )
+        }
+        _ => (POPOUT_DEFAULT_W / 2.0, 0.0, POPOUT_DEFAULT_W / 2.0, POPOUT_DEFAULT_H),
+    };
+    use tauri::LogicalPosition;
+    use tauri::LogicalSize;
+    // The window was created with min_inner_size(POPOUT_MIN_W=640) — on a
+    // narrow monitor the desk's floor (480) is NARROWER than that, and the
+    // enforced minimum would silently clamp the requested size. The desk
+    // relaxes the minimum to its own floor (never below the computed width —
+    // a 400-wide work area keeps a 400-wide min) so the geometry is honest.
+    // open_browser_window's plain-pop-out path restores the 640 minimum.
+    let desk_min_w = w.min(DESK_MIN_W);
+    window
+        .set_min_size(Some(LogicalSize::new(desk_min_w, POPOUT_MIN_H)))
+        .map_err(|e| format!("desk minimum-size failed: {e}"))?;
+    window
+        .set_size(LogicalSize::new(w, h))
+        .map_err(|e| format!("desk sizing failed: {e}"))?;
+    window
+        .set_position(LogicalPosition::new(x, y))
+        .map_err(|e| format!("desk positioning failed: {e}"))?;
+    // A DISTINCT TITLE — the taskbar / alt-tab reads "Acute Agent Desk"
+    // while the desk posture is on (decorations are off; this is the OS-level
+    // identity of the agent's own screen).
+    window
+        .set_title("Acute Agent Desk")
+        .map_err(|e| format!("desk title failed: {e}"))?;
+    crate::sidecar::log_line(&format!(
+        "browser: agent desk opened — always-on-top at the right column ({w:.0}x{h:.0} logical px)"
+    ));
+    Ok(())
 }
 
 /// `navigate_browser(url)` — navigate the EXISTING pop-out window's CONTENT
@@ -2515,5 +2634,35 @@ mod tests {
         );
         set_popout_download_dir(None).expect("clearing write");
         assert_eq!(popout_download_dir_stash().expect("stash read"), None, "None clears the stash");
+    }
+
+    /// R132-CU2: the desk geometry — the right-side column of the work area
+    /// at DESK_WORK_AREA_FRACTION, floored at DESK_MIN_W, capped at the work
+    /// width itself, full work-area height. The floor is allowed to exceed
+    /// 45% on narrow monitors (usability beats proportion — the reviewed-in
+    /// fix: the interrupted session's 45% cap contradicted the floor and
+    /// failed these very pins on 900/400-wide work areas).
+    #[test]
+    fn desk_geometry_is_the_right_column_of_the_work_area() {
+        // A 1920x1040 work area: 38% (729.6) is the quiet side column.
+        let (x, y, w, h) = desk_geometry(1920.0, 1040.0);
+        assert!((w - 729.6).abs() < 0.01, "38% of 1920 = 729.6, got {w}");
+        assert_eq!(x, 1920.0 - 729.6);
+        assert_eq!(y, 0.0);
+        assert_eq!(h, 1040.0);
+        // A huge 3840-wide monitor: 38% = 1459.2 — well under half the screen.
+        let (x2, _, w2, _) = desk_geometry(3840.0, 1600.0);
+        assert!((w2 - 1459.2).abs() < 0.01, "38% of 3840 = 1459.2, got {w2}");
+        assert!((x2 - (3840.0 - 1459.2)).abs() < 0.01);
+        // A tiny 900-wide monitor: 38% = 342 < DESK_MIN_W (480) → the floor
+        // wins, even though 480 > 45% of 900 (the desk never becomes
+        // unusable to fit a fraction).
+        let (x3, _, w3, _) = desk_geometry(900.0, 700.0);
+        assert!((w3 - 480.0).abs() < 0.01, "the 480 floor wins on tiny monitors, got {w3}");
+        assert!((x3 - (900.0 - 480.0)).abs() < 0.01, "the column still hugs the right edge, got x={x3}");
+        // The floor never exceeds the work area itself.
+        let (x4, _, w4, _) = desk_geometry(400.0, 700.0);
+        assert!((w4 - 400.0).abs() < 0.01, "the work width caps the floor, got {w4}");
+        assert!((x4 - 0.0).abs() < 0.01, "a full-width desk starts at x=0, got x={x4}");
     }
 }

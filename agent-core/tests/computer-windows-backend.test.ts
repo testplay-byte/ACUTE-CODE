@@ -1296,6 +1296,92 @@ describe("R69-a: launch gives Chromium browsers --force-renderer-accessibility",
   });
 });
 
+/* ── ROUND-132 (R132-CU1): the FOREGROUNDING launch ─────────────────────── */
+// The owner's sixth-feedback defect: Edge "opened up in the background" —
+// Start-Process gives a new process no foreground grant. The launch now
+// captures -PassThru, polls for the main window (bounded ~3s), and the TS
+// side runs the VERIFIED activation ladder so the app the user asked for is
+// the one they SEE.
+describe("R132-CU1: launch foregrounds the fresh window", () => {
+  it("the capsule carries -PassThru on EVERY Start-Process leg + the main-window poll epilogue + the OK pid=/hwnd= line", async () => {
+    for (const name of ["msedge", "notepad", "edge browser"]) {
+      const run = fakeRun("OK pid=0 hwnd=0");
+      const result = await windowsBackend.launch(run, { name, activate: false });
+      expect(result.ok).toBe(true);
+      const script = decodeCapsuleScript(run.capsules[0]!);
+      // -PassThru on all four start legs (bundle-id is not in this spec —
+      // three legs here: resolved, AUMID, raw name).
+      expect(script).toContain("$p = Start-Process -FilePath $resolved");
+      expect(script).toContain("$p = Start-Process -FilePath $name");
+      expect(script).toContain('$p = Start-Process ("shell:AppsFolder\\"');
+      // All FOUR actual start legs capture into $p with -PassThru (the
+      // bundle-id leg rides the script guarded by the empty-condition — the
+      // template always emits it; then the resolved identity, the AUMID, and
+      // the raw-name last resort). The error-message strings that merely
+      // MENTION "Start-Process failed" never match `$p = `.
+      const legs = script.match(/\$p = Start-Process[^\n]*/g) ?? [];
+      expect(legs.length).toBe(4);
+      for (const leg of legs) {
+        expect(leg).toContain("-PassThru");
+      }
+      // The poll epilogue: the fresh-process MainWindowHandle poll, bounded
+      // 3s, and the honest postcondition line.
+      expect(script).toContain("Get-Process -Id $lp -ErrorAction SilentlyContinue");
+      expect(script).toContain("AddMilliseconds(3000)");
+      expect(script).toContain('Write-Output ("OK pid=" + $lp + " hwnd=" + $hwnd)');
+    }
+  });
+
+  it("OK pid=4242 hwnd=778899 → the activation ladder runs (capsule 2, the poll's hwnd rides through) and the VERIFIED truth returns", async () => {
+    const capsules: CommandCapsule[] = [];
+    const replies = ["OK pid=4242 hwnd=778899", "ACTIVE"];
+    let call = 0;
+    const run: RunCommand = async (capsule) => {
+      capsules.push(capsule);
+      const stdout = replies[Math.min(call, replies.length - 1)]!;
+      call += 1;
+      return { code: 0, stdout, stderr: "", timedOut: false } satisfies RunResult;
+    };
+    const result = await windowsBackend.launch(run, { name: "msedge", activate: false });
+    expect(result).toEqual({ ok: true, pid: 4242, active: true });
+    expect(capsules).toHaveLength(2);
+    // The activation capsule: the poll's hwnd rides through as windowId
+    // (activate re-resolves only when 0) — pin the encoded script carries it.
+    const activateScript = decodeCapsuleScript(capsules[1]!);
+    expect(activateScript).toContain("[IntPtr]778899");
+    expect(activateScript).toContain("Get-Process -Id 4242");
+  });
+
+  it("an INACTIVE verification answers honestly (the ladder ran, the OS refused the steal)", async () => {
+    const capsules: CommandCapsule[] = [];
+    const replies = ["OK pid=4242 hwnd=778899", "INACTIVE"];
+    let call = 0;
+    const run: RunCommand = async (capsule) => {
+      capsules.push(capsule);
+      const stdout = replies[Math.min(call, replies.length - 1)]!;
+      call += 1;
+      return { code: 0, stdout, stderr: "", timedOut: false } satisfies RunResult;
+    };
+    const result = await windowsBackend.launch(run, { name: "msedge", activate: true });
+    expect(result).toEqual({ ok: true, pid: 4242, active: false });
+    expect(capsules).toHaveLength(2);
+  });
+
+  it("OK pid=0 hwnd=0 (a start with no -PassThru process) → NO activation capsule, the honest {ok, active:false}", async () => {
+    const run = fakeRun("OK pid=0 hwnd=0");
+    const result = await windowsBackend.launch(run, { name: "msedge", activate: true });
+    expect(result).toEqual({ ok: true, active: false });
+    expect(run.capsules).toHaveLength(1);
+  });
+
+  it("the legacy bare 'OK' line still launches (forward-tolerant parse: no pid, no activation)", async () => {
+    const run = fakeRun("OK");
+    const result = await windowsBackend.launch(run, { name: "msedge", activate: false });
+    expect(result).toEqual({ ok: true, active: false });
+    expect(run.capsules).toHaveLength(1);
+  });
+});
+
 /* ── R68-C: the captures keep their OWN proven Add-Type lines ────────────── */
 
 describe("R68-C: the capture scripts load Windows.Forms via Add-Type (the PROVEN-live path)", () => {

@@ -38,6 +38,14 @@ import { useRightSidebarStore } from "./right-sidebar-store";
 // instant browser frames + the monitor turn-hold).
 import { useBrowserTabStore } from "./browser-store";
 import { useComputerMonitorStore } from "./computer-monitor-store";
+// R132-CU2: the desk navigate leg — the native create-or-navigate spy
+// (passthrough mock: the real function no-ops outside Tauri, byte-identical
+// for every other test; the spy records the popout leg's calls).
+vi.mock("./native-browser", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./native-browser")>();
+  return { ...actual, nativeDeskNavigate: vi.fn(actual.nativeDeskNavigate) };
+});
+import { nativeDeskNavigate } from "./native-browser";
 import type { StreamTurnEvent } from "./api";
 
 function sseResponse(frames: StreamTurnEvent[]): Response {
@@ -1468,6 +1476,46 @@ describe("R67 browser frames + computer monitor turn-hold", () => {
     expect(tab?.navSeq).toBe(1);
     expect(tab?.agentNavSeq).toBe(1);
     expect(tab?.loading).toBe(true);
+  });
+
+  // ── ROUND-132 (R132-CU2): the browser-navigate frame's DESK leg ─────────
+  // A navigate for the fixed 'popout' tab (the agent desk's content webview)
+  // must ACTUATE the webview itself — no mounted panel will ever pick up the
+  // store slice's navSeq (the webview lives in the pop-out window).
+  it("R132-CU2: a browser-navigate frame for the 'popout' tab ALSO drives the desk's webview (the native create-or-navigate)", async () => {
+    vi.mocked(nativeDeskNavigate).mockClear();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "browser-navigate", sessionId: "", tabId: "popout", url: "https://en.wikipedia.org/wiki/Desk" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "navigate", { projectId: "prj_browse" });
+    // The store slice records the navigation like any tab…
+    const tab = useBrowserTabStore.getState().tabs["popout"];
+    expect(tab).toBeDefined();
+    expect(tab?.currentUrl).toBe("https://en.wikipedia.org/wiki/Desk");
+    // …AND the native leg fired with the frame's URL (the webview follows —
+    // create-or-navigate, idempotent).
+    expect(vi.mocked(nativeDeskNavigate)).toHaveBeenCalledWith("https://en.wikipedia.org/wiki/Desk");
+  });
+
+  it("R132-CU2: a REGULAR tab's navigate never touches the desk leg (the popout special case stays special)", async () => {
+    vi.mocked(nativeDeskNavigate).mockClear();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          { type: "browser-navigate", sessionId: "", tabId: "ag-sess_r132c", url: "https://example.com/plain" },
+          { type: "stopped" },
+        ]),
+      ),
+    );
+    await useStreamStore.getState().startStream(PARENT, "navigate", { projectId: "prj_browse" });
+    expect(vi.mocked(nativeDeskNavigate)).not.toHaveBeenCalled();
   });
 
   it("R67/E3: a browser-open frame opens the chat session's agent tab in the ACTIVE slice (auto-open)", async () => {

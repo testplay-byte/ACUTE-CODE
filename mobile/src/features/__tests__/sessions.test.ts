@@ -2363,3 +2363,114 @@ describe("sessions — the live reducer accumulates in FRAME order (R120-CM, ite
     expect(text.endsWith("w249 ")).toBe(true);
   });
 });
+
+// ── R132-MA9 — the MINI AGENT rows (live + fold) ────────────────────────────
+// The desktop's dedicated section, mobile-scale: ONE quiet inline row per
+// mini run, keyed by miniId — started opens it at the dispatch moment,
+// action bumps the count, done patches terminal IN PLACE. The reload (the
+// mini_agent.* persisted events) renders byte-identically.
+describe("sessions — the mini agent rows (R132-MA9)", () => {
+  it("live: started opens the row, action bumps the count, done patches terminal IN PLACE", () => {
+    let turn = beginLiveTurn([], "check the docs", NOW);
+    turn = applyLiveFrame(turn, { type: "text-delta", delta: "dispatching a mini…" }, NOW + 1);
+    turn = applyLiveFrame(
+      turn,
+      {
+        type: "mini-agent.started",
+        miniId: "mini-abc",
+        skill: "search",
+        task: "find the CHANGELOG entry for 0.124.0",
+        model: { providerId: "openrouter", modelId: "space-bunny" },
+      },
+      NOW + 2,
+    );
+    // The live assistant flushed; the row opened at its dispatch moment.
+    expect(turn.items.map((it) => it.kind)).toEqual(["user", "assistant", "mini"]);
+    const row = turn.items[2];
+    expect(row?.kind === "mini" && row.miniId).toBe("mini-abc");
+    expect(row?.kind === "mini" && row.skill).toBe("search");
+    expect(row?.kind === "mini" && row.task).toBe("find the CHANGELOG entry for 0.124.0");
+    expect(row?.kind === "mini" && row.status).toBe("running");
+    expect(row?.kind === "mini" && row.actions).toBe(0);
+    expect(row?.kind === "mini" && row.result).toBeNull();
+
+    turn = applyLiveFrame(
+      turn,
+      { type: "mini-agent.action", miniId: "mini-abc", seq: 1, tool: "search_files", argsSummary: "*.md", ok: true, outputSummary: "2 hits" },
+      NOW + 3,
+    );
+    turn = applyLiveFrame(
+      turn,
+      { type: "mini-agent.action", miniId: "mini-abc", seq: 2, tool: "read_file", argsSummary: "CHANGELOG.md", ok: true, outputSummary: null },
+      NOW + 4,
+    );
+    expect(turn.items).toHaveLength(3); // still ONE row — the count-only register
+    expect(turn.items[2]?.kind === "mini" && turn.items[2].actions).toBe(2);
+
+    turn = applyLiveFrame(
+      turn,
+      { type: "mini-agent.done", miniId: "mini-abc", ok: true, result: "mini agent (search) — 2 steps:\n\n## REPORT\nOUTCOME: done — found it", steps: 2, usage: { inputTokens: 100, outputTokens: 40 } },
+      NOW + 5,
+    );
+    expect(turn.items).toHaveLength(3); // terminal IN PLACE, never a second row
+    const settled = turn.items[2];
+    expect(settled?.kind === "mini" && settled.status).toBe("done");
+    expect(settled?.kind === "mini" && settled.ok).toBe(true);
+    expect(settled?.kind === "mini" && settled.result).toContain("OUTCOME: done");
+  });
+
+  it("live: concurrent minis are SIBLING rows — B finishing first never disturbs A (the out-of-order law)", () => {
+    let turn = beginLiveTurn([], "two lookups", NOW);
+    turn = applyLiveFrame(turn, { type: "mini-agent.started", miniId: "mini-a", skill: "search", task: "task A", model: { providerId: "p", modelId: "m" } }, NOW + 1);
+    turn = applyLiveFrame(turn, { type: "mini-agent.started", miniId: "mini-b", skill: "browser", task: "task B", model: { providerId: "p", modelId: "m" } }, NOW + 2);
+    turn = applyLiveFrame(turn, { type: "mini-agent.done", miniId: "mini-b", ok: true, result: "B done", steps: 1, usage: null }, NOW + 3);
+    turn = applyLiveFrame(turn, { type: "mini-agent.done", miniId: "mini-a", ok: false, result: "A failed", steps: 3, usage: null }, NOW + 4);
+    expect(turn.items.map((it) => (it.kind === "mini" ? it.miniId : it.kind))).toEqual(["user", "mini-a", "mini-b"]);
+    const a = turn.items[1];
+    const b = turn.items[2];
+    expect(a?.kind === "mini" && a.status).toBe("failed");
+    expect(a?.kind === "mini" && a.ok).toBe(false);
+    expect(b?.kind === "mini" && b.status).toBe("done");
+    expect(b?.kind === "mini" && b.result).toBe("B done");
+  });
+
+  it("live: orphan action/done frames drop honestly (no row is invented)", () => {
+    let turn = beginLiveTurn([], "go", NOW);
+    turn = applyLiveFrame(turn, { type: "mini-agent.action", miniId: "mini-ghost", seq: 1, tool: "x", argsSummary: "", ok: true, outputSummary: null }, NOW + 1);
+    turn = applyLiveFrame(turn, { type: "mini-agent.done", miniId: "mini-ghost", ok: true, result: "r", steps: 0, usage: null }, NOW + 2);
+    expect(turn.items.map((it) => it.kind)).toEqual(["user"]);
+  });
+
+  it("fold: the persisted mini_agent.* events render byte-identically to the live run (the reload law)", () => {
+    const items = foldSessionEvents([
+      event(1, "message.user", { role: "user", content: "check the docs" }),
+      event(2, "mini_agent.started", { miniId: "mini-abc", skill: "search", task: "find the entry", model: { providerId: "openrouter", modelId: "space-bunny" } }),
+      event(3, "mini_agent.action", { miniId: "mini-abc", seq: 1, tool: "search_files", argsSummary: "*.md", ok: true, outputSummary: "2 hits" }),
+      event(4, "mini_agent.done", { miniId: "mini-abc", ok: true, result: "OUTCOME: done", steps: 1, usage: { inputTokens: 10, outputTokens: 4 } }),
+    ]);
+    expect(items.map((it) => it.kind)).toEqual(["user", "mini"]);
+    const row = items[1];
+    expect(row?.kind === "mini" && row.miniId).toBe("mini-abc");
+    expect(row?.kind === "mini" && row.skill).toBe("search");
+    expect(row?.kind === "mini" && row.task).toBe("find the entry");
+    expect(row?.kind === "mini" && row.status).toBe("done");
+    expect(row?.kind === "mini" && row.actions).toBe(1);
+    expect(row?.kind === "mini" && row.ok).toBe(true);
+    expect(row?.kind === "mini" && row.result).toBe("OUTCOME: done");
+  });
+
+  it("fold: a run whose done never landed stays running honestly; an orphan done drops (no row is invented)", () => {
+    const interrupted = foldSessionEvents([
+      event(1, "mini_agent.started", { miniId: "mini-x", skill: "browser", task: "t", model: { providerId: "p", modelId: "m" } }),
+      event(2, "mini_agent.action", { miniId: "mini-x", seq: 1, tool: "browser_control", argsSummary: "navigate", ok: true, outputSummary: null }),
+    ]);
+    const row = interrupted[0];
+    expect(row?.kind === "mini" && row.status).toBe("running");
+    expect(row?.kind === "mini" && row.ok).toBeNull();
+
+    const orphan = foldSessionEvents([
+      event(1, "mini_agent.done", { miniId: "mini-ghost", ok: true, result: "r", steps: 0, usage: null }),
+    ]);
+    expect(orphan).toHaveLength(0);
+  });
+});
