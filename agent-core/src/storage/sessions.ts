@@ -1147,7 +1147,7 @@ function excerpt(text: string, cap: number): string {
  * their own rows with their origin so the usage screens can label them.
  * ROUND-122 (R122): the self-feedback reporter joins the family — one row
  * per ledger entry it writes (origin "feedback"). */
-export type UsageOrigin = "turn" | "compaction" | "debug" | "feedback";
+export type UsageOrigin = "turn" | "compaction" | "debug" | "feedback" | "mini-agent";
 
 /** ROUND-83 (R83): the storage-side dimensions of a usage row beyond the
  * shared UsageRecord — providerCalls (the real SDK-call count behind the

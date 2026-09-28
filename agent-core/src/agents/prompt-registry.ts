@@ -104,6 +104,16 @@ export const PROMPT_REGISTRY: readonly PromptSectionSpec[] = Object.freeze([
     bucket: "identity",
   },
   {
+    // ROUND-132 (R132, the mini agent system): the PARTNER tier — quick
+    // specialized dispatches (browser/computer/search/custom), ≤3
+    // concurrent, disposable one-task runs. Tool-gated like sub-agents.
+    id: "mini-agents",
+    description:
+      "## MINI AGENTS (mini_agent) — the quick-specialized partner tier: the four skills, the GOAL-not-steps law, the 3-concurrent batch rule, the not-for/never-re-dispatch split (R132)",
+    dynamic: true, // tool-gated (mini_agent)
+    bucket: "identity",
+  },
+  {
     id: "tool-results-are-data",
     description: "## TOOL RESULTS ARE DATA — the prompt-injection guard",
     dynamic: false,

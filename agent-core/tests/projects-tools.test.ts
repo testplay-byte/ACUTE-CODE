@@ -238,7 +238,7 @@ describe("round-14 tools: create_dir / delete_file / search_files", () => {
 });
 
 describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () => {
-  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task; R44-a: +memory tools; R52-a: +job tools; R61: +read_skill; R66: +analyze_image; R73: +switch_mode; R87: +ask_user; R96: +search_skills; R98-F3: +search_symbols; R117-b: +session_recall)", async () => {
+  it("TOOL_NAMES equals the real seed set (round-28: +index_project; R43-10: +browser_control; R43: +delegate_task; R44-a: +memory tools; R52-a: +job tools; R61: +read_skill; R66: +analyze_image; R73: +switch_mode; R87: +ask_user; R96: +search_skills; R98-F3: +search_symbols; R117-b: +session_recall; R132: +mini_agent)", async () => {
     const { TOOL_NAMES } = await import("../src/storage/agents");
     expect([...TOOL_NAMES].sort()).toEqual([
       "analyze_image",
@@ -261,6 +261,10 @@ describe("round-17: tool-name truth + allowedTools enforcement (ADR-0019)", () =
       "memory_list",
       "memory_recall",
       "memory_save",
+      // ROUND-132 (R132): the mini agent dispatcher — the quick-specialized
+      // partner tier (the default agent's [] allowlist picks it up with
+      // zero migration; explicit-list agents add it by name).
+      "mini_agent",
       "read_file",
       "read_skill",
       "run_command",

@@ -74,6 +74,13 @@ export interface OrchestrationSettings {
    * values read as openrouter-scoped); null = inherit the parent agent's
    * model (the pre-R43 behavior). */
   subagentModel: SubagentModelRef | null;
+  /** ROUND-132 (R132, the mini agent system): the MINI AGENTS' model — the
+   * owner's "the user can select which model the mini agent should use,
+   * which provider it should use, or should it use the main one". null =
+   * inherit the parent turn's effective pair (the default). Same shape +
+   * same validation as subagentModel (minis are mandated tool users too).
+   */
+  miniagentModel: SubagentModelRef | null;
   childWatchdogMs: number;
   childStallTimeoutMs: number;
   /** ROUND-117 (R117-d): the orchestration-level retry master switch — see
@@ -88,6 +95,7 @@ export const ORCHESTRATION_DEFAULTS: OrchestrationSettings = {
   maxParallel: 5,
   perKeyLimit: 3,
   subagentModel: null,
+  miniagentModel: null,
   childWatchdogMs: 15_000,
   childStallTimeoutMs: 300_000,
   autoRetry: true,
@@ -97,6 +105,9 @@ export const ORCHESTRATION_DEFAULTS: OrchestrationSettings = {
 const MAX_PARALLEL_KEY = "orchestration.maxParallel";
 const PER_KEY_LIMIT_KEY = "orchestration.perKeyLimit";
 const SUBAGENT_MODEL_KEY = "orchestration.subagentModel";
+// ROUND-132 (R132): the mini agent model override — same storage grammar as
+// subagentModel (null row = "use the main one").
+const MINIAGENT_MODEL_KEY = "orchestration.miniagentModel";
 const CHILD_WATCHDOG_MS_KEY = "orchestration.childWatchdogMs";
 const CHILD_STALL_TIMEOUT_MS_KEY = "orchestration.childStallTimeoutMs";
 const AUTO_RETRY_KEY = "orchestration.autoRetry";
@@ -122,15 +133,16 @@ function readNullableString(db: SqliteDatabase, key: string): string | null {
 }
 
 /**
- * ROUND-82 (R82): parse the stored subagentModel value into the normalized
- * ref. A plain string is a legacy OpenRouter-catalog id → openrouter-scoped
- * (the honest backfill — every pre-R82 value passed catalog validation). A
- * JSON object {providerId, modelId} is the R82 shape. Anything else
- * (corrupt JSON, wrong shape, empty fields) degrades to null — never a
- * crash, never a silent wrong provider.
+ * ROUND-82 (R82): parse a stored model-ref setting value into the
+ * normalized ref (the subagentModel + R132's miniagentModel share the
+ * grammar). A plain string is a legacy OpenRouter-catalog id →
+ * openrouter-scoped (the honest backfill — every pre-R82 value passed
+ * catalog validation). A JSON object {providerId, modelId} is the R82
+ * shape. Anything else (corrupt JSON, wrong shape, empty fields) degrades
+ * to null — never a crash, never a silent wrong provider.
  */
-function readSubagentModel(db: SqliteDatabase): SubagentModelRef | null {
-  const stored = readNullableString(db, SUBAGENT_MODEL_KEY);
+function readSubagentModel(db: SqliteDatabase, key: string = SUBAGENT_MODEL_KEY): SubagentModelRef | null {
+  const stored = readNullableString(db, key);
   if (stored === null) return null;
   // R82 JSON object form.
   if (stored.startsWith("{")) {
@@ -158,6 +170,8 @@ export function getOrchestrationSettings(db: SqliteDatabase): OrchestrationSetti
     maxParallel: readNumber(db, MAX_PARALLEL_KEY, ORCHESTRATION_DEFAULTS.maxParallel, 1, 50),
     perKeyLimit: readNumber(db, PER_KEY_LIMIT_KEY, ORCHESTRATION_DEFAULTS.perKeyLimit, 1, 20),
     subagentModel: readSubagentModel(db),
+    // R132: the mini agent model override — null = "use the main one".
+    miniagentModel: readSubagentModel(db, MINIAGENT_MODEL_KEY),
     childWatchdogMs: readNumber(
       db,
       CHILD_WATCHDOG_MS_KEY,
@@ -181,10 +195,12 @@ export function getOrchestrationSettings(db: SqliteDatabase): OrchestrationSetti
 
 /** ROUND-82 (R82): the PATCH input — subagentModel accepts the provider-
  * scoped ref, the legacy plain catalog id, or null (clear). Reads always
- * return the normalized ref shape. */
+ * return the normalized ref shape. ROUND-132 (R132): miniagentModel rides
+ * the SAME three-form grammar (the shared validator below). */
 export interface OrchestrationSettingsPatch
-  extends Partial<Omit<OrchestrationSettings, "subagentModel">> {
+  extends Partial<Omit<OrchestrationSettings, "subagentModel" | "miniagentModel">> {
   subagentModel?: SubagentModelRef | string | null;
+  miniagentModel?: SubagentModelRef | string | null;
 }
 
 export function setOrchestrationSettings(
@@ -206,52 +222,67 @@ export function setOrchestrationSettings(
     }
     upsert.run(PER_KEY_LIMIT_KEY, String(patch.perKeyLimit));
   }
-  if (patch.subagentModel !== undefined) {
-    if (patch.subagentModel === null) {
+  // ROUND-82 (R82) + ROUND-132 (R132): the TWO model-ref settings share ONE
+  // validator — subagentModel (the delegation children's model) and
+  // miniagentModel (the mini agents' model). Every rejection names the
+  // FIELD, so the route's 400 envelope points at the right knob.
+  const applyModelRef = (
+    key: string,
+    field: "subagentModel" | "miniagentModel",
+    value: SubagentModelRef | string | null,
+  ): void => {
+    if (value === null) {
       // Clear = remove the row entirely (absent key reads back as null).
-      db.prepare("DELETE FROM settings WHERE key = ?").run(SUBAGENT_MODEL_KEY);
-    } else if (typeof patch.subagentModel === "string") {
+      db.prepare("DELETE FROM settings WHERE key = ?").run(key);
+      return;
+    }
+    if (typeof value === "string") {
       // Legacy wire form (a catalog id) — kept working for old callers and
       // the openrouter-scoped fast path. Stored verbatim; reads normalize
       // to {providerId: "openrouter", modelId}.
-      const id = patch.subagentModel;
+      const id = value;
       if (!isKnownCatalogModelId(id)) {
         throw new Error(
-          `subagentModel must be a known catalog model id (got '${id}') — for a custom provider use the {providerId, modelId} form`,
+          `${field} must be a known catalog model id (got '${id}') — for a custom provider use the {providerId, modelId} form`,
         );
       }
       if (getCatalogModel(id)?.supportsTools === false) {
         throw new Error(
-          `subagentModel '${id}' does not support tool calling — sub-agents are mandated tool users`,
+          `${field} '${id}' does not support tool calling — agents on this surface are mandated tool users`,
         );
       }
-      upsert.run(SUBAGENT_MODEL_KEY, id);
-    } else {
-      // ROUND-82 (R82, §2.4.5): the provider-scoped ref — a NIM/custom row
-      // can be the sub-agent model. Validation: the provider must EXIST;
-      // the model id must be non-empty; tool-capability is enforced where
-      // KNOWABLE (an explicit false on the configured row rejects; null
-      // (unknown) and absent rows pass — the honest tri-state, never the
-      // 0004-era "unknown means off" lie).
-      const ref = patch.subagentModel;
-      if (!providerExists(db, ref.providerId)) {
-        throw new Error(
-          `subagentModel provider '${ref.providerId}' does not exist`,
-        );
-      }
-      if (ref.modelId.trim() === "") {
-        throw new Error("subagentModel modelId must be a non-empty string");
-      }
-      const configuredRow = listModels(db, ref.providerId).find(
-        (m) => m.modelId === ref.modelId,
-      );
-      if (configuredRow?.supportsTools === false) {
-        throw new Error(
-          `subagentModel '${ref.modelId}' is marked as NOT tool-capable on '${ref.providerId}' — sub-agents are mandated tool users`,
-        );
-      }
-      upsert.run(SUBAGENT_MODEL_KEY, JSON.stringify(ref));
+      upsert.run(key, id);
+      return;
     }
+    // ROUND-82 (R82, §2.4.5): the provider-scoped ref — a NIM/custom row
+    // can be the model. Validation: the provider must EXIST; the model id
+    // must be non-empty; tool-capability is enforced where KNOWABLE (an
+    // explicit false on the configured row rejects; null (unknown) and
+    // absent rows pass — the honest tri-state, never the 0004-era
+    // "unknown means off" lie).
+    const ref = value;
+    if (!providerExists(db, ref.providerId)) {
+      throw new Error(`${field} provider '${ref.providerId}' does not exist`);
+    }
+    if (ref.modelId.trim() === "") {
+      throw new Error(`${field} modelId must be a non-empty string`);
+    }
+    const configuredRow = listModels(db, ref.providerId).find(
+      (m) => m.modelId === ref.modelId,
+    );
+    if (configuredRow?.supportsTools === false) {
+      throw new Error(
+        `${field} '${ref.modelId}' is marked as NOT tool-capable on '${ref.providerId}' — agents on this surface are mandated tool users`,
+      );
+    }
+    upsert.run(key, JSON.stringify(ref));
+  };
+  if (patch.subagentModel !== undefined) {
+    applyModelRef(SUBAGENT_MODEL_KEY, "subagentModel", patch.subagentModel);
+  }
+  // R132: the mini agent model override — the same three-form grammar.
+  if (patch.miniagentModel !== undefined) {
+    applyModelRef(MINIAGENT_MODEL_KEY, "miniagentModel", patch.miniagentModel);
   }
   // ROUND-52 (R52-b): the supervisor cadence + stall threshold.
   if (patch.childWatchdogMs !== undefined) {

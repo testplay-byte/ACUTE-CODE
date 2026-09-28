@@ -86,8 +86,10 @@ describe("ROUND-52 (R52-f): the plugin registry", () => {
     // ROUND-61 (R61): + computer-use + skills + mcp = 12; ROUND-66 (R66-2-b):
     // + core-vision (analyze_image) = 13; ROUND-73 (R73-b): + core-modes
     // (switch_mode — the task-mode posture switch, always on like read_skill)
-    // = 14; ROUND-87 (R87): + core-ask-user (ask_user) = 15.
-    expect(BUILT_IN_PLUGINS.length).toBe(15);
+    // = 14; ROUND-87 (R87): + core-ask-user (ask_user) = 15; ROUND-132
+    // (R132): + core-mini-agent (mini_agent — the quick-specialized partner
+    // dispatcher) = 16.
+    expect(BUILT_IN_PLUGINS.length).toBe(16);
     // Declaration-stub deps (same shape builtInToolCatalog uses) so the
     // delegation plugin — gated on keyring/chat PRESENCE — also declares.
     const { ProviderKeyring } = await import("../src/providers/registry");

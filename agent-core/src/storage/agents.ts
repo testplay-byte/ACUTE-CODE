@@ -45,6 +45,12 @@ export const TOOL_NAMES = [
   // in tools/index.ts as the one-level recursion guard). Migration 0014
   // repairs existing databases.
   "delegate_task",
+  // ROUND-132 (R132): the MINI AGENT dispatcher — quick specialized partner
+  // tasks (browser/computer/search/custom), ≤3 concurrent, disposable. Same
+  // family as delegate_task (a dispatch capability); the default agent's []
+  // allowlist (ALL) picks it up with zero migration, and explicit-list
+  // agents add it by name.
+  "mini_agent",
   // ROUND-43 (R43-10): drives the user's embedded browser panel (navigate /
   // history / viewport presets) — tools/index.ts, state in browser-proxy.ts.
   "browser_control",

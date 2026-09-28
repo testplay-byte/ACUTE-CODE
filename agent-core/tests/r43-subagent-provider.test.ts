@@ -96,6 +96,9 @@ describe("R43-5: orchestration.subagentModel storage", () => {
       maxParallel: 5,
       perKeyLimit: 3,
       subagentModel: null,
+      // ROUND-132 (R132): the mini agents' model override — null = "use the
+      // main one" (the default).
+      miniagentModel: null,
       // ROUND-117 (R117-d1): the bounded auto-re-delegation knobs.
       autoRetry: true,
       autoRetryMax: 1,

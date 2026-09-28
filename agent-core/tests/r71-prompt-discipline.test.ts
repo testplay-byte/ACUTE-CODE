@@ -313,8 +313,12 @@ describe("D4: sub-agent scope + no-polling discipline", () => {
     const sub = buildSectionText(ctxFor(), "sub-agents") ?? "";
     expect(sub).toContain("**Scope discipline:** the sub-agent reads the delegation brief and delivers only its scope");
     expect(sub).toContain("do not duplicate that work yourself");
+    // R132-MA re-pin: the no-polling line MERGED with the machine-readable
+    // block line (the budget payment — the law survives in substance:
+    // results ARE tool results, sleeping/polling is banned, job_status is
+    // shell-jobs-only).
     expect(sub).toContain(
-      "Delegation results arrive as tool results — do NOT sleep, wait, or poll for a sub-agent (job_status exists only for explicitly-backgrounded shell jobs)",
+      "Delegation results arrive as tool results (ending with a machine-readable block) — do NOT sleep, wait, or poll (job_status is only for explicitly-backgrounded shell jobs)",
     );
     // The pre-existing delegation contract survives.
     expect(sub).toContain("**Self-contained tasks:**");
@@ -329,6 +333,8 @@ describe("D4: sub-agent scope + no-polling discipline", () => {
     expect(noDelegate).not.toContain("## SUB-AGENTS (delegate_task)");
     expect(noDelegate).not.toContain("SCOPE DISCIPLINE");
     expect(noDelegate).not.toContain("do NOT sleep, wait, or poll for a sub-agent");
+    // R132-MA: the merged spelling is gated identically.
+    expect(noDelegate).not.toContain("do NOT sleep, wait, or poll (job_status is only for explicitly-backgrounded shell jobs)");
   });
 });
 
@@ -391,7 +397,7 @@ describe("PLAN mode: every discipline surface composes (read-only vocabulary)", 
     expect(composed).toContain("Do not end a reply with a question unless you are genuinely blocked");
     // D4 — sub-agent discipline (plan mode HAS delegate_task).
     expect(composed).toContain("delivers only its scope");
-    expect(composed).toContain("do NOT sleep, wait, or poll for a sub-agent");
+    expect(composed).toContain("do NOT sleep, wait, or poll (job_status is only for explicitly-backgrounded shell jobs)");
     // The plan vocabulary is honest: no terminal/file-mutation tools advertised.
     expect(composed).not.toContain("**Verify after edit**");
     expect(composed).not.toContain("**Dirty worktree discipline**");
@@ -439,7 +445,19 @@ describe("D6: the size budget (the hard bound + the section window)", () => {
     // the type requested-vs-observed echo — round-131.md §1 Wave B's
     // three-file law) grew the composition exactly +265 over the R127-W6
     // measured 24,804 — measured 25,069. Same precedent, one more turn.
-    expect(composed.length).toBeLessThanOrEqual(25_200);
+    // R132-MA (the mini agent system — the owner's explicit feature
+    // directive): 25,200 → 25,700 — the NEW "## MINI AGENTS (mini_agent)"
+    // section (~660 chars: the four skills, the GOAL-not-steps law, the
+    // 3-concurrent batch rule, the not-for/never-re-dispatch split) + the
+    // core-vocabulary one-liner (+86) grew the composition +746, PAID FOR
+    // by the SUB-AGENTS dedup (−253: the good-uses/supervision/report/
+    // result lines shed their quick-task overlap — the mini section now
+    // carries that half of the teaching) — measured 25,562 on Linux
+    // (Windows rides ~64 bigger ≈ 25,626; the ceiling keeps ~74 of
+    // headroom on the platform the R113-f pin composes on). Same
+    // precedent as R96-D/R99-G/R117-c/R127-W6/R131-B: the bound moves to
+    // hold the owner's explicit asks rather than degrading them.
+    expect(composed.length).toBeLessThanOrEqual(25_700);
     expect(composed.length).toBeGreaterThan(15_000); // the R71 delta is real content, not a gutting
   });
 

@@ -497,7 +497,22 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // tightened word-for-word (never steals the user's focus → no focus
     // steal, etc.) to pay the budget — the composed prompt stays within
     // r113's pinned 25,100-char bound. NOTHING outside the section moved.
-    const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r131.txt"), "utf8").replace(/\r\n/g, "\n");
+    //
+    // Re-pinned in R132-MA (the mini agent system — the owner's explicit
+    // feature directive) as a NEW fixture — fixtures/prompt-golden-r132.txt
+    // — per the SAME R117-c/R127-W6/R131-B fork precedent (the r131 file
+    // becomes history below). The verified diff (git diff of the fixture,
+    // read before regenerating — never blind) is EXACTLY three hunks:
+    // (1) the NEW "## MINI AGENTS (mini_agent)" section after SUB-AGENTS
+    // (the four skills, the GOAL-not-steps law, the 3-concurrent batch
+    // rule, the not-for/never-re-dispatch split); (2) the TOOL USE
+    // descriptions block gains the mini_agent one-liner after
+    // delegate_task's; (3) the SUB-AGENTS lines were TIGHTENED to pay the
+    // budget (the self-contained/good-uses/supervision/report/result lines
+    // shed their quick-task overlap — the mini section carries that half
+    // of the teaching now). NOTHING else moved. Composed length: 25,562
+    // (the r71 ceiling re-pinned to 25,700 with the measurement recorded).
+    const golden = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r132.txt"), "utf8").replace(/\r\n/g, "\n");
     const composed = buildProjectSystemPrompt(FULL_CTX).replace(/\r\n/g, "\n");
     expect(composed).toBe(golden);
   });
@@ -510,7 +525,23 @@ describe("PROMPT_REGISTRY (R59-F)", () => {
     // then the BYTE-IDENTITY pin above holds the new composition. Without
     // the env var this is a no-op (normal runs never touch the fixture).
     if (process.env.UPDATE_GOLDEN !== "1") return;
-    writeFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r131.txt"), buildProjectSystemPrompt(FULL_CTX));
+    writeFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r132.txt"), buildProjectSystemPrompt(FULL_CTX));
+  });
+
+  it("R132-MA: the R131-era golden stays in fixtures/ as HISTORY — superseded by prompt-golden-r132.txt, never byte-compared again", () => {
+    // The R117-c fork precedent, one era later again: the r131 fixture is
+    // the record of what the prompt WAS before the R132-MA mini agent
+    // additions; the r132 fixture is the live byte-identity anchor. The
+    // old file is pinned present-on-disk so it cannot be silently deleted.
+    expect(existsSync(join(import.meta.dirname, "fixtures", "prompt-golden-r131.txt"))).toBe(true);
+    const history = readFileSync(join(import.meta.dirname, "fixtures", "prompt-golden-r131.txt"), "utf8").replace(/\r\n/g, "\n");
+    // It is the pre-R132 composition: no MINI AGENTS section, no
+    // mini_agent vocabulary line, and the SUB-AGENTS lines still carry
+    // their pre-tighten spellings — the markers that prove it is history,
+    // not live.
+    expect(history).toContain("- **Supervision:** stalled sub-agents are stopped and reported automatically; the owner may stop one manually");
+    expect(history).not.toContain("## MINI AGENTS (mini_agent)");
+    expect(history).not.toContain("- mini_agent: dispatches a quick specialized task to a mini agent partner.");
   });
 
   it("R131-B: the R127-era golden stays in fixtures/ as HISTORY — superseded by prompt-golden-r131.txt, never byte-compared again", () => {
@@ -832,12 +863,15 @@ describe("ROUND-99 (R99-G): the subagent REPORT CONTRACT + confidence tags + mem
   it("every delegated task ends with the five-field report — \"none\", never silence", () => {
     const sub = buildSectionText(FULL_CTX, "sub-agents") ?? "";
     expect(sub).toContain("Report contract");
-    expect(sub).toContain("RESULT (done/blocked/failed, one line)");
-    expect(sub).toContain("FILES TOUCHED (paths + what changed)");
-    expect(sub).toContain("FINDINGS (facts the parent needs)");
-    expect(sub).toContain("OPEN QUESTIONS (for the parent/user)");
+    // R132-MA re-pin: the line was TIGHTENED to pay the mini-agents
+    // section's budget (the parenthetical glosses shed; the five fields +
+    // the none-never-silence law survive verbatim in substance).
+    expect(sub).toContain("RESULT (done/blocked/failed)");
+    expect(sub).toContain("FILES TOUCHED");
+    expect(sub).toContain("FINDINGS");
+    expect(sub).toContain("OPEN QUESTIONS");
     expect(sub).toContain("CONFIDENCE (high/medium/low + what raises it)");
-    expect(sub).toContain('A sub-agent that cannot fill a field writes "none" — never silence');
+    expect(sub).toContain('a field it cannot fill is "none" — never silence');
   });
 
   it("COMMUNICATION: the confidence line earns its keep — because + raising-it + no-line-when-verified (R107-a F6: ONE vocabulary, the textual form)", () => {

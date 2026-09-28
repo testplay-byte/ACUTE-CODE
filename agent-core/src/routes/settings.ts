@@ -177,6 +177,15 @@ export function registerSettingsRoutes(scope: FastifyInstance, ctx: RouteContext
         ...(isSubagentModelRefBody(raw.subagentModel)
           ? { subagentModel: normalizeSubagentModelRef(raw.subagentModel) }
           : {}),
+        // ROUND-132 (R132, the mini agent system): the mini agents' model —
+        // the SAME three-form grammar (string catalog id | null = inherit
+        // the main one | {providerId, modelId}), validated by the shared
+        // settings-layer validator.
+        ...(typeof raw.miniagentModel === "string" ? { miniagentModel: raw.miniagentModel } : {}),
+        ...(raw.miniagentModel === null ? { miniagentModel: null } : {}),
+        ...(isSubagentModelRefBody(raw.miniagentModel)
+          ? { miniagentModel: normalizeSubagentModelRef(raw.miniagentModel) }
+          : {}),
         // ROUND-52 (R52-b): the child-supervisor knobs (heartbeat cadence
         // + stall threshold) — validated + clamped in settings.ts.
         ...(typeof raw.childWatchdogMs === "number" ? { childWatchdogMs: raw.childWatchdogMs } : {}),

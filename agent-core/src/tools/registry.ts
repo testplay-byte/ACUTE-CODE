@@ -49,6 +49,9 @@ import { todoPlugin } from "./plugins/todo.js";
 // ROUND-87 (R87): the mid-task interactive question tool (ask_user).
 import { askUserPlugin } from "./plugins/ask-user.js";
 import { delegationPlugin } from "./plugins/delegation.js";
+// ROUND-132 (R132, the mini agent system): the quick-specialized partner
+// dispatcher — one skill per mini, ≤3 concurrent, disposable one-task runs.
+import { miniAgentPlugin } from "./plugins/mini-agent.js";
 // ROUND-61 (R61): computer use, skills, MCP — the extension surface.
 import { computerUsePlugin } from "./plugins/computer-use.js";
 import { skillsPlugin } from "./plugins/skills.js";
@@ -123,6 +126,9 @@ export const BUILT_IN_PLUGINS: readonly PluginDefinition[] = [
   // toolDeps (bare declaration/test builds see nothing).
   askUserPlugin,
   delegationPlugin,
+  // ROUND-132 (R132): the mini agent dispatcher — after delegation (its
+  // nearest sibling: both dispatch work, different horizons).
+  miniAgentPlugin,
   // ROUND-61 (R61): the computer-use surface is SETTINGS-GATED (default
   // OFF — createTools returns [] until the owner flips the master switch);
   // skills' read_skill is always on (observation); MCP bridges only

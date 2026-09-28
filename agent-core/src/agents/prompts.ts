@@ -553,6 +553,9 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
   if (has("web_fetch")) tools("- web_fetch: reads one public URL.");
   if (has("web_search")) tools("- web_search: searches the web.");
   if (has("delegate_task")) tools("- delegate_task: runs a self-contained subtask in a child agent.");
+  // ROUND-132 (R132, the mini agent system): the partner dispatcher's
+  // one-liner (the MINI AGENTS section below carries the craft).
+  if (has("mini_agent")) tools("- mini_agent: dispatches a quick specialized task to a mini agent partner.");
   if (has("memory_save")) tools("- memory_save: persists a durable project fact.");
   if (has("memory_recall")) tools("- memory_recall: searches project memory beyond the digest.");
   // ROUND-117 (R117-b): the episodic leg — past-session search joins the
@@ -612,34 +615,50 @@ export function buildTaggedPromptLines(ctx: PromptContext): TaggedLine[] {
     ident("## SUB-AGENTS (delegate_task)");
     ident("Delegate self-contained subtasks via delegate_task — each child runs its own session with the project tools and returns a final report. Key patterns:");
     ident("- **Parallelism:** call delegate_task multiple times in one message to run sub-agents concurrently.");
-    ident("- **Self-contained tasks:** the sub-agent cannot see this conversation — include every detail it needs (paths, requirements, constraints) in the task text.");
+    ident("- **Self-contained tasks:** the child cannot see this conversation — include every detail it needs in the task text.");
     // ROUND-99 (R99-G): GOOD/BAD USES merged to one line, the AFTER
     // DELEGATION line retired (SCOPE DISCIPLINE already teaches
     // read-the-reports-and-build-on-them), SUPERVISION tightened — the
     // savings fund the REPORT CONTRACT below.
-    ident("- **Good uses:** separate areas, independent implementation steps, verification passes; **bad uses:** trivial one-liners (read_file is faster), tightly sequential steps.");
+    // R132-MA (the budget payment): the good-uses/supervision/report/result
+    // lines below were TIGHTENED in the same commit that added the MINI
+    // AGENTS section — the mini guidance carries the quick-task half of
+    // the old teaching, so the sub-agent lines shed their overlap (the
+    // measured composition stays inside the re-pinned ceiling).
+    ident("- **Good uses:** separate areas, independent implementation steps, verification passes; **bad uses:** tightly sequential steps (quick lookups are mini_agent work).");
     // ROUND-52 (R52-b): the owner asked the MAIN agent to actively supervise
     // long-running children. The supervisor watchdog (stall detection +
     // heartbeat stats) is automatic; this line teaches the parent to ACT on
     // the honest failure reports it receives.
-    ident("- **Supervision:** stalled sub-agents are stopped and reported automatically; the owner may stop one manually. When a child's report says it stalled or was stopped by the owner, investigate, re-delegate only when clearly right, and tell the user — never silently retry stopped work.");
+    ident("- **Supervision:** stalled children are stopped + reported automatically; a report saying stalled or owner-stopped means investigate and tell the user — never silently retry stopped work.");
     // ROUND-71 (R71-e1, D4): delegation discipline (kilocode's task-tool
     // strings): the child delivers ONLY its delegated scope (the brief is
     // the contract — the parent never redoes it), and the result arrives
     // AS a tool result — no sleeping/polling for the sub-agent itself
     // (job_status is for explicitly-backgrounded SHELL jobs only).
     ident("- **Scope discipline:** the sub-agent reads the delegation brief and delivers only its scope — do not duplicate that work yourself; read the reports and build on them.");
-    ident("- Delegation results arrive as tool results — do NOT sleep, wait, or poll for a sub-agent (job_status exists only for explicitly-backgrounded shell jobs).");
+    ident("- Delegation results arrive as tool results (ending with a machine-readable block) — do NOT sleep, wait, or poll (job_status is only for explicitly-backgrounded shell jobs).");
     // ROUND-99 (R99-G): the OUTPUT CONTRACT — the owner's flaw: "There is
     // no output contract for subagents." A report shape the parent can
     // machine-parse: five fields, every one filled or explicitly "none" —
     // never silence (an absent field is indistinguishable from a stalled
     // child). The CONFIDENCE field mirrors the parent-side tag contract.
-    ident("- **Report contract:** every delegated task ends with the child's report in this shape — RESULT (done/blocked/failed, one line), FILES TOUCHED (paths + what changed), FINDINGS (facts the parent needs), OPEN QUESTIONS (for the parent/user), CONFIDENCE (high/medium/low + what raises it). A sub-agent that cannot fill a field writes \"none\" — never silence.");
-    // ROUND-117 (R117-d): the structured result envelope's parent-side half —
-    // the tool result ends with the fenced delegation-result block; teach the
-    // model it exists and what it is FOR, in one line.
-    ident("- Delegation results end with a machine-readable block (files touched, usage) — use it for scope decisions, not prose.");
+    ident("- **Report contract:** every delegation ends with the child's report — RESULT (done/blocked/failed), FILES TOUCHED, FINDINGS, OPEN QUESTIONS, CONFIDENCE (high/medium/low + what raises it); a field it cannot fill is \"none\" — never silence.");
+    ident("");
+  }
+  // ── ROUND-132 (R132, the mini agent system): the PARTNER tier. The
+  // owner's directive: quick specialized tasks (browser/computer/search/
+  // custom), ≤3 concurrent, disposable one-task runs, the report returning
+  // outcome + the current state. Sits BESIDE SUB-AGENTS: minis are the
+  // quick tier, delegations are the long-horizon tier — the section
+  // teaches the split.
+  if (ctx.toolNames.includes("mini_agent")) {
+    beginSection("mini-agents");
+    ident("## MINI AGENTS (mini_agent)");
+    ident("mini_agent dispatches ONE quick task to a specialized partner inside this conversation — browser (the embedded panel), computer (the desktop), search (files on this machine), or custom (you write the specialty via instructions). It runs its own short loop and returns OUTCOME + STATE + what it did.");
+    ident("- Give the GOAL in natural language with the why — the mini decides the steps; it cannot see this conversation or ask follow-ups, so include everything it needs (URLs, names, criteria).");
+    ident("- Up to 3 run CONCURRENTLY — batch independent mini_agent calls in one message.");
+    ident("- Not for long-horizon work (delegate_task owns that) or what your own tools do in one call; a running mini's result arrives as this tool's result — never re-dispatch it.");
     ident("");
   }
   beginSection("tool-results-are-data");

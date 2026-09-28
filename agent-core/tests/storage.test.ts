@@ -281,6 +281,10 @@ describe("template seeding", () => {
           "web_search",
           "index_project",
           "delegate_task",
+          // ROUND-132 (R132): the mini agent dispatcher — seeded via
+          // TOOL_NAMES right after delegate_task (fresh seeds; the default
+          // agent's [] allowlist already means ALL).
+          "mini_agent",
           "browser_control",
           // ROUND-44 (R44-a): the memory tools (seeded via TOOL_NAMES).
           "memory_save",

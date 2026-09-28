@@ -138,9 +138,11 @@ describe("R73-b D1: the registry + the two composed sections", () => {
     // bodies) joined DIRECTLY after skills, pushing the R73 pair one back.
     // R99-G: 31 → 32 — +precedence +autonomy, −precision-discipline (folded
     // into completion-discipline; the registry-completeness pin elsewhere
-    // guarantees the stale id can't linger).
-    expect(PROMPT_SECTION_IDS.length).toBe(32);
-    expect(PROMPT_REGISTRY.length).toBe(32);
+    // guarantees the stale id can't linger). R132-MA: 32 → 33 — +mini-agents
+    // (the quick-specialized partner tier, tool-gated directly after
+    // sub-agents).
+    expect(PROMPT_SECTION_IDS.length).toBe(33);
+    expect(PROMPT_REGISTRY.length).toBe(33);
     // R98-E2: always-on-skills sits DIRECTLY after skills (the "deep module
     // follows its index" position — the R73 pair's own precedent).
     expect(PROMPT_SECTION_IDS.indexOf("always-on-skills")).toBe(PROMPT_SECTION_IDS.indexOf("skills") + 1);
