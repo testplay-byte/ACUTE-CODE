@@ -221,14 +221,19 @@ export function downloadAppUpdate(asset: ApkAsset, deps: UpdateDeps = {}): Downl
     }
   })();
 
-  // Every subscription lives exactly as long as the transfer does.
+  // Every subscription lives exactly as long as the transfer does. The
+  // two-arm then (not a bare .finally) is load-bearing: .finally() DERIVES
+  // a promise that rejects with the transfer's own failure, and nothing
+  // ever handles that derived promise — every failed download surfaced as
+  // an unhandled rejection (R132-MU's manager tests found it; consumers
+  // only ever handle the ORIGINAL promise).
   const cleanup = () => {
     while (unsubs.length) {
       const u = unsubs.pop();
       u?.();
     }
   };
-  void result.finally(cleanup);
+  void result.then(cleanup, cleanup);
 
   return {
     result,

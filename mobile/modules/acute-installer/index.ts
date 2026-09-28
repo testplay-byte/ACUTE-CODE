@@ -16,6 +16,13 @@
  *       runtime-grant probe (Android 8+)
  *   openInstallPermissionSettings() → Promise<boolean> — the one-tap path to
  *       this app's grant page in system settings
+ *   getDownloadState() → Promise<{active, url, received, total}> (R132-MU2)
+ *       The live-transfer PROBE: a direct read of the native call's fields
+ *       (no throttle, no event) — the re-mounted update screen asks ONCE,
+ *       and if the JS download state was lost (a reload-class desync) while
+ *       OkHttp kept streaming in this module's process-lifetime scope, the
+ *       UI re-attaches to the real transfer instead of showing a blank menu
+ *       (and a second downloadApk would only reject "busy").
  *
  * The "progress" event fires ~1% steps while a download runs:
  *   { url, received, total, fraction } — fraction is -1 when the server
@@ -45,6 +52,17 @@ export interface NativeDownloadResult {
   size: number;
 }
 
+/** R132-MU2 — the live-transfer probe's answer: {active:true, url, received,
+ * total} while the module's one in-flight download streams ({total} is -1
+ * when the server sent no Content-Length, the event grammar's own rule),
+ * {active:false, url:null, received:0, total:0} when nothing runs. */
+export interface NativeDownloadState {
+  active: boolean;
+  url: string | null;
+  received: number;
+  total: number;
+}
+
 type AcuteInstallerEventsMap = {
   progress: (ev: { url: string; received: number; total: number; fraction: number }) => void;
 };
@@ -56,6 +74,7 @@ declare class AcuteInstallerNativeModule extends NativeModule<AcuteInstallerEven
   installApk(options: { path: string }): Promise<void>;
   canRequestInstalls(): Promise<boolean>;
   openInstallPermissionSettings(): Promise<boolean>;
+  getDownloadState(): Promise<NativeDownloadState>;
 }
 
 export const AcuteInstaller = requireNativeModule<AcuteInstallerNativeModule>("AcuteInstaller");

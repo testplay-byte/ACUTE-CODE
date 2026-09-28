@@ -43,8 +43,25 @@
  *     pinned tests stand untouched — a token saved by an older install
  *     still rides the retry leg; there is simply no UI to manage one.
  *
+ * R132-MU — THE STATE OUTLIVES THE ROUTE (the owner's defect: "sometimes
+ * the downloading options would disappear and would not be shown even
+ * though the download was happening, and if I click check for updates and
+ * click download again, it would say download already happening"). The
+ * native OkHttp transfer is process-lifetime; the download state here used
+ * to be component-local useState, so back-navigation destroyed the mirror
+ * while the transfer kept running — a re-mount showed NOTHING and a second
+ * Download tap hit the native "busy" rejection as an error toast. All of
+ * it now renders FROM the module-scope download manager
+ * (src/update/download-manager.ts): a re-mount shows the live progress /
+ * the completed card again, "busy" re-attaches instead of erroring
+ * (never a toast for a download that is genuinely running), and a completed
+ * APK is never silently deleted by a re-download. The check flow, the
+ * sheet's own behavior, and the toast grammar are unchanged — this screen's
+ * whole job became subscribe → render.
+ *
  * This screen never imports the native modules — src/update/updater.ts
- * owns the policy; installer-floor.ts owns the bridge.
+ * owns the policy; installer-floor.ts owns the bridge; download-manager.ts
+ * owns the lifetime.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -76,18 +93,18 @@ import {
   APP_VERSION,
   cacheCheckResult,
   canRequestInstalls,
-  cancelAppUpdate,
   checkForAppUpdate,
-  deleteDownloadedUpdate,
-  downloadAppUpdate,
   getCachedCheck,
-  installAppUpdate,
   openInstallPermissionSettings,
   type AppUpdateCheck,
   type ApkAsset,
 } from "@/update/updater";
 import { formatBytes } from "@/update/core";
-import type { NativeDownloadResult } from "@/update/installer-floor";
+import {
+  downloadManager,
+  type DownloadNotice,
+  type DownloadState,
+} from "@/update/download-manager";
 
 /** How much of the release notes renders before the fold (honest cap — the
  * full body lives in the release page's grammar; a phone sheet is a digest). */
@@ -106,11 +123,10 @@ export default function AppUpdateScreen() {
   //     menu; the details NEVER render inline) ──
   const [sheetOpen, setSheetOpen] = useState(false);
 
-  // ── the download state ──
-  const [downloading, setDownloading] = useState(false);
-  const [received, setReceived] = useState(0);
-  const [total, setTotal] = useState(0);
-  const [downloaded, setDownloaded] = useState<NativeDownloadResult | null>(null);
+  // ── the download state (R132-MU1 — the MANAGER's, not the route's: the
+  //     native transfer is process-lifetime, so the mirror must be too; a
+  //     back-navigation mid-download changes nothing) ──
+  const [dlState, setDlState] = useState<DownloadState>(() => downloadManager.getState());
   const [deleting, setDeleting] = useState(false);
 
   // ── the install gate ──
@@ -119,6 +135,12 @@ export default function AppUpdateScreen() {
 
   const available = check?.kind === "available" ? check : null;
   const asset: ApkAsset | null = available?.apk ?? null;
+
+  // The render's whole download truth, derived from the manager's snapshot.
+  const dlActive = dlState.phase === "active";
+  const dlResult = dlState.phase === "done" ? dlState.result : null;
+  const received = dlState.phase === "active" ? dlState.received : 0;
+  const total = dlState.phase === "active" ? dlState.total : 0;
 
   // ── the cached answer (the 24 h auto-check) paints the first frame; the
   //     grant probe runs once so the gate never lies by omission. R130: the
@@ -132,6 +154,68 @@ export default function AppUpdateScreen() {
       setInstallsAllowed(allowed);
     })();
   }, []);
+
+  // ── the download subscription (R132-MU1/MU2): render from the manager,
+  // and ask the native side ONCE whether a transfer is live — if the JS
+  // state was lost (a reload-class desync) while OkHttp kept streaming, the
+  // manager adopts the real transfer and the bar RESUMES instead of a
+  // blank menu. ──
+  const progress = useSharedValue(0);
+  // The animated fill — 1%-step events smoothed by a 260ms timing; reduced
+  // motion snaps (the design system's rule for every moving affordance).
+  const barFill = useAnimatedStyle(() => {
+    const fraction = Math.max(0, Math.min(1, progress.value));
+    return { width: `${fraction * 100}%` };
+  });
+  useEffect(() => {
+    // The notice grammar drives the bar + the toasts: "busy" NEVER reaches
+    // here as an error (the manager re-attaches it internally — R132-MU3);
+    // "canceled" stays the caution toast; real failures stay errors.
+    const applyNotice = (state: DownloadState, notice: DownloadNotice) => {
+      setDlState(state);
+      switch (notice.kind) {
+        case "started":
+          // Snap — a new transfer never drains the previous bar.
+          progress.value = 0;
+          break;
+        case "progress": {
+          const s = state.phase === "active" ? state : null;
+          if (!s) break;
+          const fraction = s.total > 0 ? Math.max(0, Math.min(1, s.received / s.total)) : 0;
+          progress.value = reducedMotion ? fraction : withTiming(fraction, { duration: 260 });
+          break;
+        }
+        case "completed":
+          progress.value = 1;
+          break;
+        case "discarded":
+          progress.value = 0;
+          break;
+        case "canceled":
+          toast.show({ kind: "caution", text: "download canceled" });
+          break;
+        case "failed":
+          toast.show({ kind: "error", text: notice.message });
+          mobWarn("update", "download failed", { message: notice.message });
+          break;
+        case "reset":
+          break; // quiet — the card simply leaves (an adopted transfer's end)
+      }
+    };
+    const unsub = downloadManager.subscribe(applyNotice);
+    // Re-sync once on subscribe (a transition inside the commit gap), then
+    // the one-per-mount native probe.
+    setDlState(downloadManager.getState());
+    const snap = downloadManager.getState();
+    if (snap.phase === "active") {
+      progress.value =
+        snap.total > 0 ? Math.max(0, Math.min(1, snap.received / snap.total)) : 0;
+    } else if (snap.phase === "done") {
+      progress.value = 1;
+    }
+    void downloadManager.probeNative();
+    return unsub;
+  }, [progress, reducedMotion, toast]);
 
   // ── the manual check: ONE button, one quiet line per answer — an
   //     AVAILABLE answer opens the sheet (the R130 flow's whole shape). ──
@@ -153,75 +237,25 @@ export default function AppUpdateScreen() {
     }
   }, [checking]);
 
-  // ── the download ──
-  const progress = useSharedValue(0);
-  // The animated fill — 1%-step events smoothed by a 260ms timing; reduced
-  // motion snaps (the design system's rule for every moving affordance).
-  const barFill = useAnimatedStyle(() => {
-    const fraction = Math.max(0, Math.min(1, progress.value));
-    return { width: `${fraction * 100}%` };
-  });
-  const startDownload = useCallback(
-    (assetToFetch: ApkAsset) => {
-      if (downloading) return;
-      setDownloading(true);
-      setDownloaded(null);
-      setReceived(0);
-      setTotal(assetToFetch.size ?? 0);
-      progress.value = 0;
-      mobLog("update", "download start", { name: assetToFetch.name });
-      const handle = downloadAppUpdate(assetToFetch);
-      const unsub = handle.onProgress((ev) => {
-        setReceived(ev.received);
-        if (ev.total > 0) setTotal(ev.total);
-        const fraction = ev.fraction >= 0 ? ev.fraction : 0;
-        progress.value = reducedMotion
-          ? fraction
-          : withTiming(fraction, { duration: 260 });
-      });
-      void handle.result
-        .then((result) => {
-          setDownloaded(result);
-          progress.value = 1;
-        })
-        .catch((e: unknown) => {
-          const canceled =
-            typeof e === "object" &&
-            e !== null &&
-            "code" in e &&
-            (e as { code?: string }).code === "canceled";
-          if (canceled) {
-            toast.show({ kind: "caution", text: "download canceled" });
-          } else {
-            const message = e instanceof Error ? e.message : "the download failed";
-            toast.show({ kind: "error", text: message });
-            mobWarn("update", "download failed", { message });
-          }
-        })
-        .finally(() => {
-          unsub();
-          setDownloading(false);
-        });
-    },
-    [downloading, progress, reducedMotion, toast]
-  );
-
-  // R130-D3: tapping the sheet's download starts the transfer AND closes
-  // the sheet — the progress then lives under the Check updates button
-  // (the owner's exact flow).
-  const downloadFromSheet = useCallback(
-    (assetToFetch: ApkAsset) => {
-      setSheetOpen(false);
-      startDownload(assetToFetch);
-    },
-    [startDownload],
-  );
+  // R130-D3 + R132-MU3: tapping the sheet's download starts the transfer
+  // AND closes the sheet — the progress then lives under the Check updates
+  // button (the owner's exact flow). The manager owns the lifecycle: a
+  // second tap while one runs is a no-op (the native single-flight law,
+  // guarded in JS — never a "busy" toast), and a tap with a COMPLETED
+  // result for the same asset is a no-op too — the sheet closes on the
+  // ready-to-install card already sitting under the button, and the cached
+  // APK is never silently deleted just to re-download ~57 MB.
+  const downloadFromSheet = useCallback((assetToFetch: ApkAsset) => {
+    setSheetOpen(false);
+    downloadManager.start(assetToFetch);
+  }, []);
 
   const cancelDownload = useCallback(async () => {
-    // The handle's promise rejects with "canceled" — the catch above owns
-    // the state reset; this just fires the native stop.
+    // The manager settles the state (our handle's chain rejects "canceled"
+    // — the caution toast rides the notice, not this call); this just fires
+    // the stop through the manager's live-transfer knowledge.
     try {
-      await cancelAppUpdate();
+      await downloadManager.cancel();
     } catch {
       // The cancel is best-effort; the transfer finishing is fine too.
     }
@@ -230,27 +264,24 @@ export default function AppUpdateScreen() {
   // ── the delete (R130-D4 — "or delete it from there"): discard the cached
   //     APK; the slot returns to the quiet check state. ──
   const deleteDownloaded = useCallback(async () => {
-    if (downloaded === null || deleting) return;
+    if (dlState.phase !== "done" || deleting) return;
     setDeleting(true);
     try {
-      await deleteDownloadedUpdate(downloaded.path);
-      setDownloaded(null);
-      progress.value = 0;
-      setReceived(0);
+      await downloadManager.discard();
       toast.show({ kind: "saved", text: "update deleted" });
     } catch {
       toast.show({ kind: "error", text: "could not delete the update" });
     } finally {
       setDeleting(false);
     }
-  }, [downloaded, deleting, progress, toast]);
+  }, [dlState, deleting, toast]);
 
   // ── the install ──
   const runInstall = useCallback(async () => {
-    if (!downloaded || installing) return;
+    if (dlState.phase !== "done" || installing) return;
     setInstalling(true);
     try {
-      await installAppUpdate(downloaded.path);
+      await downloadManager.install();
       mobLog("update", "install intent fired");
       // The OS installer now owns the flow; the app goes background.
     } catch (e) {
@@ -263,7 +294,7 @@ export default function AppUpdateScreen() {
     } finally {
       setInstalling(false);
     }
-  }, [downloaded, installing, toast]);
+  }, [dlState, installing, toast]);
 
   const openGrant = useCallback(async () => {
     try {
@@ -321,12 +352,14 @@ export default function AppUpdateScreen() {
       {/* ── THE PROGRESS / THE INSTALL — under the Check updates button, in
           the SAME slot (never a separate card): the determinate bar + the
           byte counts + Cancel while the transfer runs; "Ready to install" +
-          Install + Delete once it lands (the owner's exact flow). ── */}
-      {(downloading || downloaded !== null) && (
+          Install + Delete once it lands (the owner's exact flow — and
+          R132-MU: the slot renders from the manager, so it SURVIVES
+          back-navigation and re-appears on the re-mounted screen). ── */}
+      {(dlActive || dlResult !== null) && (
         <FadeInUp>
           <ClayCard>
             <View style={styles.checkPad}>
-              {downloading ? (
+              {dlActive ? (
                 <>
                   <View style={styles.versionRow}>
                     <TypeBodyStrong>Downloading</TypeBodyStrong>
@@ -347,11 +380,11 @@ export default function AppUpdateScreen() {
                     Cancel
                   </QuietButton>
                 </>
-              ) : downloaded !== null ? (
+              ) : dlResult !== null ? (
                 <>
                   <View style={styles.versionRow}>
                     <TypeBodyStrong>Ready to install</TypeBodyStrong>
-                    <TypeMono>{formatBytes(downloaded.size)}</TypeMono>
+                    <TypeMono>{formatBytes(dlResult.size)}</TypeMono>
                   </View>
 
                   {installsAllowed === false && (
@@ -411,7 +444,7 @@ export default function AppUpdateScreen() {
               </View>
             ) : null}
             {asset !== null ? (
-              downloading ? null : (
+              dlActive ? null : (
                 <ChromeButton
                   onPress={() => downloadFromSheet(asset)}
                   labelFit

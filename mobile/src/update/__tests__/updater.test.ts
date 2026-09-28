@@ -43,6 +43,9 @@ jest.mock("../installer-floor", () => ({
     installApk: async () => undefined,
     canRequestInstalls: async () => true,
     openInstallPermissionSettings: async () => true,
+    // R132-MU2's probe, mocked at rest (nothing here exercises it — the
+    // download manager's own suite carries the probe's pins).
+    getDownloadState: async () => ({ active: false, url: null, received: 0, total: 0 }),
     onProgress: () => () => undefined,
   },
 }));

@@ -11,10 +11,15 @@
  */
 
 import { acuteNetTransport } from "../link/native-transport";
-import { AcuteInstaller, type NativeDownloadOptions, type NativeDownloadResult } from "../../modules/acute-installer";
+import {
+  AcuteInstaller,
+  type NativeDownloadOptions,
+  type NativeDownloadResult,
+  type NativeDownloadState,
+} from "../../modules/acute-installer";
 
 // Re-exported so updater.ts + the screen never import the module directly.
-export type { NativeDownloadOptions, NativeDownloadResult };
+export type { NativeDownloadOptions, NativeDownloadResult, NativeDownloadState };
 
 // ── the seams (what updater.ts consumes; what tests fake) ──────────────────
 
@@ -41,6 +46,12 @@ export interface InstallerFloor {
   installApk(options: { path: string }): Promise<void>;
   canRequestInstalls(): Promise<boolean>;
   openInstallPermissionSettings(): Promise<boolean>;
+  /** R132-MU2 — the live-transfer probe: a DIRECT read of the native call's
+   *  fields ({active:false, url:null, received:0, total:0} when nothing
+   *  runs) — no throttle, no event hop. The re-mounted update screen's
+   *  re-attach leg; the manager treats a failed probe as "nothing to
+   *  adopt" (belt-and-braces means exactly that). */
+  getDownloadState(): Promise<NativeDownloadState>;
   /** Subscribe to the module's throttled progress events; returns the
    * unsubscribe. Events are filtered by url at THIS layer. */
   onProgress(
@@ -77,6 +88,7 @@ export const installerFloor: InstallerFloor = {
   installApk: (options) => AcuteInstaller.installApk(options),
   canRequestInstalls: () => AcuteInstaller.canRequestInstalls(),
   openInstallPermissionSettings: () => AcuteInstaller.openInstallPermissionSettings(),
+  getDownloadState: () => AcuteInstaller.getDownloadState(),
   onProgress(url, cb) {
     const subscription = AcuteInstaller.addListener("progress", (ev) => {
       if (ev.url !== url) return;
