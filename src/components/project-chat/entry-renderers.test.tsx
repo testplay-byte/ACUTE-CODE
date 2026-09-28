@@ -53,6 +53,8 @@ describe("ROUND-95 (R95-F) registry coverage — the wire-up gate", () => {
   it("knows every WorkingEntry kind (the exhaustiveness map stays in lockstep)", () => {
     expect([...KNOWN_WORKING_ENTRY_KINDS].sort()).toEqual([
       "approval",
+      // R132-MA-ui: the mini agent's dedicated section joined the union.
+      "mini",
       "question",
       "screenshot",
       "text",
@@ -62,8 +64,10 @@ describe("ROUND-95 (R95-F) registry coverage — the wire-up gate", () => {
     ]);
   });
 
-  it("registers the four importable kinds by default; the three module-internal kinds are the honest gap", () => {
-    expect(registeredWorkingEntryKinds().sort()).toEqual(["question", "screenshot", "thinking", "todo"]);
+  it("registers the five importable kinds by default; the three module-internal kinds are the honest gap", () => {
+    // R132-MA-ui: mini joins the importable set (MiniAgentSection is its
+    // own module — the read_skill R114-e precedent).
+    expect(registeredWorkingEntryKinds().sort()).toEqual(["mini", "question", "screenshot", "thinking", "todo"]);
     // text/tool/approval render inside WorkingSection.tsx (module-internal
     // NarrationRow/ToolLine/ApprovalRow) — the wire-up round exports +
     // registers them; until then the gate reports exactly these three.
@@ -72,6 +76,7 @@ describe("ROUND-95 (R95-F) registry coverage — the wire-up gate", () => {
     expect(pendingAdoptionNote("tool")).toContain("ToolLine");
     expect(pendingAdoptionNote("approval")).toContain("ApprovalRow");
     expect(pendingAdoptionNote("todo")).toBeUndefined();
+    expect(pendingAdoptionNote("mini")).toBeUndefined();
   });
 });
 
@@ -193,7 +198,7 @@ describe("ROUND-95 (R95-F) registration lifecycle", () => {
     unregisterWorkingEntryRenderer("thinking");
     expect(missingWorkingEntryKinds().sort()).toEqual(["approval", "text", "thinking", "tool"]);
     resetWorkingEntryRenderersForTests();
-    expect(registeredWorkingEntryKinds().sort()).toEqual(["question", "screenshot", "thinking", "todo"]);
+    expect(registeredWorkingEntryKinds().sort()).toEqual(["mini", "question", "screenshot", "thinking", "todo"]);
   });
 
   it("the FULL render context threads through to the renderer unchanged", () => {

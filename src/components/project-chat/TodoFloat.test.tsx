@@ -72,7 +72,7 @@ function sessionState(over: Partial<StreamSessionState> = {}): StreamSessionStat
     remote: false,
     // R125-B: the slice's newest field (the feedback ledger status) — null
     // in every TodoFloat fixture (the float never renders it).
-    feedbackEvent: null,
+    feedbackEvent: null, miniRuns: [],
     ...over,
   };
 }

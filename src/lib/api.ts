@@ -73,6 +73,11 @@ export const TOOL_CATALOG = [
   // (the agent-form checkboxes render from THIS list — it lagged 15 vs 21
   // after R43/R44 added delegation, browser control and memory).
   "delegate_task",
+  // ROUND-132 (R132): the mini agent dispatcher — the quick-specialized
+  // partner tier (browser/computer/search/custom), ≤3 concurrent,
+  // disposable one-task runs. Same lockstep law: the agent-form checkboxes
+  // render from this list.
+  "mini_agent",
   "browser_control",
   "memory_save",
   "memory_recall",
@@ -1452,7 +1457,78 @@ export type WorkingEntry =
       items: TodoSnapshot["todos"];
       ts: string;
       source?: "agent" | "user";
+    }
+  /** ROUND-132 (R132-MA-ui, the owner's centerpiece directive: "when the
+   * mini agent is at work, a dedicated section for it will appear, and its
+   * actions will be shown in there. And the prompt given to it by the main
+   * agent will also be shown there"): ONE entry per mini run — the
+   * `mini-agent.started` SSE frame APPENDS it at its dispatch moment (the
+   * R68-A capture-moment law: the section opens while the mini_agent tool
+   * row above it is still in flight), the `mini-agent.action` frames append
+   * action rows in arrival order, and `mini-agent.done` patches it terminal
+   * IN PLACE (MiniAgentSection renders the whole record). The FOLD builds
+   * the same entry from the persisted `mini_agent.*` session events, so a
+   * reload renders the section byte-identically. Keyed by `run.miniId` —
+   * concurrent minis are SIBLING sections (the R128-W5 out-of-order
+   * completion lesson: three minis in one message complete in any order). */
+  | {
+      type: "mini";
+      run: MiniAgentRun;
     };
+
+/** ROUND-132 (R132-MA-ui): the mini agent's SKILL names — the one-task
+ * specializations the main agent dispatches (agent-core's
+ * agents/mini-agent.ts MINI_SKILLS table: browser / computer / search /
+ * custom — "each of the mini agents will be skilled in only one of its
+ * ways"). */
+export type MiniAgentSkillName = "browser" | "computer" | "search" | "custom";
+
+/** ROUND-132 (R132-MA-ui): one completed mini-agent tool call — the
+ * `mini-agent.action` frame and the persisted `mini_agent.action` event
+ * carry the SAME payload (the fold and the live section agree byte-for-
+ * byte). */
+export interface MiniAgentAction {
+  /** The run's own step counter (1-based, arrival order). */
+  seq: number;
+  tool: string;
+  argsSummary: string;
+  ok: boolean;
+  outputSummary: string | null;
+}
+
+/** ROUND-132 (R132-MA-ui): ONE mini run's renderable record — the shape the
+ * live stream-store registry holds, the `{type:"mini"}` WorkingEntry wraps,
+ * and the fold rebuilds from the persisted `mini_agent.*` events. Built
+ * ONLY from the three frames/events (started opens, actions append, done
+ * closes) — never synthesized client-side. */
+export interface MiniAgentRun {
+  /** The stable run id the backend mints (mini-<time>-<rand>) — the
+   * attribution key for every action/done frame of this run. */
+  miniId: string;
+  skill: MiniAgentSkillName;
+  /** THE PROMPT the main agent gave it (the owner's explicit ask — always
+   * rendered, 2-line clamp with expand). */
+  task: string;
+  /** The resolved model pair the mini actually runs on
+   * (orchestration.miniagentModel ?? the parent turn's pair). */
+  model?: { providerId: string; modelId: string };
+  /** running → the section's live state; done/failed terminal on the
+   * mini-agent.done frame (ok:false = failed — the honest failure). */
+  status: "running" | "done" | "failed";
+  /** The completed tool calls, in arrival order (seq order per run). */
+  actions: MiniAgentAction[];
+  /** Terminal only — the REPORT the mini returned (the same text the main
+   * model received as the mini_agent tool result). */
+  result?: string;
+  /** Terminal only — the run's tool-step count (the done frame's steps). */
+  steps?: number;
+  /** Terminal only — the run's token spend (null when the channel carried
+   * no usage). */
+  usage?: { inputTokens: number; outputTokens: number } | null;
+  /** The run's open moment (the started frame's arrival / the started
+   * event's ts — the fold's ordering anchor). */
+  ts: string;
+}
 
 /** tool.use payload fields as agent-core's runtime writes them. */
 interface ToolUsePayload {
@@ -1577,6 +1653,25 @@ interface DebugReportPayload {
   model?: unknown;
 }
 
+/** R132-MA-ui: payload of the persisted `mini_agent.*` session events —
+ * the SAME payloads the mini-agent.* SSE frames carry (agent-core's
+ * runMiniAgent persists each frame's body verbatim; see the fold's mini
+ * branch for the per-event fields each type actually reads). */
+interface MiniAgentEventPayload {
+  miniId?: unknown;
+  skill?: unknown;
+  task?: unknown;
+  model?: unknown;
+  seq?: unknown;
+  tool?: unknown;
+  argsSummary?: unknown;
+  ok?: unknown;
+  outputSummary?: unknown;
+  result?: unknown;
+  steps?: unknown;
+  usage?: unknown;
+}
+
 /** ROUND-78 (R78-b): narrow a raw `attachments` payload array into DISPLAY-ONLY
  * AttachmentRefs (name/path/size — `text` is deliberately dropped) — the exact
  * R50-c1 narrowing that lived inline in the message.user branch, extracted so
@@ -1662,6 +1757,11 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
     // ROUND-87 (R87): the ask_user cards' positions (the resolved event
     // patches the entry the requested event created).
     const questionIndex = new Map<string, number>();
+    // R132-MA-ui: the mini runs' working-entry positions, keyed by miniId
+    // (the started event opens the section at its dispatch position; the
+    // action/done events patch that entry in place — concurrent minis are
+    // sibling sections, so the map is per-miniId, never "the last one").
+    const miniIndex = new Map<string, number>();
     let usage: { inputTokens: number; outputTokens: number } | undefined;
     let ms: number | undefined;
     let model: string | undefined;
@@ -1849,6 +1949,114 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
         continue;
       }
 
+      // R132-MA-ui: the mini runs fold from their persisted events — the
+      // SAME three-payload grammar the SSE frames carry (agent-core's
+      // runMiniAgent persists {miniId, skill, task, model} →
+      // {miniId, seq, tool, argsSummary, ok, outputSummary} →
+      // {miniId, ok, result, steps, usage}), so the folded section is
+      // byte-identical to the live one: the started event OPENS the
+      // `{type:"mini"}` working entry at its dispatch position (right after
+      // the mini_agent tool row that spawned it), each action event APPENDS
+      // an action row in arrival order, and the done event patches the run
+      // terminal IN PLACE. Concurrent minis interleave by miniId through
+      // the miniIndex map — sibling sections, any completion order.
+      if (
+        event.type === "mini_agent.started" ||
+        event.type === "mini_agent.action" ||
+        event.type === "mini_agent.done"
+      ) {
+        const payload =
+          event.payload && typeof event.payload === "object"
+            ? (event.payload as MiniAgentEventPayload)
+            : {};
+        const miniId = typeof payload.miniId === "string" ? payload.miniId : "";
+        if (miniId !== "") {
+          if (event.type === "mini_agent.started") {
+            const skill =
+              payload.skill === "browser" || payload.skill === "computer" ||
+              payload.skill === "search" || payload.skill === "custom"
+                ? payload.skill
+                : "custom";
+            const task = typeof payload.task === "string" ? payload.task : "";
+            const model =
+              payload.model !== null && typeof payload.model === "object" &&
+              typeof (payload.model as { providerId?: unknown }).providerId === "string" &&
+              typeof (payload.model as { modelId?: unknown }).modelId === "string"
+                ? {
+                    providerId: (payload.model as { providerId: string }).providerId,
+                    modelId: (payload.model as { modelId: string }).modelId,
+                  }
+                : undefined;
+            miniIndex.set(miniId, working.length);
+            working.push({
+              type: "mini",
+              run: {
+                miniId,
+                skill,
+                task,
+                ...(model !== undefined ? { model } : {}),
+                status: "running",
+                actions: [],
+                ts: event.ts,
+              },
+            });
+          } else {
+            const idx = miniIndex.get(miniId);
+            if (idx !== undefined && working[idx]?.type === "mini") {
+              const prev = working[idx].run;
+              if (event.type === "mini_agent.action") {
+                working[idx] = {
+                  type: "mini",
+                  run: {
+                    ...prev,
+                    actions: [
+                      ...prev.actions,
+                      {
+                        seq: typeof payload.seq === "number" ? payload.seq : prev.actions.length + 1,
+                        tool: typeof payload.tool === "string" ? payload.tool : "",
+                        argsSummary: typeof payload.argsSummary === "string" ? payload.argsSummary : "",
+                        ok: payload.ok !== false,
+                        outputSummary:
+                          typeof payload.outputSummary === "string" && payload.outputSummary.length > 0
+                            ? payload.outputSummary
+                            : null,
+                      },
+                    ],
+                  },
+                };
+              } else {
+                const doneSteps =
+                  typeof payload.steps === "number" && Number.isFinite(payload.steps)
+                    ? payload.steps
+                    : undefined;
+                working[idx] = {
+                  type: "mini",
+                  run: {
+                    ...prev,
+                    status: payload.ok === false ? "failed" : "done",
+                    result: typeof payload.result === "string" ? payload.result : "",
+                    ...(doneSteps !== undefined ? { steps: doneSteps } : {}),
+                    usage:
+                      payload.usage !== null && typeof payload.usage === "object" &&
+                      typeof (payload.usage as { inputTokens?: unknown }).inputTokens === "number" &&
+                      typeof (payload.usage as { outputTokens?: unknown }).outputTokens === "number"
+                        ? {
+                            inputTokens: (payload.usage as { inputTokens: number }).inputTokens,
+                            outputTokens: (payload.usage as { outputTokens: number }).outputTokens,
+                          }
+                        : null,
+                  },
+                };
+              }
+            }
+            // An action/done event with no matching started row (a log
+            // replayed past its started event) has no honest section to
+            // render — dropped, same tolerance as an unknown approval id.
+          }
+        }
+        continue;
+      }
+
       // Unknown event types are tolerated inside a turn (they keep the turn
       // alive for ts/endTs purposes but add no renderable entries).
     }
@@ -1964,7 +2172,15 @@ export function toProjectChatItems(events: SessionEvent[]): ProjectChatItem[] {
       event.type === "tool.use" ||
       event.type === "message.assistant" ||
       event.type === "approval.requested" ||
-      event.type === "approval.resolved"
+      event.type === "approval.resolved" ||
+      // R132-MA-ui: the mini runs' events ride INSIDE the turn they ran
+      // for (persisted between the mini_agent tool.use row and the turn's
+      // final assistant event) — WITHOUT this arm the flush's mini branch
+      // below never sees them (extendTurn is the ONLY path into
+      // acc.events; the fold tolerates but never renders unlisted types).
+      event.type === "mini_agent.started" ||
+      event.type === "mini_agent.action" ||
+      event.type === "mini_agent.done"
     ) {
       extendTurn(event);
       continue;
@@ -2889,6 +3105,13 @@ export interface OrchestrationSettings {
    * supervisor aborts the child and reports honestly to the parent
    * (60s–60min). */
   childStallTimeoutMs: number;
+  /** ROUND-132 (R132-MA-core/MA-ui, the owner: "the user can select which
+   * model the mini agent should use, which provider it should use, or
+   * should it use the main one"): the MINI AGENTS' model override — the
+   * same provider-scoped ref shape subagentModel uses. null = "use the main
+   * one" (the mini falls back to the PARENT TURN's effective pair, not the
+   * subagentModel — a mini is a partner, not a delegated child). */
+  miniagentModel: SubagentModelRef | null;
 }
 
 export async function fetchOrchestrationSettings(): Promise<OrchestrationSettings> {
@@ -2896,10 +3119,13 @@ export async function fetchOrchestrationSettings(): Promise<OrchestrationSetting
 }
 
 /** ROUND-82: the PATCH input — subagentModel accepts the provider-scoped
- * ref or null (the legacy bare-string form still works server-side). */
+ * ref or null (the legacy bare-string form still works server-side).
+ * R132-MA-ui: miniagentModel joins (same three-form acceptance server-side:
+ * the object ref, the legacy catalog-id string, or null). */
 export interface OrchestrationSettingsPatch
-  extends Partial<Omit<OrchestrationSettings, "subagentModel">> {
+  extends Partial<Omit<OrchestrationSettings, "subagentModel" | "miniagentModel">> {
   subagentModel?: SubagentModelRef | null;
+  miniagentModel?: SubagentModelRef | null;
 }
 
 export async function updateOrchestrationSettings(
@@ -4047,6 +4273,50 @@ export type StreamTurnEvent =
       tabId: string;
       path: string;
       bytes: number;
+    }
+  /** ROUND-132 (R132-MA-core/MA-ui — the owner's centerpiece directive): the
+   * MINI AGENT frames on the PARENT turn's stream. The main agent calls the
+   * `mini_agent` tool; the light partner loop (agent-core's
+   * agents/mini-agent.ts) emits its own chatter as these three frames while
+   * it runs — each attributed by a stable `miniId` (concurrent minis run in
+   * ANY completion order; the R128-W5 lesson), mirrored to the events bus by
+   * the route's send() wrapper, and PERSISTED as `mini_agent.*` session
+   * events with the SAME payloads (the fold's source after reload). The
+   * mini's tool chatter NEVER enters the main model's context — only the
+   * done frame's `result` returns to it, as the mini_agent tool result. */
+  | {
+      /** A mini agent started: the section OPENS with the skill badge, THE
+       * PROMPT the main agent gave it (`task` — the owner's explicit ask),
+       * and the resolved model pair it runs on
+       * (orchestration.miniagentModel ?? the parent turn's pair). */
+      type: "mini-agent.started";
+      miniId: string;
+      skill: MiniAgentSkillName;
+      task: string;
+      model: { providerId: string; modelId: string };
+    }
+  /** One COMPLETED tool call inside the mini's loop (one frame per action —
+   * in-flight calls surface only through the parent pill's own liveness). */
+  | {
+      type: "mini-agent.action";
+      miniId: string;
+      seq: number;
+      tool: string;
+      argsSummary: string;
+      ok: boolean;
+      outputSummary: string | null;
+    }
+  /** The mini run ENDED — ok:true carries the report (the same text the
+   * main model received); ok:false is the honest failure line. `steps` is
+   * the run's tool-step count; `usage` the run's token spend (null when the
+   * channel carried none). */
+  | {
+      type: "mini-agent.done";
+      miniId: string;
+      ok: boolean;
+      result: string;
+      steps: number;
+      usage: { inputTokens: number; outputTokens: number } | null;
     }
   /** ROUND-67 (R67/D), ROUND-68 (R68-A): the agent captured a screenshot
    * (computer-use screenshot / zoom / get_app_state includeScreenshot, or

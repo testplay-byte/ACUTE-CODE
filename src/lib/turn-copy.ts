@@ -114,6 +114,20 @@ export function buildFullTurnText(input: FullTurnTextInput): string {
         const mark = item.status === "completed" ? "[x]" : item.status === "in_progress" ? "[~]" : "[ ]";
         blocks.push(`${mark} ${item.content}`);
       }
+    } else if (entry.type === "mini") {
+      // R132-MA-ui: the mini agent's dedicated section — the export speaks
+      // the section's own grammar (skill + THE PROMPT the main agent gave,
+      // the action log, the report). Does NOT bump toolCount (the run rides
+      // inside the mini_agent TOOL call's own row above it).
+      const run = entry.run;
+      blocks.push("", `--- MINI AGENT (${run.skill}, ${run.status}) ---`);
+      blocks.push(`task: ${run.task}`);
+      if (run.model !== undefined) blocks.push(`model: ${run.model.providerId} · ${run.model.modelId}`);
+      for (const action of run.actions) {
+        blocks.push(`  ${action.seq}. ${action.tool} — ${action.argsSummary} [${action.ok ? "ok" : "FAILED"}]`);
+        if (action.outputSummary !== null) blocks.push(`     ${action.outputSummary.split("\n").join(" ")}`);
+      }
+      if (run.result !== undefined) blocks.push(`report: ${run.result}`);
     } else {
       // approval: the human-in-the-loop checkpoint, with its own fields.
       blocks.push("", `--- APPROVAL: ${entry.toolName} (${entry.status}) ---`);

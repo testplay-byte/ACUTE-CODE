@@ -210,7 +210,7 @@ describe("stream store live-truth rehydrate (ROUND-120 R120-C-PC)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     }));
@@ -260,7 +260,7 @@ describe("stream store live-truth rehydrate (ROUND-120 R120-C-PC)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     }));

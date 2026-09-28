@@ -23,6 +23,7 @@ import { useConfigStore } from "./config-store";
 import { setQueryClient, getQueryClient } from "./query-client";
 import {
   clearStreamSessionProjectsForTest,
+  getMiniAgentRun,
   getSubAgentLiveEntry,
   selectSubAgentsLive,
   useStreamStore,
@@ -2392,6 +2393,267 @@ describe("stream store turn.started (ROUND-114 R114-e — the own-stream leg)", 
       expect(slice?.queued).toEqual([{ seq: 5, content: "follow-up", ts: "2026-09-14T11:00:00Z" }]);
       expect(slice?.liveTurn?.stopped).toBe(false);
       expect(slice?.lastTurnStoppedByUser).toBe(false);
+    });
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+});
+
+// ─── ROUND-132 (R132-MA-ui): the mini agent's frames — the dedicated in-chat
+// section's live lifecycle (the owner's centerpiece directive). The three
+// frames ride the PARENT turn's SSE while the mini_agent tool call is in
+// flight: started opens the run (skill + THE PROMPT + the resolved model),
+// actions append in arrival order, done terminalizes (ok:false = failed).
+// The store keeps TWO legs in one patch: the slice-level `miniRuns` registry
+// (turn-independent — the subagent-status precedent) and the
+// `{type:"mini"}` WorkingEntry on the OPEN liveTurn (the render truth: the
+// section lands at its dispatch position, after the mini_agent tool row). ───
+describe("stream store mini-agent frames (ROUND-132 R132-MA-ui)", () => {
+  const MINI_A = "mini-lcyz1a-abc123";
+  const MINI_B = "mini-lcyz1b-def456";
+
+  it("started opens the run, actions append in order, done terminalizes — registry AND working entry in one patch", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "find the docs page");
+    sse.emit({ type: "turn.started", text: "find the docs page", model: "z-ai/glm-4.7", providerId: "zai" });
+    // The dispatch: the model called mini_agent (the pill's own row lands
+    // first — the runtime emits tool-call before executing the tool).
+    sse.emit({ type: "tool-call", toolCallId: "call_1", toolName: "mini_agent", argsSummary: "skill: browser, task: find the docs page" });
+    sse.emit({
+      type: "mini-agent.started",
+      miniId: MINI_A,
+      skill: "browser",
+      task: "find the docs page and report its URL",
+      model: { providerId: "openrouter", modelId: "z-ai/glm-4.7-flash" },
+    });
+    await vi.waitFor(() => {
+      // The registry leg — the full record the frames carried.
+      expect(getMiniAgentRun(PARENT, MINI_A)).toMatchObject({
+        miniId: MINI_A,
+        skill: "browser",
+        task: "find the docs page and report its URL",
+        model: { providerId: "openrouter", modelId: "z-ai/glm-4.7-flash" },
+        status: "running",
+        actions: [],
+      });
+      // The render leg — the section entry sits AFTER the in-flight tool
+      // row (the R68-A capture-moment law: the section opens while the
+      // mini_agent pill above it is still running).
+      const working = useStreamStore.getState().bySession[PARENT]?.liveTurn?.working ?? [];
+      expect(working.map((e) => e.type)).toEqual(["tool", "mini"]);
+    });
+
+    // Actions append IN ORDER (the run's own seq counter).
+    sse.emit({
+      type: "mini-agent.action",
+      miniId: MINI_A,
+      seq: 1,
+      tool: "browser_control",
+      argsSummary: "action: navigate, url: https://docs.example.com",
+      ok: true,
+      outputSummary: "loaded in 812ms",
+    });
+    sse.emit({
+      type: "mini-agent.action",
+      miniId: MINI_A,
+      seq: 2,
+      tool: "browser_control",
+      argsSummary: "action: read",
+      ok: false,
+      outputSummary: null,
+    });
+    await vi.waitFor(() => {
+      expect(getMiniAgentRun(PARENT, MINI_A)?.actions).toEqual([
+        { seq: 1, tool: "browser_control", argsSummary: "action: navigate, url: https://docs.example.com", ok: true, outputSummary: "loaded in 812ms" },
+        { seq: 2, tool: "browser_control", argsSummary: "action: read", ok: false, outputSummary: null },
+      ]);
+    });
+
+    // Done terminalizes the run (result + steps + usage) in BOTH legs.
+    sse.emit({
+      type: "mini-agent.done",
+      miniId: MINI_A,
+      ok: true,
+      result: "## REPORT\nOUTCOME: done — the docs page is live",
+      steps: 2,
+      usage: { inputTokens: 1840, outputTokens: 96 },
+    });
+    await vi.waitFor(() => {
+      expect(getMiniAgentRun(PARENT, MINI_A)).toMatchObject({
+        status: "done",
+        result: "## REPORT\nOUTCOME: done — the docs page is live",
+        steps: 2,
+        usage: { inputTokens: 1840, outputTokens: 96 },
+      });
+    });
+    // The working entry PATCHED IN PLACE (one section, terminal record).
+    const working = useStreamStore.getState().bySession[PARENT]?.liveTurn?.working ?? [];
+    expect(working.filter((e) => e.type === "mini")).toHaveLength(1);
+    const miniEntry = working.find((e) => e.type === "mini");
+    if (miniEntry?.type !== "mini") throw new Error("expected the mini entry");
+    expect(miniEntry.run).toEqual(getMiniAgentRun(PARENT, MINI_A));
+
+    sse.emit({ type: "tool-result", toolCallId: "call_1", toolName: "mini_agent", argsSummary: "skill: browser", ok: true, outputSummary: "mini agent (browser) — 2 steps" });
+    sse.emit({ type: "text-delta", delta: "The docs page is live at the URL the mini found." });
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+
+  it("two concurrent miniIds stay SEPARATE — sibling sections, any completion order (the R128-W5 lesson)", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+
+    const promise = useStreamStore.getState().startStream(PARENT, "check two things at once");
+    sse.emit({ type: "tool-call", toolCallId: "c1", toolName: "mini_agent", argsSummary: "skill: search" });
+    sse.emit({ type: "tool-call", toolCallId: "c2", toolName: "mini_agent", argsSummary: "skill: custom" });
+    // Three minis in one message complete in ANY order — B finishes FIRST.
+    sse.emit({ type: "mini-agent.started", miniId: MINI_A, skill: "search", task: "find the log file", model: { providerId: "openrouter", modelId: "m-a" } });
+    sse.emit({ type: "mini-agent.started", miniId: MINI_B, skill: "custom", task: "summarize the config", model: { providerId: "nvidia", modelId: "m-b" } });
+    sse.emit({ type: "mini-agent.action", miniId: MINI_A, seq: 1, tool: "search_files", argsSummary: "name: app.log", ok: true, outputSummary: "1 file" });
+    sse.emit({ type: "mini-agent.action", miniId: MINI_B, seq: 1, tool: "read_file", argsSummary: "path: config.ts", ok: true, outputSummary: null });
+    sse.emit({ type: "mini-agent.done", miniId: MINI_B, ok: false, result: "the mini agent (custom) failed: no API key for provider 'nvidia'", steps: 1, usage: null });
+    sse.emit({ type: "mini-agent.done", miniId: MINI_A, ok: true, result: "## REPORT\nOUTCOME: done", steps: 1, usage: { inputTokens: 500, outputTokens: 40 } });
+
+    await vi.waitFor(() => {
+      // The registry holds TWO runs, each carrying ONLY its own frames.
+      const runs = useStreamStore.getState().bySession[PARENT]?.miniRuns ?? [];
+      expect(runs.map((r) => r.miniId)).toEqual([MINI_A, MINI_B]);
+      expect(runs[0]).toMatchObject({ skill: "search", task: "find the log file", status: "done", steps: 1 });
+      expect(runs[0]?.actions).toEqual([{ seq: 1, tool: "search_files", argsSummary: "name: app.log", ok: true, outputSummary: "1 file" }]);
+      // The honest FAILURE: B terminalizes failed with its own reason.
+      expect(runs[1]).toMatchObject({
+        skill: "custom",
+        status: "failed",
+        result: "the mini agent (custom) failed: no API key for provider 'nvidia'",
+        usage: null,
+      });
+    });
+    // Sibling sections in the working array — dispatch order, not completion.
+    const working = useStreamStore.getState().bySession[PARENT]?.liveTurn?.working ?? [];
+    const minis = working.filter((e) => e.type === "mini");
+    expect(minis.map((e) => (e.type === "mini" ? e.run.miniId : ""))).toEqual([MINI_A, MINI_B]);
+
+    sse.emit({ type: "stopped" });
+    sse.close();
+    await promise;
+  });
+
+  it("mini frames land on a session with NO liveTurn tracking yet — the mirror opens ON the mini frame and nothing is dropped (frames-before-the-guard)", () => {
+    // The events-bus path: a remote watcher's FIRST heard frame of a turn
+    // can be a mini frame (the mirror opens on it — no turn.started, no
+    // text, no liveTurn tracked before it lands). The branch sits BEFORE
+    // the liveTurn guard precisely so these frames record, exactly like
+    // subagent-status frames.
+    const ingest = useStreamStore.getState().ingestRemoteFrame;
+    ingest(PARENT, {
+      type: "mini-agent.started",
+      miniId: MINI_A,
+      skill: "computer",
+      task: "close the settings dialog",
+      model: { providerId: "openrouter", modelId: "m-c" },
+    });
+    ingest(PARENT, {
+      type: "mini-agent.action",
+      miniId: MINI_A,
+      seq: 1,
+      tool: "find_elements",
+      argsSummary: "window: Settings",
+      ok: true,
+      outputSummary: "3 elements",
+    });
+    ingest(PARENT, {
+      type: "mini-agent.done",
+      miniId: MINI_A,
+      ok: true,
+      result: "## REPORT\nOUTCOME: done — dialog closed",
+      steps: 1,
+      usage: null,
+    });
+
+    // The turn-independent registry recorded the whole run…
+    expect(getMiniAgentRun(PARENT, MINI_A)).toMatchObject({
+      skill: "computer",
+      task: "close the settings dialog",
+      status: "done",
+      steps: 1,
+    });
+    // …and the freshly-opened mirror's working entry carries the section.
+    const working = useStreamStore.getState().bySession[PARENT]?.liveTurn?.working ?? [];
+    expect(working.filter((e) => e.type === "mini")).toHaveLength(1);
+  });
+
+  it("an action/done frame for an UNKNOWN miniId is an honest no-op (no section to attach to)", () => {
+    const ingest = useStreamStore.getState().ingestRemoteFrame;
+    // A started opens one run…
+    ingest(PARENT, {
+      type: "mini-agent.started",
+      miniId: MINI_A,
+      skill: "search",
+      task: "probe",
+      model: { providerId: "openrouter", modelId: "m" },
+    });
+    const before = useStreamStore.getState().bySession[PARENT];
+    // …an action for a miniId NO started introduced records nothing new
+    // (no run created, no working entry, the slice untouched otherwise).
+    ingest(PARENT, { type: "mini-agent.action", miniId: "mini-never-started", seq: 1, tool: "read_file", argsSummary: "x", ok: true, outputSummary: null });
+    ingest(PARENT, { type: "mini-agent.done", miniId: "mini-never-started", ok: true, result: "r", steps: 0, usage: null });
+    const after = useStreamStore.getState().bySession[PARENT];
+    expect(after?.miniRuns).toHaveLength(1);
+    expect(after?.miniRuns).toEqual(before?.miniRuns);
+    expect(after?.liveTurn?.working).toEqual(before?.liveTurn?.working);
+  });
+
+  it("startStream RESETS the mini registry — a fresh turn's sections are the fold's to render", async () => {
+    const sse = manualSseResponse();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sse.response));
+    // A prior turn's terminal run lingers in the registry (the slice-level
+    // field survives the liveTurn handoff, like feedbackEvent)…
+    useStreamStore.setState({
+      bySession: {
+        [PARENT]: {
+          ...(useStreamStore.getState().bySession[PARENT] ?? {
+            liveTurn: null,
+            streamBusy: false,
+            sendError: null,
+            liveError: null,
+            pendingEcho: null,
+            lastLiveEndMs: 0,
+            lastTurnStoppedByUser: false,
+            lastTurnStoppedTs: null,
+            queued: [],
+            deliveredQueued: [],
+            queueKeptNotice: null,
+            remote: false,
+            feedbackEvent: null,
+            miniRuns: [],
+          }),
+          miniRuns: [
+            {
+              miniId: "mini-old",
+              skill: "search",
+              task: "previous turn's run",
+              status: "done",
+              actions: [],
+              result: "old",
+              steps: 1,
+              usage: null,
+              ts: "2026-09-14T10:00:00Z",
+            },
+          ],
+        },
+      },
+    });
+
+    const promise = useStreamStore.getState().startStream(PARENT, "new turn");
+    // The fresh turn starts with an EMPTY registry (the persisted
+    // mini_agent.* events own the previous turn's render after refetch).
+    await vi.waitFor(() => {
+      expect(useStreamStore.getState().bySession[PARENT]?.miniRuns).toEqual([]);
     });
 
     sse.emit({ type: "stopped" });

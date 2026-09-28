@@ -5,6 +5,7 @@ import { ThoughtRow } from "./WorkingSection";
 import { QuestionCard } from "./QuestionCard";
 import { TodoCard } from "./TodoCard";
 import { ScreenshotRow } from "./ScreenshotRow";
+import { MiniAgentSection } from "./MiniAgentSection";
 
 /**
  * ROUND-95 (R95-F) — the MESSAGE-PART RENDERER REGISTRY for the working
@@ -90,6 +91,9 @@ const KNOWN_KINDS_EXHAUSTIVE: Record<WorkingEntryKind, true> = {
   screenshot: true,
   question: true,
   todo: true,
+  // R132-MA-ui: the mini agent's dedicated section (the map is the
+  // compile-time wire-up gate — this line is the designed extension point).
+  mini: true,
 };
 
 /** Every WorkingEntry kind the code knows about (source of truth: the map
@@ -233,7 +237,7 @@ export function renderWorkingEntry(entry: WorkingEntry, ctx: WorkingEntryRenderC
 
 // ── The default registrations ───────────────────────────────────────────────
 //
-// FOUR kinds register REAL renderers today — exactly the components that
+// FIVE kinds register REAL renderers today — exactly the components that
 // already live in their own modules (importable without touching D's
 // WorkingSection.tsx beyond its existing exports):
 //
@@ -242,6 +246,8 @@ export function renderWorkingEntry(entry: WorkingEntry, ctx: WorkingEntryRenderC
 //   question → QuestionCard (R87)
 //   todo     → TodoCard (R87)
 //   screenshot → ScreenshotRow (R68-A — the inline capture row)
+//   mini     → MiniAgentSection (R132-MA-ui — the mini agent's dedicated
+//              in-chat section, live + folded off one record)
 //
 // THREE kinds stay UNREGISTERED on purpose — text/tool/approval, whose
 // components (NarrationRow, ToolLine, ApprovalRow) are module-INTERNAL to
@@ -291,6 +297,13 @@ function registerDefaultWorkingEntryRenderers(): void {
       ctx.surface === "bare" ? null : (
         <ScreenshotRow shot={{ frameId: entry.frameId, tool: entry.tool, ts: entry.ts }} />
       ),
+  });
+  registerWorkingEntryRenderer({
+    kind: "mini",
+    label: "Mini-agent section",
+    notes:
+      "R132-MA-ui — renders on BOTH surfaces (the section owns its own placement; the bare leg degrades the projectId-prop like every bare renderer).",
+    render: (entry) => <MiniAgentSection run={entry.run} />,
   });
 }
 

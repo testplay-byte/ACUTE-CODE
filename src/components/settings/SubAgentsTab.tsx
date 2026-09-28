@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { Activity, Check, Cpu, KeyRound, Workflow } from "lucide-react";
+import { Activity, Bot, Check, Cpu, KeyRound, Workflow, type LucideIcon } from "lucide-react";
 import { useTimeoutClear } from "../../hooks/use-timeout-clear";
 import { useThemeStyles } from "../../lib/use-theme-styles";
 // R100-E2: the label-tier heading primitive (TOKENS §2 — THE one kicker).
@@ -77,6 +77,9 @@ async function saveSubagentSettings(patch: {
   /** ROUND-82 (R82): the provider-scoped ref (a bare catalog id no longer
    * reaches here — the picker builds the {providerId, modelId} pair). */
   subagentModel?: SubagentModelRef | null;
+  /** R132-MA-ui: the MINI AGENTS' model override (the same provider-scoped
+   * ref wire; null = "use the main one"). */
+  miniagentModel?: SubagentModelRef | null;
   childWatchdogMs?: number;
   childStallTimeoutMs?: number;
 }): Promise<OrchestrationSettings> {
@@ -124,13 +127,45 @@ function SubAgentKeysNote() {
   );
 }
 
-/* ── Card 2: sub-agent model picker ───────────────────────────────────────── */
+/* ── Card 2: the model-override picker (sub-agents + R132-MA-ui minis) ───── */
 
-function SubAgentModelCard() {
+/**
+ * R132-MA-ui: the ONE picker implementation, parameterized — the mini
+ * agents' model override (orchestration.miniagentModel, the owner: "the
+ * user can select which model the mini agent should use, which provider it
+ * should use, or should it use the main one") rides the EXACT machinery
+ * the sub-agent picker built (R43 → R82 → R93-A9): the configured-rows
+ * list, the "Inherits main model" null default, the tool-capability gate,
+ * the RUNNING-ON strip, and the same PUT wire. The sub-agent instance's
+ * labels are byte-identical to the pre-refactor card (its tests pin them).
+ */
+interface ModelOverrideCardSpec {
+  /** The orchestration settings field the picker reads/writes. */
+  field: "subagentModel" | "miniagentModel";
+  /** The card title (the SectionCard aria-label too). */
+  title: string;
+  /** The trailing phrase of the sidecar-unreachable error line. */
+  errorTail: string;
+  /** The loading line's noun ("sub-agent model" / "mini agents model"). */
+  loadingNoun: string;
+  /** The aria/label noun ("sub-agents" / "mini agents"). */
+  instanceLabel: string;
+  /** The testid prefix for the zero-rows hint. */
+  testIdPrefix: string;
+  /** The header glyph. */
+  icon: LucideIcon;
+  /** The provider chip's title (who routes to the picked provider). */
+  providerChipTitle: string;
+  /** The card's footer note (the one-line description). */
+  note: string;
+}
+
+function ModelOverrideCard({ spec }: { spec: ModelOverrideCardSpec }) {
   const styles = useThemeStyles();
   const queryClient = useQueryClient();
   const resetAfter = useTimeoutClear();
   const [msg, setMsg] = useState<string | null>(null);
+  const Icon = spec.icon;
 
   const settingsQuery = useQuery({
     queryKey: ["orchestration-settings"],
@@ -171,8 +206,12 @@ function SubAgentModelCard() {
     retry: false,
   });
 
+  // R132-MA-ui: the field is chosen BY THE SPEC (one mutation body, one
+  // wire — {miniagentModel: ref} for the mini card, {subagentModel: ref}
+  // for the sub-agent card; a computed key would lose the literal typing).
   const saveModel = useMutation({
-    mutationFn: (ref: SubagentModelRef | null) => saveSubagentSettings({ subagentModel: ref }),
+    mutationFn: (ref: SubagentModelRef | null) =>
+      saveSubagentSettings(spec.field === "miniagentModel" ? { miniagentModel: ref } : { subagentModel: ref }),
     onSuccess: (_data, ref) => {
       setMsg(ref === null ? "Cleared — inherits main model." : "Saved.");
       resetAfter(() => setMsg(null), 1500);
@@ -184,9 +223,9 @@ function SubAgentModelCard() {
   const settingsPending = settingsQuery.isLoading || settingsQuery.data === undefined;
   if (settingsQuery.isError) {
     return (
-      <SectionCard className="p-4" ariaLabel="Sub-agent model">
+      <SectionCard className="p-4" ariaLabel={spec.title}>
         <p className="text-[11px] text-danger-deep" role="alert">
-          {coreUnreachableHint} to pick a sub-agent model.
+          {coreUnreachableHint} to pick {spec.errorTail}.
         </p>
       </SectionCard>
     );
@@ -197,11 +236,11 @@ function SubAgentModelCard() {
   // simply doesn't render until the truth is available.
   if (configuredQuery.isError) {
     return (
-      <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Sub-agent model">
+      <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel={spec.title}>
         <div className="flex items-center gap-2">
-          <Cpu size={13} className="text-accent-deep" />
+          <Icon size={13} className="text-accent-deep" />
           <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
-            Sub-agent model
+            {spec.title}
           </span>
         </div>
         <p className="text-[11px] text-danger-deep" role="alert">
@@ -228,15 +267,17 @@ function SubAgentModelCard() {
   const configured = configuredQuery.data;
   if (settingsPending || settings === undefined || configured === undefined) {
     return (
-      <SectionCard className="p-4" ariaLabel="Sub-agent model">
+      <SectionCard className="p-4" ariaLabel={spec.title}>
         <span className="text-[12px] font-mono" style={{ color: styles.textTertiary }}>
-          {settingsPending || settings === undefined ? "loading sub-agent model settings…" : "loading your configured models…"}
+          {settingsPending || settings === undefined ? `loading ${spec.loadingNoun} settings…` : "loading your configured models…"}
         </span>
       </SectionCard>
     );
   }
 
-  const selected = settings.subagentModel;
+  // R132-MA-ui: the spec's field, normalized to null (an older sidecar's
+  // GET may omit the newer key — the honest default is "inherit").
+  const selected = (spec.field === "miniagentModel" ? settings.miniagentModel : settings.subagentModel) ?? null;
   // R93-A9: THE picker rows — every configured, not-hidden model row the user
   // curated in Models & Providers (the hide toggle is the "keep it out of my
   // pickers" contract). No free-only segmentation here: the user's own list
@@ -255,11 +296,11 @@ function SubAgentModelCard() {
     providersQuery.data?.find((p) => p.id === id)?.name ?? id;
 
   return (
-    <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel="Sub-agent model">
+    <SectionCard className="p-4 flex flex-col gap-2.5" ariaLabel={spec.title}>
       <div className="flex items-center gap-2 flex-wrap">
-        <Cpu size={13} className="text-accent-deep" />
+        <Icon size={13} className="text-accent-deep" />
         <span className="text-[13px] font-semibold" style={{ color: styles.text }}>
-          Sub-agent model
+          {spec.title}
         </span>
         <span className="flex-1" />
         {msg && (
@@ -295,9 +336,9 @@ function SubAgentModelCard() {
                 honestly to the raw id. */}
             {selectedRow && selectedRow.displayName ? selectedRow.displayName : selected.modelId}
             <span className="font-mono text-[11px] ml-1.5" style={{ color: styles.textTertiary }}>
-              {/* ROUND-82: the provider chip — the child turns route to THIS
-                  provider (the R82 override wire); the old bare id left the
-                  routing target invisible. */}
+              {/* ROUND-82: the provider chip — the override's turns route to
+                  THIS provider (the R82 override wire); the old bare id left
+                  the routing target invisible. */}
               {selected.providerId} · {selected.modelId}
             </span>
           </span>
@@ -311,7 +352,7 @@ function SubAgentModelCard() {
         {/* Inherit row */}
         <button
           onClick={() => saveModel.mutate(null)}
-          aria-label="Inherit the main model for sub-agents"
+          aria-label={`Inherit the main model for ${spec.instanceLabel}`}
           /* R126-3f-3: the selected row = the selection grammar
            * (bg-accent-tint, TOKENS §10); the hairline on the class leg. */
           className={`w-full flex items-center gap-2 px-3 py-2 border-b border-line text-left ${
@@ -328,7 +369,7 @@ function SubAgentModelCard() {
         {rows.length === 0 ? (
           /* R93-A9: zero configured rows — the honest pointer to the ONE
              place models are added (never a fallback catalog list). */
-          <div className="flex items-center gap-2 px-3 py-2.5 flex-wrap" data-testid="subagent-no-models-hint">
+          <div className="flex items-center gap-2 px-3 py-2.5 flex-wrap" data-testid={`${spec.testIdPrefix}-no-models-hint`}>
             <span className="text-[11px] flex-1 min-w-[200px]" style={{ color: styles.textSecondary }}>
               No models configured — add them in Settings → Models &amp; Providers.
             </span>
@@ -348,8 +389,8 @@ function SubAgentModelCard() {
               // (Models & Providers) is the ground truth.
               const disabled = m.supportsTools === false;
               // ROUND-82: provider-scoped selection key — picking a row
-              // writes the explicit {providerId, modelId} pair and the R82
-              // orchestrator override routes the child turns to THAT
+              // writes the explicit {providerId, modelId} pair and the
+              // orchestrator override routes the override's turns to THAT
               // provider.
               const isSelected =
                 selected !== null && selected.providerId === m.providerId && selected.modelId === m.modelId;
@@ -363,7 +404,7 @@ function SubAgentModelCard() {
                   aria-label={
                     disabled
                       ? `${m.modelId} on ${m.providerId} (unavailable)`
-                      : `Use ${m.modelId} on ${m.providerId} for sub-agents`
+                      : `Use ${m.modelId} on ${m.providerId} for ${spec.instanceLabel}`
                   }
                   title={disabled ? "marked as not tool-capable" : `${m.providerId} · ${m.modelId}`}
                   className={`w-full flex items-center gap-2 px-3 py-2 border-b border-line last:border-b-0 text-left disabled:cursor-not-allowed ${
@@ -380,7 +421,7 @@ function SubAgentModelCard() {
                     </span>
                     <span
                       className="shrink-0 px-1.5 py-0.5 rounded-full font-mono text-[10px] font-medium bg-badge-neutral text-badge-neutral-fg"
-                      title="The provider the child turns route to"
+                      title={spec.providerChipTitle}
                     >
                       {providerChip(m.providerId)}
                     </span>
@@ -415,11 +456,57 @@ function SubAgentModelCard() {
       </div>
 
       <p className="text-[11px]" style={{ color: styles.textTertiary }}>
-        Exactly the models configured in Models &amp; Providers (hidden rows excluded) — sub-agent turns
-        route to the row&apos;s provider. Applies to every delegated sub-agent turn (delegate_task + retries);
-        parallelism and supervision live in the cards below.
+        {spec.note}
       </p>
     </SectionCard>
+  );
+}
+
+/** The sub-agent model card — byte-identical labels to the pre-R132 card
+ * (its pinned tests ride on them). */
+function SubAgentModelCard() {
+  return (
+    <ModelOverrideCard
+      spec={{
+        field: "subagentModel",
+        title: "Sub-agent model",
+        errorTail: "a sub-agent model",
+        loadingNoun: "sub-agent model",
+        instanceLabel: "sub-agents",
+        testIdPrefix: "subagent",
+        icon: Cpu,
+        providerChipTitle: "The provider the child turns route to",
+        note: "Exactly the models configured in Models & Providers (hidden rows excluded) — sub-agent turns route to the row's provider. Applies to every delegated sub-agent turn (delegate_task + retries); parallelism and supervision live in the cards below.",
+      }}
+    />
+  );
+}
+
+/**
+ * R132-MA-ui (the owner's settings ask, verbatim: "there will be a few
+ * customizations, like the user can select which model the mini agent
+ * should use, which provider it should use, or should it use the main
+ * one"): the MINI AGENTS' model card — the sibling picker wired to
+ * orchestration.miniagentModel. null = "use the main one" (the mini falls
+ * back to the PARENT TURN's effective pair — deliberately NOT the
+ * sub-agent override: a mini is a light in-chat partner, not a delegated
+ * child). Kept SMALL per the owner: this one picker is the whole surface.
+ */
+function MiniAgentModelCard() {
+  return (
+    <ModelOverrideCard
+      spec={{
+        field: "miniagentModel",
+        title: "Mini agents",
+        errorTail: "the mini agents' model",
+        loadingNoun: "mini agents model",
+        instanceLabel: "mini agents",
+        testIdPrefix: "miniagent",
+        icon: Bot,
+        providerChipTitle: "The provider the mini agent runs route to",
+        note: "The model the main agent's in-chat mini agents run on (up to 3 dispatched per turn, browser/computer/search/custom skills). Inherits main model = each mini uses the MAIN conversation's model for that turn — not the sub-agent override.",
+      }}
+    />
   );
 }
 
@@ -805,6 +892,10 @@ export function SubAgentsSection() {
           at the one true key manager (the old paste-slot card is gone). */}
       <SubAgentKeysNote />
       <SubAgentModelCard />
+      {/* R132-MA-ui: the mini agents' model override — the sibling picker on
+          the SAME tab (the owner: a few customizations — which model, which
+          provider, or the main one). */}
+      <MiniAgentModelCard />
       {/* ROUND-58 (R58-d): the parallelism limits MOVED here from the old
           Advanced tab — they govern exactly the children the cards above
           configure. */}
@@ -829,7 +920,8 @@ export function SubAgentsTab() {
         <h2 className="text-[13px] font-semibold text-ink">Sub-agents</h2>
         <p className="mt-1 text-[12px]" style={{ color: styles.textSecondary }}>
           Model, parallelism, and supervision for the agents your main agent delegates to — they
-          share each provider&apos;s API key pool.
+          share each provider&apos;s API key pool. The mini agents&apos; model lives here too
+          (R132-MA-ui).
         </p>
       </div>
       <SubAgentsSection />

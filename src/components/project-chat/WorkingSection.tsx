@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BookOpenText,
+  Bot,
   Check,
   ChevronDown,
   CircleCheck,
@@ -45,6 +46,10 @@ import {
 } from "../../lib/stream-store";
 import { useRightSidebarStore } from "../../lib/right-sidebar-store";
 import { SubAgentCard } from "./SubAgentCard";
+// R132-MA-ui: the mini agent's dedicated in-chat section (the owner's
+// centerpiece directive — rendered from the SAME MiniAgentRun record live
+// and folded).
+import { MiniAgentSection } from "./MiniAgentSection";
 // R97-F: the thinking body renders fenced code blocks through the SAME
 // CodeBlock the answers use (syntax colors + the language badge + Copy).
 import { CodeBlock, PathPill } from "./ChatMarkdown";
@@ -214,6 +219,10 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   // status; the raw body stays behind the manual expand).
   read_skill: BookOpenText,
   search_skills: Search,
+  // R132-MA-ui: the mini_agent tool pill — its OWN glyph so the dispatch
+  // row reads as what it is (a partner dispatched), not a bare Terminal
+  // fallback; the label below carries the verb.
+  mini_agent: Bot,
 };
 
 /** Past-tense verb labels (proposed2.PNG: "Analyzed …" one-liners). */
@@ -238,6 +247,11 @@ const TOOL_LABELS: Record<string, string> = {
   // R114-e: the skills pair (see TOOL_ICONS above).
   read_skill: "Read skill",
   search_skills: "Searched skills",
+  // R132-MA-ui: the past-tense verb for the mini_agent pill (the raw
+  // snake_case name reads un-quietly otherwise — the read_skill R114-e
+  // precedent; the pill's argsSummary carries skill + task verbatim, the
+  // machinery renders name+args with no further special-casing).
+  mini_agent: "Dispatched mini",
 };
 
 /** ROUND-58 (R58-cf): stable empty default for the pending-write-inputs
@@ -2972,6 +2986,21 @@ export function WorkingSection({
                     </Fragment>
                   );
                 }
+                // R132-MA-ui: the mini agent's DEDICATED SECTION — one per
+                // run (keyed by miniId; concurrent minis stack as sibling
+                // sections), rendered from the same MiniAgentRun record the
+                // live frames built and the fold rebuilds. It can only land
+                // after the mini_agent tool row that spawned it, but the
+                // dispatch is unconditional — the section owns its own
+                // placement, exactly like the question/todo cards above.
+                if (entry.type === "mini") {
+                  return (
+                    <Fragment key={`mini-${entry.run.miniId}`}>
+                      {wellDivider}
+                      <MiniAgentSection run={entry.run} projectId={projectId} />
+                    </Fragment>
+                  );
+                }
                 return (
                   <Fragment key={`t-${i}`}>
                     {wellDivider}
@@ -3029,6 +3058,14 @@ export function BareWorkingEntries({
         }
         if (entry.type === "todo") {
           return <TodoCard key={`bt-${i}`} entry={entry} />;
+        }
+        // R132-MA-ui: the mini section rides bare blocks too (a
+        // tools-free run of entries never happens for a real mini — the
+        // mini_agent tool row always precedes — but the renderer degrades
+        // honestly rather than dropping the record; no projectId leg on the
+        // bare surface, path pills degrade like DebugReportCard's).
+        if (entry.type === "mini") {
+          return <MiniAgentSection key={`bmini-${entry.run.miniId}`} run={entry.run} />;
         }
         // ROUND-68 (R68-A): screenshots are LIVE-ONLY entries and a bare
         // (tools-free) block has no section to anchor an inline row — skip

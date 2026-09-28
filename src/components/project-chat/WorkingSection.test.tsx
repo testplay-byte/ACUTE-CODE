@@ -1130,7 +1130,7 @@ describe("live write preview (ROUND-58 R58-cf)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });

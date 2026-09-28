@@ -517,7 +517,7 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -579,7 +579,7 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -641,7 +641,7 @@ describe("AgentChatPanel user-stop rendering (ROUND-58 R58-cf)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -1092,7 +1092,7 @@ describe("AgentChatPanel response ratings (ROUND-59 R59-D)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -1635,7 +1635,7 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -1675,7 +1675,7 @@ describe("AgentChatPanel R99-B chat visual overhaul", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -1758,7 +1758,7 @@ describe("AgentChatPanel R120-C-PC center redo (items 35 + 36)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -1840,7 +1840,7 @@ describe("AgentChatPanel R120-C-PC center redo (items 35 + 36)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -1914,6 +1914,7 @@ describe("AgentChatPanel R120-C-PC center redo (items 35 + 36)", () => {
             detail: null,
             ts: Date.now(),
           },
+          miniRuns: [],
         },
       },
     });
@@ -1937,6 +1938,7 @@ describe("AgentChatPanel R120-C-PC center redo (items 35 + 36)", () => {
             detail: null,
             ts: Date.now(),
           },
+          miniRuns: [],
         },
       },
     });
@@ -1994,6 +1996,7 @@ describe("AgentChatPanel R120-C-PC center redo (items 35 + 36)", () => {
             detail: null,
             ts: Date.now(),
           },
+          miniRuns: [],
         },
       },
     });
@@ -2021,6 +2024,7 @@ describe("AgentChatPanel R120-C-PC center redo (items 35 + 36)", () => {
             detail: null,
             ts: Date.now(),
           },
+          miniRuns: [],
         },
       },
     });
@@ -2085,6 +2089,7 @@ describe("AgentChatPanel R120-C-PC center redo (items 35 + 36)", () => {
             detail: "sqlite: disk I/O error",
             ts: Date.now(),
           },
+          miniRuns: [],
         },
       },
     });
@@ -2229,7 +2234,7 @@ describe("AgentChatPanel remote live turn (ROUND-113 R113-b)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: true,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -2265,7 +2270,7 @@ describe("AgentChatPanel remote live turn (ROUND-113 R113-b)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -2319,7 +2324,7 @@ describe("AgentChatPanel remote turn.started (ROUND-114 R114-e)", () => {
       deliveredQueued: [],
       queueKeptNotice: null,
       remote: true,
-      feedbackEvent: null,
+      feedbackEvent: null, miniRuns: [],
     };
   }
 
@@ -2579,7 +2584,7 @@ describe("AgentChatPanel message timeline (ROUND-120 R120-C-PC)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -2677,7 +2682,7 @@ describe("AgentChatPanel inline screenshots (ROUND-68 R68-A)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -2887,7 +2892,7 @@ describe("AgentChatPanel ROUND-75 retry ladder surfaces", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -3089,7 +3094,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -3279,7 +3284,7 @@ describe("AgentChatPanel ROUND-78 message queue + honest retry card", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -3410,7 +3415,7 @@ describe("AgentChatPanel queued-message honesty (ROUND-119 R119-C)", () => {
     deliveredQueued: [],
     queueKeptNotice: null,
     remote: false,
-    feedbackEvent: null,
+    feedbackEvent: null, miniRuns: [],
   });
 
   it("R119-C: THE OWNER'S DUPLICATE — a live turn + a folded log carrying the SAME in-flight turn renders it ONCE; the clearStream handoff renders it once again", async () => {
@@ -3493,7 +3498,7 @@ describe("AgentChatPanel queued-message honesty (ROUND-119 R119-C)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -3569,7 +3574,7 @@ describe("AgentChatPanel queued-message honesty (ROUND-119 R119-C)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: true,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -3600,7 +3605,7 @@ describe("AgentChatPanel queued-message honesty (ROUND-119 R119-C)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -3787,7 +3792,7 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -3838,7 +3843,7 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -4128,7 +4133,7 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -4208,7 +4213,7 @@ describe("AgentChatPanel stick-to-bottom (R94-D2)", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });
@@ -4319,7 +4324,7 @@ describe("AgentChatPanel R117-f delivery ticks + breathing placeholder", () => {
     deliveredQueued: [],
     queueKeptNotice: null,
     remote: false,
-    feedbackEvent: null,
+    feedbackEvent: null, miniRuns: [],
     ...extra,
   });
 
@@ -4428,7 +4433,7 @@ describe("AgentChatPanel R117-f delivery ticks + breathing placeholder", () => {
           deliveredQueued: [],
           queueKeptNotice: null,
           remote: false,
-          feedbackEvent: null,
+          feedbackEvent: null, miniRuns: [],
         },
       },
     });

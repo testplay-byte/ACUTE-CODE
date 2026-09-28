@@ -6,6 +6,7 @@ import {
   stopSessionTurn,
   toProjectChatItems,
   type AttachmentRef,
+  type MiniAgentRun,
   type SessionDetail,
   type SessionEvent,
   type StreamTurnEvent,
@@ -476,6 +477,19 @@ export interface StreamSessionState {
    * STATUS ONLY (the separation law: no ledger content on the wire).
    * Reset by startStream (a fresh turn's ledger story starts empty). */
   feedbackEvent: LiveFeedbackStatus | null;
+  /** ROUND-132 (R132-MA-ui, the owner's centerpiece directive): the LIVE
+   * mini-agent runs on this session — one record per `miniId`, updated from
+   * the three `mini-agent.*` SSE frames BEFORE the liveTurn guard (the
+   * subagent-status precedent: the runs are keyed by their own minted ids,
+   * and a frame can land while no liveTurn is tracked — the events-bus
+   * mirror joining mid-run, or the sync channel's completion burst). The
+   * RENDER truth for a tracked live turn is the matching `{type:"mini"}`
+   * WorkingEntry (upserted in the same patch — the section lands at its
+   * dispatch position in the working well); this registry is the
+   * turn-independent mirror the tests pin and any future consumer reads.
+   * Reset by startStream (a fresh turn's minis mint fresh ids anyway — the
+   * reset only bounds the array). */
+  miniRuns: MiniAgentRun[];
 }
 
 /** ROUND-125 (R125-B): the last meta.feedback frame's renderable form. */
@@ -646,6 +660,7 @@ function emptyState(): StreamSessionState {
     queueKeptNotice: null,
     remote: false,
     feedbackEvent: null,
+    miniRuns: [],
   };
 }
 
@@ -966,6 +981,111 @@ function handleSubAgentEvent(
   // meta.* — nothing to mutate (see the doc above).
 }
 
+// ─── ROUND-132 (R132-MA-ui): the mini agent's frames on the PARENT's stream ──
+
+/**
+ * The three `mini-agent.*` frames' shared reducer — one code path for the
+ * own stream's reader and the remote mirror's ingestRemoteFrame (both
+ * dispatch through handleStreamEvent).
+ *
+ * TWO stores update in ONE patch (they can never drift apart):
+ *  · `miniRuns` — the slice-level, turn-INDEPENDENT registry keyed by
+ *    miniId (the subagent-status precedent: frames are applied whether or
+ *    not a liveTurn is tracked — a mirror that joined mid-run, or the sync
+ *    channel's completion burst, still records the run);
+ *  · the `{type:"mini"}` WorkingEntry inside the OPEN liveTurn's working
+ *    array (when one exists) — the RENDER truth: the section lands at its
+ *    dispatch position in the working well (the R68-A capture-moment law),
+ *    actions append in arrival order, and done patches the run terminal IN
+ *    PLACE (immutable replacement, the question/todo pattern).
+ *
+ * Frames for an UNKNOWN miniId (an action/done with no started) are honest
+ * no-ops — there is no section to attach them to, and the fold's refetch
+ * owns the render of a run whose started frame predates this client's view.
+ */
+function handleMiniAgentFrame(
+  sessionId: string,
+  event: Extract<
+    StreamTurnEvent,
+    { type: "mini-agent.started" | "mini-agent.action" | "mini-agent.done" }
+  >,
+): void {
+  const cur = useStreamStore.getState().bySession[sessionId];
+  const runs = cur?.miniRuns ?? [];
+  let nextRuns: MiniAgentRun[];
+  if (event.type === "mini-agent.started") {
+    const run: MiniAgentRun = {
+      miniId: event.miniId,
+      skill: event.skill,
+      task: event.task,
+      model: event.model,
+      status: "running",
+      actions: [],
+      ts: new Date().toISOString(),
+    };
+    // A re-arrived started REPLACES its own run (idempotent — the same
+    // miniId is never a second run; the backend's ids are minted unique).
+    nextRuns = [...runs.filter((r) => r.miniId !== event.miniId), run];
+  } else {
+    const idx = runs.findIndex((r) => r.miniId === event.miniId);
+    if (idx === -1) return;
+    const prev = runs[idx] as MiniAgentRun;
+    if (event.type === "mini-agent.action") {
+      nextRuns = runs.slice();
+      nextRuns[idx] = {
+        ...prev,
+        actions: [
+          ...prev.actions,
+          {
+            seq: event.seq,
+            tool: event.tool,
+            argsSummary: event.argsSummary,
+            ok: event.ok,
+            outputSummary: event.outputSummary,
+          },
+        ],
+      };
+    } else {
+      nextRuns = runs.slice();
+      nextRuns[idx] = {
+        ...prev,
+        status: event.ok ? "done" : "failed",
+        result: event.result,
+        steps: event.steps,
+        usage: event.usage,
+      };
+    }
+  }
+
+  // The liveTurn mirror leg — the working entry holds the SAME run record
+  // (the same object reference the registry stores; both legs are replaced
+  // together in this one patch).
+  const liveTurn = cur?.liveTurn;
+  if (liveTurn === null || liveTurn === undefined) {
+    patchSession(sessionId, { miniRuns: nextRuns });
+    return;
+  }
+  const entryIdx = liveTurn.working.findIndex(
+    (entry) => entry.type === "mini" && entry.run.miniId === event.miniId,
+  );
+  const run = nextRuns.find((r) => r.miniId === event.miniId);
+  if (run === undefined) return; // unreachable (every branch above keeps it)
+  const working =
+    entryIdx === -1
+      ? [...liveTurn.working, { type: "mini" as const, run }]
+      : liveTurn.working.map((entry, i) => (i === entryIdx ? { type: "mini" as const, run } : entry));
+  patchSession(sessionId, {
+    miniRuns: nextRuns,
+    liveTurn: { ...liveTurn, working },
+  });
+}
+
+/** R132-MA-ui: read ONE live mini run (the test/panel accessor — the same
+ * shape getSubAgentLiveEntry serves for delegated children). */
+export function getMiniAgentRun(sessionId: string, miniId: string): MiniAgentRun | undefined {
+  return useStreamStore.getState().bySession[sessionId]?.miniRuns.find((r) => r.miniId === miniId);
+}
+
 /** Append/merge one step onto the ordered live log: consecutive thinking
  * deltas merge into ONE thinking block (the main chat renders a single
  * "Thinking…" row per thought), consecutive text deltas merge into one text
@@ -1070,6 +1190,10 @@ export const useStreamStore = create<StreamStore>((set, get) => ({
       // turn's writing/written status is history — the settings viewer's
       // last-write line carries the durable record).
       feedbackEvent: null,
+      // R132-MA-ui: a fresh turn's mini registry starts empty (the previous
+      // turn's sections are the FOLD's to render now — the persisted
+      // mini_agent.* events own the post-turn view; the ids never repeat).
+      miniRuns: [],
     });
 
     const controller = new AbortController();
@@ -1749,6 +1873,22 @@ function handleStreamEvent(
   }
   if (event.type === "subagent-event") {
     handleSubAgentEvent(sessionId, event);
+    return;
+  }
+  // ── ROUND-132 (R132-MA-ui): the MINI AGENT's frames — handled BEFORE the
+  // liveTurn guard (the subagent-status precedent above). The per-miniId
+  // registry is turn-independent (a frame can land while no liveTurn is
+  // tracked — the events-bus mirror joining mid-run, or the sync channel's
+  // completion burst riding the bus after the own stream closed), and the
+  // handler itself upserts the `{type:"mini"}` WorkingEntry on the OPEN
+  // liveTurn when one exists, so the dedicated section renders at its
+  // dispatch position while the parent turn streams. ──
+  if (
+    event.type === "mini-agent.started" ||
+    event.type === "mini-agent.action" ||
+    event.type === "mini-agent.done"
+  ) {
+    handleMiniAgentFrame(sessionId, event);
     return;
   }
   // ROUND-61 (R61): computer-use monitor frames are turn-independent too —

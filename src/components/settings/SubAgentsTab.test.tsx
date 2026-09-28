@@ -332,8 +332,9 @@ describe("SubAgentsTab — rendering (ROUND-43 R43-5 + ROUND-58 R58-d, re-pinned
       ).toBe(true),
     );
     // Configured rows render from the served fixture (display name + ctx).
-    await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
-    expect(screen.getByText("256K")).toBeTruthy();
+    // R132-MA-ui: BOTH pickers (sub-agent + mini agents) render the rows.
+    await waitFor(() => expect(screen.getAllByText("Z.ai: GLM 5.2").length).toBeGreaterThanOrEqual(2));
+    expect(screen.getAllByText("256K").length).toBeGreaterThanOrEqual(2);
     // R93-A9: the static OpenRouter catalog is NEVER consulted anymore —
     // the owner's "only the models which are available" directive.
     await waitFor(() =>
@@ -419,15 +420,16 @@ describe("SubAgentsTab — model picker (ROUND-93 R93-A9: the configured models 
     renderWithProviders(<SubAgentsSection />);
 
     await waitFor(() => expect(screen.getByText("Sub-agent model")).toBeTruthy());
-    // The FREE configured row shows…
-    await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
+    // The FREE configured row shows… (R132-MA-ui: in BOTH pickers — the
+    // mini card rides the same configured-rows list.)
+    await waitFor(() => expect(screen.getAllByText("Z.ai: GLM 5.2").length).toBeGreaterThanOrEqual(2));
     // …and so does the PAID one (the user curated it — no free-only
     // segmentation hides a configured row anymore)…
-    expect(screen.getByText("OpenAI: GPT-5.2")).toBeTruthy();
+    expect(screen.getAllByText("OpenAI: GPT-5.2").length).toBeGreaterThanOrEqual(2);
     // …and the non-openrouter (nvidia NIM) row too — the R82 gap closed.
-    expect(screen.getByText("NIM: Llama 4 70B")).toBeTruthy();
+    expect(screen.getAllByText("NIM: Llama 4 70B").length).toBeGreaterThanOrEqual(2);
     // The provider chips resolve display names from the registry.
-    expect(screen.getByText("NVIDIA NIM")).toBeTruthy();
+    expect(screen.getAllByText("NVIDIA NIM").length).toBeGreaterThanOrEqual(2);
     // The retired catalog-era segment control is GONE.
     expect(screen.queryByRole("button", { name: /all models/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /free only/i })).toBeNull();
@@ -469,7 +471,7 @@ describe("SubAgentsTab — model picker (ROUND-93 R93-A9: the configured models 
   it("a HIDDEN configured row never renders (the hide toggle keeps it out of pickers)", async () => {
     renderWithProviders(<SubAgentsSection />);
 
-    await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("Z.ai: GLM 5.2").length).toBeGreaterThanOrEqual(2));
     // The hidden fixture row is nowhere on the page — not by name…
     expect(screen.queryByText("Hidden Row")).toBeNull();
     // …not by its pick affordance.
@@ -483,24 +485,31 @@ describe("SubAgentsTab — model picker (ROUND-93 R93-A9: the configured models 
     renderWithProviders(<SubAgentsSection />);
 
     await waitFor(() => expect(screen.getByTestId("subagent-no-models-hint")).toBeTruthy());
+    // R132-MA-ui: the MINI card renders its own zero-rows hint too.
+    expect(screen.getByTestId("miniagent-no-models-hint")).toBeTruthy();
     expect(
-      screen.getByText("No models configured — add them in Settings → Models & Providers."),
-    ).toBeTruthy();
-    const link = screen.getByRole("link", { name: "Open Models and Providers to add models" });
-    expect(link.getAttribute("href")).toBe("/settings?tab=api");
-    // No fallback catalog rows sneak in — the inherit row is the only pick.
+      screen.getAllByText("No models configured — add them in Settings → Models & Providers.").length,
+    ).toBeGreaterThanOrEqual(2);
+    const links = screen.getAllByRole("link", { name: "Open Models and Providers to add models" });
+    expect(links.length).toBeGreaterThanOrEqual(2);
+    expect(links.every((l) => l.getAttribute("href") === "/settings?tab=api")).toBe(true);
+    // No fallback catalog rows sneak in — the inherit rows are the only picks.
     expect(screen.queryByRole("button", { name: /Use .* for sub-agents/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Use .* for mini agents/ })).toBeNull();
     expect(screen.getByRole("button", { name: "Inherit the main model for sub-agents" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Inherit the main model for mini agents" })).toBeTruthy();
   });
 
   it("disables tool-less configured models with the honest hint", async () => {
     renderWithProviders(<SubAgentsSection />);
 
-    const toolless = await screen.findByRole("button", {
+    // R132-MA-ui: BOTH pickers gate the tool-less row.
+    const toolless = await screen.findAllByRole("button", {
       name: "toolless/row on openrouter (unavailable)",
     });
-    expect((toolless as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("no tool calling")).toBeTruthy();
+    expect(toolless.length).toBeGreaterThanOrEqual(2);
+    expect(toolless.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+    expect(screen.getAllByText("no tool calling").length).toBeGreaterThanOrEqual(2);
   });
 
   it("Inherits main model clears the override with subagentModel: null", async () => {
@@ -525,13 +534,16 @@ describe("SubAgentsTab — model picker (ROUND-93 R93-A9: the configured models 
     configuredOk = false;
     renderWithProviders(<SubAgentsSection />);
 
-    // The backend's own failure message surfaces verbatim…
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Configured models unavailable — configured rows down (fixture)");
+    // The backend's own failure message surfaces verbatim… (R132-MA-ui:
+    // BOTH pickers fail honestly — no hidden fallback on either card.)
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts.length).toBeGreaterThanOrEqual(2);
+    expect(alerts.every((a) => a.textContent?.includes("Configured models unavailable — configured rows down (fixture)"))).toBe(true);
     // …with a visible retry affordance…
-    expect(screen.getByRole("button", { name: "Retry loading the configured models" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Retry loading the configured models" }).length).toBeGreaterThanOrEqual(2);
     // …and ZERO model rows — no silent fallback to the OpenRouter catalog.
     expect(screen.queryByRole("button", { name: /Use .* for sub-agents/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Use .* for mini agents/ })).toBeNull();
     expect(screen.queryByText("Z.ai: GLM 5.2")).toBeNull();
   });
 
@@ -539,15 +551,19 @@ describe("SubAgentsTab — model picker (ROUND-93 R93-A9: the configured models 
     configuredOk = false;
     renderWithProviders(<SubAgentsSection />);
 
-    await screen.findByRole("alert");
+    await screen.findAllByRole("alert");
     // Backend recovers → Retry refetches → the picker rows render from the
-    // configured list.
+    // configured list. (R132-MA-ui: retrying ONE card's button is enough —
+    // both share the ["models-configured"] cache.)
     configuredOk = true;
-    fireEvent.click(screen.getByRole("button", { name: "Retry loading the configured models" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Retry loading the configured models" })[0]!);
 
-    await waitFor(() => expect(screen.getByText("Z.ai: GLM 5.2")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("Z.ai: GLM 5.2").length).toBeGreaterThanOrEqual(2));
     expect(
       screen.getByRole("button", { name: "Use nim/llama-4-70b on nvidia for sub-agents" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Use nim/llama-4-70b on nvidia for mini agents" }),
     ).toBeTruthy();
   });
 });
