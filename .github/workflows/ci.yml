@@ -82,7 +82,16 @@ jobs:
         run: pnpm verify
 
       - name: Type-check the Rust shell
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+        # R131 gate-fix: --locked — the plain check re-resolved the graph
+        # (the manifest gained the webview2-com/windows direct deps this
+        # round) and drifted tauri to the newest 2.x, whose wry rides a
+        # different webview2-com than our exact pin → two webview2_com_sys
+        # crates → the E0308 dual-ICoreWebView2 clash. The LOCKED graph is
+        # the one every gate agrees on (rust-checks compiles it green); a
+        # manifest change that invalidates the lock must fail LOUDLY here
+        # (update Cargo.lock with it) instead of silently drifting the
+        # dependency graph per-runner.
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
 
   # ROUND-122 (R122-W3): the `rust-linux` and `rust-linux-arm64` jobs moved
   # OUT of this file into .github/workflows/rust-checks.yml — the R122
