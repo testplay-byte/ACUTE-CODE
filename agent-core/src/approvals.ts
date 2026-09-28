@@ -9,8 +9,11 @@
  *   in exec.ts is retired).
  * - Layered, fail-closed: BLOCKED → deny forever (denylist-supreme);
  *   DESTRUCTIVE → ask ALWAYS (never "always allow" — hard rule);
- *   AUTO safe list (read-only + build/test) → run; project-scoped exact-match
- *   "always allow" rule → run; everything else → ask.
+ *   AUTO safe list (read-only + build/test) → run; project-scoped "always
+ *   allow" rule → run (EXACT match since R37; PLUS the R131-F PREFIX tier
+ *   — a trailing-slash rule `python .acute/tools/<name>/` matches every
+ *   invocation under the granted folder; still after the denylist, so it
+ *   can never bypass blocked/destructive); everything else → ask.
  * - The interactive wait uses an IN-PROCESS RESOLVER MAP (approvalId →
  *   resolver), NOT DB polling — the decision route runs in this process.
  *   The DB rows are the audit trail + crash recovery (boot sweep marks
@@ -210,6 +213,9 @@ function splitCompound(command: string): string[] {
 function normalizeForMatch(action: string): string {
   return action.trim().replace(/\s+/g, " ").toLowerCase();
 }
+
+/** The no-rule answer (the db-less / project-less default leg). */
+const NO_RULE: { matched: false; kind: null } = { matched: false, kind: null };
 
 /** The policy tier for a command (pure — no DB, no environment). */
 export function categorize(action: string): ActionCategory {
@@ -418,15 +424,27 @@ export function decideCommand(
     // closed. An explicit project "always allow" rule for the exact command
     // still wins (the owner already decided).
     if (root !== undefined && commandTouchesOutsideRoot(command, root)) {
-      if (db !== undefined && projectId !== undefined && hasApprovalRule(db, projectId, command.trim())) {
-        return { action: "run", category: "rule", reason: "always-allow rule for this project" };
+      const rule =
+        db !== undefined && projectId !== undefined
+          ? matchApprovalRule(db, projectId, command)
+          : NO_RULE;
+      if (rule.matched) {
+        return { action: "run", category: "rule", reason: approvalRuleReason(rule.kind) };
       }
       return { action: "ask", category: "confirm" };
     }
     return { action: "run", category: "auto", reason: "read-only/build/test command (auto-approved)" };
   }
-  if (db !== undefined && projectId !== undefined && hasApprovalRule(db, projectId, command.trim())) {
-    return { action: "run", category: "rule", reason: "always-allow rule for this project" };
+  // R131-F: the rule tier runs through matchApprovalRule — exact (the
+  // 0009 law) OR prefix (the tool-pattern tier). Both sit AFTER the
+  // blocked/destructive returns above, so the denylist-supreme law is
+  // untouched by the new tier.
+  const rule =
+    db !== undefined && projectId !== undefined
+      ? matchApprovalRule(db, projectId, command)
+      : NO_RULE;
+  if (rule.matched) {
+    return { action: "run", category: "rule", reason: approvalRuleReason(rule.kind) };
   }
   return { action: "ask", category: "confirm" };
 }
@@ -522,13 +540,98 @@ export function setApprovalStatus(
   return getApproval(db, id);
 }
 
-/** Project-scoped "always allow" rules (EXACT command match). */
+/* ── Project-scoped "always allow" rules ───────────────────────────────────── */
+
+/**
+ * R131-F (Wave F2 — the tool-creation skill's pattern tier): what kind of
+ * project rule matched a command.
+ *
+ *   · "exact"  — the historical law (migration 0009): the stored rule IS
+ *     the command, byte-for-byte. Unchanged.
+ *   · "prefix" — a rule stored in the TRAILING-SLASH form
+ *     (`python .acute/tools/<name>/`) matches any command whose normalized
+ *     form starts with that prefix — so a created TOOL is invocable with
+ *     ANY arguments without re-approving every arg variation. Deliberately
+ *     the LEAST invasive shape (no schema column, no migration — the
+ *     trailing slash is the type tag), with two guards:
+ *       - the slash must close a NON-EMPTY path segment (the character
+ *         before it is not a space), so a degenerate rule like `cd /`
+ *         never silently becomes a prefix;
+ *       - the matched REMAINDER may not contain a `..` path segment —
+ *         `python .acute/tools/x/../../../evil.py` does NOT ride the rule
+ *         (the match stays inside the granted folder; it fails closed to
+ *         ask).
+ *     Prefix rules are PROJECT-scoped and USER-granted exactly like exact
+ *     rules; the interactive approval flow still writes only EXACT rules
+ *     (the UI for granting a prefix rule is future work — the ENGINE
+ *     understanding them is this round). The tier sits AFTER the
+ *     denylist-supreme and destructive checks in decideCommand, so no
+ *     prefix rule can ever bypass them.
+ */
+export type ApprovalRuleKind = "exact" | "prefix";
+
+/** The honest reason line for a matched rule (the exact spelling is the
+ * historical one; the prefix line names the tier so the model — and the
+ * owner reading the log — can tell WHICH grant fired). */
+function approvalRuleReason(kind: ApprovalRuleKind): string {
+  return kind === "exact"
+    ? "always-allow rule for this project"
+    : "always-allow prefix rule for this project (a tool pattern — matches every invocation under the granted folder)";
+}
+
+/**
+ * R131-F: does ONE stored rule match `command` as a PREFIX rule? See
+ * ApprovalRuleKind's doc for the shape + the two guards. Normalization
+ * mirrors the AUTO tier's posture (whitespace-collapsed, lowercased) plus
+ * separator unification (backslashes read as forward slashes — a
+ * Windows-spelled invocation of the same tool matches the same rule).
+ */
+function prefixRuleMatches(rule: string, command: string): boolean {
+  if (!rule.endsWith("/")) return false;
+  const normalizedRule = normalizeForMatch(rule).replaceAll("\\", "/");
+  // Guard 1: the trailing slash must close a REAL path segment — "python
+  // .acute/tools/x/" is a folder grant; "cd /" (slash right after a space,
+  // or a bare slash) is not a grant of anything.
+  if (!normalizedRule.endsWith("/") || normalizedRule.length < 2) return false;
+  const beforeSlash = normalizedRule[normalizedRule.length - 2];
+  if (beforeSlash === " " || beforeSlash === "/") return false;
+  const normalizedCommand = normalizeForMatch(command).replaceAll("\\", "/");
+  if (!normalizedCommand.startsWith(normalizedRule)) return false;
+  // Guard 2: the matched remainder may not escape the granted folder — a
+  // `..` PATH segment (not a stray ".." inside a filename) fails closed.
+  const rest = normalizedCommand.slice(normalizedRule.length);
+  if (rest.split("/").some((segment) => segment === "..")) return false;
+  return true;
+}
+
+/** R131-F: the full rule decision — exact first (the index fast path,
+ * unchanged), then the prefix tier. */
+export function matchApprovalRule(
+  db: SqliteDatabase,
+  projectId: string,
+  command: string,
+): { matched: true; kind: ApprovalRuleKind } | { matched: false; kind: null } {
+  const trimmed = command.trim();
+  const exact = db
+    .prepare("SELECT 1 FROM approval_rules WHERE project_id = ? AND command = ?")
+    .get(projectId, trimmed);
+  if (exact !== undefined) return { matched: true, kind: "exact" };
+  // The prefix scan: only slash-ending rules for THIS project (a project's
+  // rule table is owner-curated and small; the exact path above already
+  // hit the (project_id, command) index for the common case).
+  const rows = db
+    .prepare("SELECT command FROM approval_rules WHERE project_id = ? AND command LIKE '%/'")
+    .all(projectId) as Array<{ command: string }>;
+  for (const row of rows) {
+    if (prefixRuleMatches(row.command, trimmed)) return { matched: true, kind: "prefix" };
+  }
+  return { matched: false, kind: null };
+}
+
+/** Project-scoped "always allow" rules — EXACT command match (the 0009
+ * law) plus the R131-F prefix tier (see matchApprovalRule). */
 export function hasApprovalRule(db: SqliteDatabase, projectId: string, command: string): boolean {
-  return (
-    db
-      .prepare("SELECT 1 FROM approval_rules WHERE project_id = ? AND command = ?")
-      .get(projectId, command) !== undefined
-  );
+  return matchApprovalRule(db, projectId, command).matched;
 }
 
 export function addApprovalRule(db: SqliteDatabase, projectId: string, command: string): void {

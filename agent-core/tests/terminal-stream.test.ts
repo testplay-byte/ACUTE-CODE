@@ -28,6 +28,12 @@ import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { buildServer } from "../src/server";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
 import { createProject } from "../src/storage/projects";
+// R131-F (Wave F3): the run_command tool this file's route mirrors — the
+// missing-cwd law pins the TOOL's surface (the ledger's `spawn cmd.exe
+// ENOENT` was run_command's, and this file's :34 comment — "A REAL
+// directory: spawn(cwd) needs the project root to exist" — documents the
+// exact constraint the new law completes).
+import { runCommand } from "../src/tools/exec";
 
 const TOKEN = "test-token-r44e";
 
@@ -240,4 +246,28 @@ describe("POST /projects/:id/terminal/stream (ROUND-44 R44-e)", () => {
     // We killed it — no honest exit code, so no exit frame.
     expect(frames.some((f) => f.type === "exit")).toBe(false);
   });
+});
+
+// ── R131-F (Wave F3): the missing-cwd pin ────────────────────────────────────
+//
+// This file's own header comment (:34) documents WHY the harness builds
+// projects on a REAL directory: "spawn(cwd) needs the project root to
+// exist." The R131-F law completes that constraint honestly — a root that
+// does NOT exist must answer the directory-naming error, never Node's
+// ENOENT-naming-the-executable lie. Pinned here on run_command's own
+// surface (the agent tool whose ENOENT the ledger reported); the
+// stream/sync ROUTES' direct spawns (server.ts) still carry the raw
+// "failed to start: spawn … ENOENT" error frame — flagged for the sibling
+// route wave (this wave owns the exec tool, not server.ts).
+describe("R131-F: a vanished project root answers honestly (run_command's missing-cwd law)", () => {
+  it("a root that does not exist → the honest directory-naming output, NOT an ENOENT stack", async () => {
+    const vanished = join(dir, `vanished-${randomUUID().slice(0, 8)}`);
+    const result = await runCommand(vanished, "echo hello");
+
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain(vanished);
+    expect(result.output).toContain("does not exist");
+    expect(result.output).toContain("re-open the project or pick the folder again");
+    expect(result.output).not.toMatch(/ENOENT/i);
+  }, 15_000);
 });

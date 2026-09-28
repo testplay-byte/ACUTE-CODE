@@ -28,10 +28,15 @@ import {
 // R128-W3 (SCREENS §2 law #9): the General project's protected id — the
 // DELETE guard below returns 409 general_protected for it.
 import { GENERAL_PROJECT_ID } from "../storage/general-project.js";
+// R131-F (Wave F1): the workspace scaffold — `.acute/{downloads,tools,
+// memory,tmp}` + the workspace.json marker (storage/workspace.ts is the law).
+import { ensureProjectWorkspace } from "../storage/workspace.js";
 import { searchIndexSymbols } from "../storage/index.js";
 // R113-a: the events-bus publish for project creations (watchers on
 // GET /events/stream refresh their project lists).
 import { getEventsBus } from "../lib/events-bus.js";
+// The route layer's logging idiom (routes/sessions.ts is the precedent).
+import { log } from "../lib/log.js";
 import { errorBody } from "./helpers.js";
 
 export function registerProjectRoutes(scope: FastifyInstance, ctx: RouteContext): void {
@@ -87,7 +92,31 @@ export function registerProjectRoutes(scope: FastifyInstance, ctx: RouteContext)
     // is no longer the only frame this domain publishes — DELETE announces
     // "deleted" below (with the cascade counts on the HTTP response).
     getEventsBus().publishProjectFrame(project.id, "created");
-    return reply.code(201).send(project);
+    // R131-F (Wave F1): the WORKSPACE SCAFFOLD — the owner's directive: a
+    // freshly selected folder gets the app's own `.acute/` drawer
+    // (downloads/tools/memory/tmp + the workspace.json marker) so the
+    // app's artifacts never mix into the user's actual files, and a
+    // PREVIOUSLY-USED folder heals any missing subfolder (the marker is
+    // the "was set up before" signal). Degrade honestly: a scaffold
+    // failure is a WARNING on the 201 (the additive `workspaceWarning`
+    // field — absent on success, so the happy-path response is
+    // byte-identical), NEVER a failed project create — the project row
+    // exists, the route answered, and the app works without the scaffold
+    // (the next boot's heal or the next folder-open retries).
+    let workspaceWarning: string | undefined;
+    try {
+      ensureProjectWorkspace(project.rootPath);
+    } catch (err) {
+      workspaceWarning = err instanceof Error ? err.message : String(err);
+      log("warn", "projects.workspace_scaffold_failed", {
+        projectId: project.id,
+        rootPath: project.rootPath,
+        message: workspaceWarning,
+      });
+    }
+    return reply
+      .code(201)
+      .send(workspaceWarning !== undefined ? { ...project, workspaceWarning } : project);
   });
 
   scope.get("/projects/:id", async (request, reply) => {

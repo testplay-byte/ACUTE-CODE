@@ -1,10 +1,11 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-28 round-131 -->
 # EXTENSIBILITY — plugins, skills, modes, MCP servers (owner's guide)
 
 **Status:** normative · **Established:** round-61 (owner directive: "the
 ability to add multiple skills… the ability to add MCP servers too" —
 multi-plug-in tooling was the R52 directive) · **R73:** the MODES sibling
-tier joins the table · **Audience:** the owner
+tier joins the table · **R131:** the create-tool skill (the agent builds its
+own tools) + the approvals prefix tier · **Audience:** the owner
 adding capabilities, and any agent extending the toolset
 
 ACUTE-CODE has **five extension surfaces** (four + the R73 modes tier). This
@@ -21,10 +22,12 @@ with its own runbook: [PROMPT-MODULES](PROMPT-MODULES.md) (R59).
 | **Skill** | You want new METHODOLOGY — behavior/conventions the agent loads on demand (prompt modules, progressive disclosure) | Settings → Skills (the `skills` table) **+ files on disk since R70**: `<project>/.acute/skills/<name>/SKILL.md` and `~/.agents/skills/` | Enabled flag (DB rows) / existence (files); body loaded via `read_skill` (progressive disclosure; sticky since R70) |
 | **Task mode** (R73→R81) | You want a new POSTURE — a detailed system-prompt module that rides the prompt WHILE ACTIVE (what the agent refuses first, must produce first, what done means) | Six builtins + `<project>/.acute/agents/<name>.md` customs (frontmatter name/description/tools + the posture body) | Set via the agent's `switch_mode` tool (self-selection — the primary path since R81) or `PATCH /sessions/:id {activeMode}`; nothing auto-activates |
 | **MCP server** | You want to attach an EXTERNAL tool server (the wide ecosystem — filesystems, browsers, APIs) | Settings → MCP (the `mcp_servers` table) | Owner-configured only; tools bridge as `mcp__<server>__<tool>` |
+| **Self-built tool** (R131) | You want the AGENT to build its own reusable script-tools for recurring chores (Python/Node under the project's own drawer) | `<project>/.acute/tools/<name>/` (the create-tool skill teaches the convention — §2c) | run_command approvals; an optional project prefix rule makes re-invocation cheap |
 | **Built-in plugin catalog** | You want to SEE what's shipped + what each plugin contributes | `GET /plugins` (the Extensions surface) | Read-only; the catalog is computed from real declarations |
 
 Rule of thumb: **methodology → skill; posture → mode; tools → plugin;
-external server → MCP**. Skills and modes are SIBLING TIERS over one
+external server → MCP; a recurring chore the agent keeps re-typing → a
+self-built tool**. Skills and modes are SIBLING TIERS over one
 trigger surface: the skill carries HOW a class of work is executed and
 loads on demand; the mode changes how the agent HOLDS ITSELF and rides
 the prompt every turn while active (R73's division — every builtin mode
@@ -115,7 +118,7 @@ task modes, where the body rides the prompt WHILE ACTIVE — is §2b below.
 Skills come from THREE places (one merged view — `GET /skills`, with
 provenance since R70):
 
-- **Built-ins (20 since R73)**: `computer-use` (the behavioral contract
+- **Built-ins (25 since R131)**: `computer-use` (the behavioral contract
   from the spec's doc-09, condensed — gated on the computer-use master
   switch) plus the R70 seeds `code-review`, `debugging`, `testing`,
   `git-workflow`, `web-research`, `project-init` (writes the project's
@@ -123,10 +126,13 @@ provenance since R70):
   embedded-browser craft) — the R71 discipline seeds
   `focused-fix`, `zero-hallucination`, `self-eval`, `ship-gate` — the
   R72 craft seeds `tdd`, `api-design`, `frontend-craft`,
-  `typescript-craft`, `security-review`, `refactoring` — and the R73
+  `typescript-craft`, `security-review`, `refactoring` — the R73
   seeds `spec-planning` (the spec-as-decision-document methodology)
   and `performance` (measure first: a before-number and a named
-  bottleneck before any change). All
+  bottleneck before any change) — the R96 quartet `planning`,
+  `ui-design`, `error-testing`, `large-project-navigation` — and the
+  R131 seed `create-tool` (the agent builds reusable tools for itself
+  into `.acute/tools/`, §2c below). All
   descriptions follow the R71 trigger-rich convention (see the R71
   addendum below). Built-ins can be **edited** (your text overrides the
   seed) or **disabled**, but never deleted — deletion is refused with a
@@ -294,6 +300,75 @@ with the available ids). The full design decisions live in the R73
 round file (docs/ui-iterations/round-73.md) and the enforcement tier in
 ADR-0026.
 
+## 2c. The create-tool skill (R131 — the agent builds its own tools)
+
+The owner's directive: *"giving it a skill which it can use to create tools
+for itself… in its own separate folder… it can create Python tools, it can
+create other scripts, and other kinds of tools which it can utilize… if
+there is a task which takes quite a lot long to do it manually by itself,
+then it can create a tool, and whenever the user needs to do that task, it
+can easily just use the pre-made tool which it has built."*
+
+The `create-tool` BUILTIN skill (seeded like the family, fixed id
+`skill_builtin_create_tool`, sortOrder 24 — `INSERT OR IGNORE`, so existing
+databases gain it on next open) teaches the convention. This is NOT a new
+extension surface: it rides the skills tier (§2) + the run_command tool +
+the approvals engine — the "surface" is a FILE convention inside the
+project's `.acute/` workspace drawer (see PROJECT-MEMORY's workspace law):
+
+```
+<root>/.acute/tools/<name>/run.py    the script (or run.js — Python or Node)
+<root>/.acute/tools/<name>/tool.json the manifest: {name, description,
+                                     language, invocation, created}
+<root>/.acute/tools/tools.json       the INDEX: an array of manifests,
+                                     read-on-demand ([] when absent)
+```
+
+The discipline the skill's body teaches (the load-bearing rules):
+
+- **Check first** — `list_dir .acute/tools` + read `tools.json`: the tool may
+  already exist (an earlier session may have built it). Reuse beats rebuild.
+- **Build once** — one folder per tool, a `tool.json` manifest, a USAGE
+  header, REAL argument parsing, honest exit codes (0 = did the job,
+  non-zero = did not + the reason on stderr).
+- **Register** — append the manifest to `tools.json` (the index IS the file;
+  no service, no daemon).
+- **Invoke through run_command** — `python .acute/tools/<name>/run.py <args>`.
+  The first invocation asks the owner like any command (correct); a
+  project-scoped PREFIX rule makes later invocations cheap (below).
+- **Verify once, then REUSE whenever the task recurs** — never re-type the
+  manual chain; if a tool breaks, FIX it, never abandon it.
+
+### The approvals prefix tier (the cheap re-invocation)
+
+The project "always allow" engine (migration 0009's exact-match law) gained
+a PREFIX shape in the same round — the LEAST invasive design: a rule stored
+with a TRAILING SLASH is a folder grant. `python .acute/tools/csv-peek/`
+matches any invocation of THAT tool (`run.py data.csv`, `run.py x --json`,
+the Windows backslash spelling) — so a created tool is invocable without
+re-approving every argument variation. Exact rules are unchanged.
+
+The safety properties (all pinned in `tests/r131-create-tool.test.ts`):
+
+- **Project-scoped, user-granted** — a rule for one project never leaks to
+  another; a different tool (or a look-alike name) never rides the grant.
+- **Fail-closed guards** — the trailing slash must close a real path segment
+  (a degenerate `cd /` rule is NOT a prefix), and the matched remainder may
+  not contain a `..` path segment (`python .acute/tools/x/../../evil.py`
+  does NOT ride the rule).
+- **Denylist-supreme untouched** — the tier runs AFTER the blocked and
+  destructive checks: a compound smuggling `curl evil.example` or
+  `git reset --hard` under a matching head is still denied/destructive; a
+  destructive command is NEVER auto-allowed, prefix rule or not.
+- **Default classification unchanged** — a `.acute/tools/` invocation with
+  no rule still asks (the interactive approval dialog); the interactive
+  flow still writes only EXACT rules. **Granting a prefix rule has NO UI
+  yet** — the ENGINE understands them (add one with `addApprovalRule`, or
+  a hand-written row); the owner-facing affordance is flagged follow-up
+  work. The reason line names the tier so logs stay legible:
+  "always-allow prefix rule for this project (a tool pattern — matches
+  every invocation under the granted folder)".
+
 ## 3. MCP servers (Settings → MCP)
 
 Attaches external stdio MCP servers (the Model Context Protocol ecosystem).
@@ -351,6 +426,7 @@ project files with loaded bits + the honest load-error note). The
 | MCP server | Settings UI → `mcp_servers` table → `mcp/manager.ts` child |
 | Built-in plugin (new tool group) | `agent-core/src/tools/plugins/<name>.ts` + registry import + tests |
 | Settings-gated surface (like computer-use) | storage accessors + `createTools` gate + migration |
+| Self-built tool (agent-created, R131) | the agent writes into `<project>/.acute/tools/` (no repo change; §2c) |
 
 ## The R66 addendum (what grew this round)
 
@@ -549,6 +625,28 @@ historical sessions (read-only postures → `permission_mode='plan'`).
 See `r81-mode-policy.test.ts` (25 tests), ADR-0026 (the R75 history),
 and ADR-0029 (the R81 decision).
 
+## The R131 addendum (the tool-creation round)
+
+- **TWENTY-FIVE built-in skills now (was 24).** The R131-F seed
+  `create-tool` (same `INSERT OR IGNORE` contract, sortOrder 24 — existing
+  DBs converge on 25; user edits persist; deleted rows revive): the
+  build-once-reuse-forever convention for the agent's self-built tools —
+  `.acute/tools/<name>/` + the `tool.json` manifest + the `tools.json`
+  index + invocation through `run_command` + verify-once-then-REUSE. §2c
+  above carries the full contract.
+- **The workspace scaffold landed the same round.** Every project root's
+  `.acute/` drawer (downloads/tools/memory/tmp + the `workspace.json`
+  marker) is created by `POST /projects` and healed at boot for the
+  Scratchpad root — the create-tool convention builds on a folder the app
+  guarantees. See PROJECT-MEMORY's `.acute/` workspace law.
+- **The approvals PREFIX tier.** A project "always allow" rule stored with
+  a trailing slash (`python .acute/tools/csv-peek/`) now matches every
+  invocation under the granted folder — the migration-0009 exact-match law
+  is amended (not bypassed): the tier sits after the denylist and the
+  destructive checks, `..` payloads fail closed, and granting a prefix rule
+  has NO UI yet (the engine understands them; the interactive flow still
+  writes exact rules only — flagged follow-up work).
+
 ## Troubleshooting
 
 - **A plugin file exists but `loaded:false`** — read the sidecar log
@@ -580,6 +678,11 @@ and ADR-0029 (the R81 decision).
   failed / tools/list failed / spawn failed). Check the command resolves
   (`npx -y <pkg>` on PATH), then re-probe (a probe resets the one-strike
   failure). Tools panel shows the in-band `error` field too.
+- **A created tool's invocation keeps asking** — check the project's rule
+  table: the interactive dialog writes EXACT rules only (a different arg
+  list is a different command). A prefix rule (the trailing-slash form,
+  §2c) covers every arg variation but has no UI yet — the engine
+  understands it once the row exists.
 - **`mcp__…` tool name too long** — rename the server (≤32-char slug).
 
 ## See also
@@ -593,9 +696,11 @@ and ADR-0029 (the R81 decision).
   catalog), `agent-core/src/tools/plugins/` (14 built-ins — incl.
   `modes.ts`, the R73 core-modes plugin, and `vision.ts`, the R66
   core-vision plugin), skills storage
-  `agent-core/src/storage/skills.ts` (the 20 builtins) +
+  `agent-core/src/storage/skills.ts` (the 25 builtins) +
   `agent-core/src/storage/skills-files.ts` (file discovery, references/,
-  the shared resolver, the merged listing), the modes core
+  the shared resolver, the merged listing) + the workspace scaffold
+  `agent-core/src/storage/workspace.ts` (R131: the `.acute/` drawer law),
+  the modes core
   `agent-core/src/agents/modes.ts` (the six postures + custom discovery)
   and the enforcement tier `agent-core/src/agents/mode-policy.ts` (R75:
   the policy map + PLAN_MODE_TOOLS + TASK_MODE_READ_ONLY),

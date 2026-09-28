@@ -154,6 +154,9 @@ const EXPECTED_TWENTY: ReadonlyArray<string> = [
   "ui-design",
   "error-testing",
   "large-project-navigation",
+  // ROUND-131 (R131-F): the tool-creation skill (its own pins live in
+  // tests/r131-create-tool.test.ts).
+  "create-tool",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -161,7 +164,7 @@ const EXPECTED_TWENTY: ReadonlyArray<string> = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("R72-b D1: six new craft builtins (12 → 18)", () => {
-  it("TWENTY builtins seed in the fixed order, fixed ids, sortOrder 0-19, all enabled", () => {
+  it("TWENTY-FIVE builtins seed in the fixed order, fixed ids, sortOrder 0-24, all enabled", () => {
     const builtins = listSkills(db).filter((s) => s.source === "builtin");
     expect(builtins.map((s) => s.name)).toEqual(EXPECTED_TWENTY);
     expect(builtins.map((s) => s.id)).toEqual([
@@ -186,8 +189,11 @@ describe("R72-b D1: six new craft builtins (12 → 18)", () => {
       "skill_builtin_ui_design",
       "skill_builtin_error_testing",
       "skill_builtin_large_project_navigation",
+      // ROUND-131 (R131-F): the tool-creation skill.
+      "skill_builtin_create_tool",
     ]);
-    expect(builtins.map((s) => s.sortOrder)).toEqual(Array.from({ length: 24 }, (_, i) => i));
+    // ROUND-131 (R131-F) RE-PIN: 24 → 25.
+    expect(builtins.map((s) => s.sortOrder)).toEqual(Array.from({ length: 25 }, (_, i) => i));
     expect(builtins.every((s) => s.enabled)).toBe(true);
   });
 
@@ -212,17 +218,19 @@ describe("R72-b D1: six new craft builtins (12 → 18)", () => {
     },
   );
 
-  it("the six new descriptions are distinct — from each other AND from the eighteen older ones", () => {
+  it("the six new descriptions are distinct — from each other AND from the older ones", () => {
     const descriptions = listSkills(db)
       .filter((s) => s.source === "builtin")
       .map((s) => s.description);
-    expect(descriptions).toHaveLength(24);
-    expect(new Set(descriptions).size).toBe(24);
+    // ROUND-131 (R131-F) RE-PIN: 24 → 25 (create-tool).
+    expect(descriptions).toHaveLength(25);
+    expect(new Set(descriptions).size).toBe(25);
   });
 
   it("the six names are lowercase slugs that do not shadow older builtins (the naming contract)", () => {
     const names = listSkills(db).filter((s) => s.source === "builtin").map((s) => s.name);
-    expect(new Set(names).size).toBe(24);
+    // ROUND-131 (R131-F) RE-PIN: 24 → 25 (create-tool).
+    expect(new Set(names).size).toBe(25);
     for (const name of R72_BUILTINS.map((b) => b.name)) {
       expect(name).toMatch(/^[a-z0-9][a-z0-9-]{1,63}$/);
     }
@@ -447,18 +455,19 @@ describe("R72-b D2: the six new bodies (discipline contracts)", () => {
 // D3 — the INSERT OR IGNORE contract, twenty-strong (R73-d re-pin)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("R72-b D3: INSERT OR IGNORE with 24 builtins", () => {
-  it("an explicit re-seed is idempotent: still exactly 24 rows, unique names, unique ids", () => {
+describe("R72-b D3: INSERT OR IGNORE with 25 builtins", () => {
+  it("an explicit re-seed is idempotent: still exactly 25 rows, unique names, unique ids", () => {
     seedBuiltinSkills(db);
     seedBuiltinSkills(db);
     const rows = db.prepare("SELECT * FROM skills").all() as Array<{ id: string; name: string; source: string }>;
     const builtins = rows.filter((r) => r.source === "builtin");
-    expect(builtins).toHaveLength(24);
-    expect(new Set(builtins.map((r) => r.id)).size).toBe(24);
-    expect(new Set(builtins.map((r) => r.name)).size).toBe(24);
+    // ROUND-131 (R131-F) RE-PIN: 24 → 25 (create-tool).
+    expect(builtins).toHaveLength(25);
+    expect(new Set(builtins.map((r) => r.id)).size).toBe(25);
+    expect(new Set(builtins.map((r) => r.name)).size).toBe(25);
   });
 
-  it("deleted new-builtin rows revive on reopen (an existing pre-R96 DB converges on 24)", () => {
+  it("deleted new-builtin rows revive on reopen (an existing pre-R96 DB converges on 25)", () => {
     const path = join(tempDir, "converge.db");
     const existing = openDatabase(path); // an "existing user DB" — already seeded
     try {
@@ -466,7 +475,8 @@ describe("R72-b D3: INSERT OR IGNORE with 24 builtins", () => {
       existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_tdd");
       existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_refactoring");
       existing.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_error_testing");
-      expect(listSkills(existing).filter((s) => s.source === "builtin")).toHaveLength(21);
+      // ROUND-131 (R131-F): 25 − 3 deletions = 22 (was 21 against 24).
+      expect(listSkills(existing).filter((s) => s.source === "builtin")).toHaveLength(22);
     } finally {
       existing.close();
     }
@@ -474,7 +484,7 @@ describe("R72-b D3: INSERT OR IGNORE with 24 builtins", () => {
     const reopened = openDatabase(path);
     try {
       const builtins = listSkills(reopened).filter((s) => s.source === "builtin");
-      expect(builtins).toHaveLength(24);
+      expect(builtins).toHaveLength(25);
       expect(getSkill(reopened, "skill_builtin_tdd")?.name).toBe("tdd");
       expect(getSkill(reopened, "skill_builtin_tdd")?.body).toContain("NEVER WRITE THE TEST AFTER THE CODE");
       expect(getSkill(reopened, "skill_builtin_refactoring")?.body).toContain("NO MOVE WITHOUT A GREEN CHARACTERIZATION TEST");
@@ -497,7 +507,8 @@ describe("R72-b D3: INSERT OR IGNORE with 24 builtins", () => {
   it("disabling a new builtin hides it from the enabled set without deleting the row", () => {
     updateSkill(db, "skill_builtin_security_review", { enabled: false });
     expect(listEnabledSkills(db).map((s) => s.name)).not.toContain("security-review");
-    expect(listSkills(db).filter((s) => s.source === "builtin")).toHaveLength(24);
+    // ROUND-131 (R131-F) RE-PIN: 24 → 25 (create-tool).
+    expect(listSkills(db).filter((s) => s.source === "builtin")).toHaveLength(25);
     // Re-enable restores it (the row never left).
     updateSkill(db, "skill_builtin_security_review", { enabled: true });
     expect(listEnabledSkills(db).map((s) => s.name)).toContain("security-review");
@@ -520,11 +531,12 @@ describe("R72-b D4: the six new descriptions ride the prompt SKILLS section verb
     };
   }
 
-  it("all twenty-four builtins render as '- **name** — description' with the FULL new descriptions", () => {
+  it("all twenty-five builtins render as '- **name** — description' with the FULL new descriptions", () => {
     const builtins = listSkills(db)
       .filter((s) => s.source === "builtin")
       .map((s) => ({ name: s.name, description: s.description }));
-    expect(builtins).toHaveLength(24);
+    // ROUND-131 (R131-F) RE-PIN: 24 → 25 (create-tool).
+    expect(builtins).toHaveLength(25);
 
     const section = buildSectionText(promptCtx(builtins), "skills") ?? "";
     expect(section).toContain("## SKILLS (load with read_skill, search with search_skills)");

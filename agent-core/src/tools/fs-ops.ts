@@ -189,7 +189,16 @@ function toRelative(root: string, abs: string): string {
   return abs.slice(root.length).replace(/^[\\/]/, "");
 }
 
-/** list_dir — entries of a folder (name, type, size). */
+/** list_dir — entries of a folder (name, type, size).
+ * R131-F (Wave F3 — the ledger's honesty fix): the output NAMES the
+ * resolved directory and the entry count as a header line
+ * ("listed <resolvedPath> — N entries") — the old output was an anonymous
+ * list of names with no way to tell WHICH directory answered, and the
+ * empty case said "(empty directory)" about a folder it would not name.
+ * The header carries the TRUE entry count (pre-cap): when the listing is
+ * capped at MAX_ENTRIES the header says so honestly instead of implying
+ * the folder holds exactly what was shown. The (empty directory) leg
+ * survives — now beneath the header, so the path is always named. */
 export function listDir(root: string, relative: string): ToolResult {
   const resolved = resolveInsideRoot(root, relative);
   if ("error" in resolved) return { ok: false, output: resolved.error };
@@ -197,7 +206,10 @@ export function listDir(root: string, relative: string): ToolResult {
   try {
     entries = readdirSync(resolved.abs);
   } catch {
-    return { ok: false, output: `cannot list '${relative}': not a readable directory` };
+    return {
+      ok: false,
+      output: `cannot list '${relative}' (${resolved.abs}): not a readable directory`,
+    };
   }
   const lines = entries.slice(0, MAX_ENTRIES).map((name) => {
     try {
@@ -207,7 +219,13 @@ export function listDir(root: string, relative: string): ToolResult {
       return `file ${name}`;
     }
   });
-  return { ok: true, output: lines.length > 0 ? lines.join("\n") : "(empty directory)" };
+  const cappedNote =
+    entries.length > MAX_ENTRIES ? ` (showing the first ${MAX_ENTRIES})` : "";
+  const header = `listed ${resolved.abs} — ${entries.length} entries${cappedNote}`;
+  return {
+    ok: true,
+    output: lines.length > 0 ? `${header}\n${lines.join("\n")}` : `${header}\n(empty directory)`,
+  };
 }
 
 /** read_file — text content, size-capped. */
