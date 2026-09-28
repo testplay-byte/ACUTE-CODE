@@ -425,13 +425,21 @@ export function sessionToolAllowList(
 ): readonly string[] | undefined {
   const isChild = session.parentSessionId !== null;
   const canDelegate = (depth ?? 0) < MAX_DELEGATION_DEPTH;
-  const withoutDelegate = (list: readonly string[]): readonly string[] =>
+  // ROUND-132 (R132): children lose mini_agent at EVERY depth — the mini
+  // agent is the MAIN conversation's partner tier (it lives in the chat
+  // window's own dedicated section); a delegation child dispatching nested
+  // partners is a complexity the owner's directive never asked for. The
+  // R49 nested-delegation rule for delegate_task itself is UNTOUCHED
+  // (below the cap children keep it; at the cap it strips as before).
+  const withoutMinis = (list: readonly string[]): readonly string[] =>
     (list.length === 0 ? (TOOL_NAMES as readonly string[]) : list).filter(
-      (t) => t !== "delegate_task",
+      (t) => t !== "mini_agent",
     );
+  const withoutDelegate = (list: readonly string[]): readonly string[] =>
+    withoutMinis(list).filter((t) => t !== "delegate_task");
   const childAllowList: readonly string[] | undefined = isChild
     ? canDelegate
-      ? agent.allowedTools
+      ? withoutMinis(agent.allowedTools)
       : withoutDelegate(agent.allowedTools)
     : agent.allowedTools;
   const modeAllow = modeAllowList(session.permissionMode);
