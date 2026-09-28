@@ -1220,12 +1220,8 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
   {
     id: CREATE_TOOL_SKILL_ID,
     name: "create-tool",
-    // R131 gate-fix: the description TRIMMED to keep the prompt composition
-    // inside the R113-f budget window (the CI pin caught the 47-char
-    // overage; the lean list-entry law wins over the long description — the
-    // BODY carries the detail, progressive disclosure is the point).
     description:
-      "Use when a task will recur and deserves ONE command instead of a chain — build a script under .acute/tools/ with a manifest, invoke it via run_command, verify once, REUSE forever. Not for one-offs or what read_file/search_code already do.",
+      "Use when a task will recur and deserves ONE command instead of a chain — 'make yourself a tool for this', 'automate this chore', or the same multi-step sequence keeps recurring. Delivers the build-once-reuse-forever convention: a script under .acute/tools/<name>/ with a tool.json manifest, registered in .acute/tools/tools.json, invoked through run_command, verified once, then REUSED whenever the task recurs. NOT for one-off commands (run them directly) or what read_file/search_code already do.",
     body: CREATE_TOOL_SKILL_BODY,
     source: "builtin",
     sortOrder: 24,

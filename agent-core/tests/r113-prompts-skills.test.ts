@@ -270,14 +270,21 @@ describe("R113-f P4: the 24,000 budget holds without a bump", () => {
     // 25,000 recalibration). The floor keeps the retirements honest —
     // the additions survived as content.
     const composed = buildProjectSystemPrompt(ctxFor());
-    // R127-W6 measured 24,804; R131-B (the browser leap) adds exactly +265
-    // (the browser-panel Actions line's offset/range clause + the NEW
-    // download action, the Forms line's type requested-vs-observed echo —
-    // the round-131 three-file lockstep law) — measured 25,083. The bound
-    // moves with the same precedent (mirrors r71 D6's 25,200
-    // recalibration); the floor keeps the retirements honest — the
-    // additions survived as content.
-    expect(composed.length).toBeLessThanOrEqual(25_100); // R131-B: the browser-leap lockstep measured 25,083
+    // R127-W6 measured 24,804; R131-B (the browser leap) adds +265 (the
+    // browser-panel Actions line's offset/range clause + the NEW download
+    // action, the Forms line's type requested-vs-observed echo — the
+    // round-131 three-file lockstep law) — 25,083 on that wave's branch.
+    // R131-F adds the create-tool skill's list entry — and the CI gate
+    // caught what the Linux sandbox could not measure: the WINDOWS
+    // composition runs ~64 chars over the Linux one (platform-conditional
+    // prompt text), measuring 25,147 on windows-latest. The bound moves
+    // with the same precedent (mirrors r71 D6's 25,200 recalibration); the
+    // floor keeps the retirements honest — the additions survived as
+    // content. (An earlier gate-fix attempt TRIMMED the skill's description
+    // to fit — REVERTED: the r71-e3 trigger-rich law pins the description's
+    // 300-500-char shape; the BODY is the progressive-disclosure tier, not
+    // the list entry.)
+    expect(composed.length).toBeLessThanOrEqual(25_200); // R131: Windows CI measured 25,147 (the browser lockstep + the create-tool entry)
     expect(composed.length).toBeGreaterThanOrEqual(23_000);
   });
 });
