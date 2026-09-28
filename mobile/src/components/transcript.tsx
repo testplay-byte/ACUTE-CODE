@@ -254,12 +254,10 @@ export type AttachmentImageResolver = (a: AttachmentView) => Promise<string | nu
 
 /** chat.md — the image radius: r12 on thumbnails + screenshot tiles. */
 const RADIUS_IMAGE = 12;
-/** chat.md §Transcript R129 — the TOOL CARD's radius: r12, the amendment's
- *  own literal. The tokens ladder's `card` radius is r20, so this stays a
- *  LOCAL chat geometry constant in RADIUS_IMAGE's own class (flagged in the
- *  round's caveats — the amendment's "RADIUS_CARD r12" names a value the
- *  token does not carry). */
-const RADIUS_TOOL_CARD = 12;
+// R132-MT — the TOOL CARD's local radius constant (r12) DIED WITH THE CARD:
+// the tool runs render as plain inline rows now (the owner's round-132
+// verdict: "getting a dedicated section is most definitely not good") — no
+// container, no border, no tinted well, nothing left to round.
 
 /** R130 — the tool GROUP's auto-collapse HOLD after a live group settles
  *  (ms): the PC WorkingSection ToolLine's own TOOL_COLLAPSE_HOLD_MS
@@ -267,37 +265,38 @@ const RADIUS_TOOL_CARD = 12;
  *  before the fold closes; a group holding a FAILED call never arms it. */
 const TOOL_GROUP_COLLAPSE_HOLD_MS = 2500;
 
-/** R131-M — the tool rows' FADED register, part 1: the family STRIPE's
- *  width. The R130-B 2.5px bar read LOUD (the owner's v0.123.0 verdict: "the
- *  UI of the tool calls is not good… it should be faded out kind of vibe.
- *  It should not be that highlighted or such") — the bar thins to a 1.5px
- *  hairline at the row's left edge. Pure + exported so jest pins the
- *  register; `styles.toolRowStripe` renders it verbatim. */
-export const TOOL_ROW_STRIPE_WIDTH = 1.5;
+// R132-MT — the family STRIPE's width constant (R131-M's 1.5px hairline)
+// DIED WITH THE STRIPE: the row's 13px family icon is the ONE colored
+// carrier left ("they can show the SVG icon alongside with them").
 
-/** R131-M — the tool rows' FADED register, part 2: the family FADE depth.
- *  The family hue rides at 50% over the row's resting surface (the recessed
- *  well) — the brief's 45–55% band, midpoint — so the color coding SURVIVES
- *  at a glance while the saturation (the "highlighted" feel) dies. Pure +
- *  pinned. */
+/** R131-M/R132-MT — the family FADE depth: the family hue rides at 50%
+ *  over the fixed quiet-well tone — the brief's 45–55% band, midpoint. The
+ *  R132 no-section law keeps the spelling byte-identical on its ONE
+ *  surviving carrier: the row's 13px family ICON (the color coding
+ *  survives at a glance; the saturation died with the stripe and the
+ *  card). Pure + pinned. */
 export const TOOL_FAMILY_FADE = 0.5;
 
-/** R131-M — the FAILED row's wash depth over the well: the R130-B depth
- *  (0.08), carried VERBATIM onto the new resting surface. Failures never
- *  fade — the honest-error law; the only full-strength registers left on a
- *  tool row are the failure treatment and the live (running) work. */
+/** R131-M/R132-MT — the FAILED row's wash depth: the R130-B depth (0.08),
+ *  carried VERBATIM (the mix base stays the fixed quiet-well tone — the
+ *  register's calibration spelling, unchanged by the card's death).
+ *  Failures never fade — the honest-error law; the only full-strength
+ *  registers left on a tool row are the failure treatment and the live
+ *  (running) work. */
 export const TOOL_FAILED_WASH_DEPTH = 0.08;
 
-/** R131-M — the tool row's family COLOR, FADED (the color-coding contract's
- *  quiet register): write = the accent terracotta, terminal = the warning
- *  amber, read = the accent2 taupe, web/browser = the chart's sage teal (the
- *  one documented extra-hue exception) — each at TOOL_FAMILY_FADE over the
- *  RECESSED well surface the rows sit on (mixHex toward the surface = the
- *  hue at ~50% opacity over it, the house's one mix spelling); generic =
- *  textSecondary VERBATIM (the already-secondary register — an rgba ladder
- *  value, never mixHex-able, and never in need of fading). The stripe + the
- *  leading icon share this ONE spelling per row (the R130 law survives at
- *  the faded register). Pure + exported so jest pins the register. */
+/** R131-M/R132-MT — the tool row's family COLOR, FADED (the color-coding
+ *  contract's quiet register): write = the accent terracotta, terminal = the
+ *  warning amber, read = the accent2 taupe, web/browser = the chart's sage
+ *  teal (the one documented extra-hue exception) — each at TOOL_FAMILY_FADE
+ *  over the fixed quiet-well tone (mixHex toward the tone = the hue at ~50%
+ *  opacity over it, the house's one mix spelling — the R132 no-section law
+ *  keeps the spelling byte-identical; the rows just sit on the flat
+ *  background now); generic = textSecondary VERBATIM (the already-secondary
+ *  register — an rgba ladder value, never mixHex-able, and never in need of
+ *  fading). The row's 13px leading icon carries this ONE spelling (the
+ *  stripe died with the card — the icon is the family identity). Pure +
+ *  exported so jest pins the register. */
 export function toolFamilyColor(
   family: ToolFamily,
   tokens: { accent: string; warning: string; accent2: string; surfaceWell: string; textSecondary: string },
@@ -317,9 +316,10 @@ export function toolFamilyColor(
   }
 }
 
-/** R131-M — the FAILED row's full treatment (pure + pinned): the quiet
- *  danger WASH at the carried-verbatim R130-B depth over the row's resting
- *  well surface + the status chip's FULL-STRENGTH danger ink. The fade
+/** R131-M/R132-MT — the FAILED row's full treatment (pure + pinned): the
+ *  quiet danger WASH at the carried-verbatim R130-B depth (over the fixed
+ *  quiet-well tone — the register's calibration spelling, unchanged by the
+ *  card's death) + the status chip's FULL-STRENGTH danger ink. The fade
  *  never touches a failure — the wash keeps its depth, the chip keeps the
  *  flat semantic hue (never the family fade), so a failed call stays the
  *  one thing on a tool row that cannot fade into the background. */
@@ -1164,7 +1164,7 @@ export type TurnElementDescriptor =
   | ToolGroupElement
   | TextElement;
 
-/** R129-M/R130 — the turn's SEPARATED-ELEMENTS plan (the pure render
+/** R129-M/R130/R132-MT — the turn's SEPARATED-ELEMENTS plan (the pure render
  * contract). */
 export interface TurnElementsPlan {
   /** The turn container carries NO surface (no clay card, no well, no
@@ -1175,16 +1175,12 @@ export interface TurnElementsPlan {
    *  elements the turn actually has — a thinking-less turn renders no
    *  thinking element, a hidden-tools turn renders no groups). */
   elements: TurnElementDescriptor[];
-  /** One clay card per RUN of consecutive calls — the house CARD padding
-   *  (spacing.md = 12, the comfortable literal; the density pref's compact
-   *  rung halves the vertical at the component, per its pinned contract). */
-  toolGroupPadding: number;
-  /** chat.md — the tool group card's radius (r12). */
-  toolGroupRadius: number;
-  /** The 8px vertical gaps between groups (spacing.sm). */
-  toolGroupGap: number;
-  /** R130 — the auto-collapse HOLD after a live group settles (ms; the PC
-   *  ToolLine's own TOOL_COLLAPSE_HOLD_MS, ported for parity). */
+  /** R132-MT — the plan's ONE tool geometry survivor: the auto-collapse
+   *  HOLD after a live group settles (ms; the PC ToolLine's own
+   *  TOOL_COLLAPSE_HOLD_MS, ported for parity). The card's geometry
+   *  contract (padding / radius / boxed gaps) died WITH THE CARD — the
+   *  groups render as plain inline rows separated by whitespace alone (the
+   *  no-section law), so the plan carries no container geometry at all. */
   toolGroupCollapseHoldMs: number;
 }
 
@@ -1292,9 +1288,8 @@ export function turnElementsPlan(group: TurnGroup, activity: ToolActivity): Turn
   return {
     containerSurface: null,
     elements,
-    toolGroupPadding: spacing.md,
-    toolGroupRadius: RADIUS_TOOL_CARD,
-    toolGroupGap: spacing.sm,
+    // R132-MT — the card geometry (padding/radius/gap) died with the card;
+    // the hold is the plan's one surviving tool geometry (the behavior law).
     toolGroupCollapseHoldMs: TOOL_GROUP_COLLAPSE_HOLD_MS,
   };
 }
@@ -1547,8 +1542,8 @@ export function TurnBlock({ group }: { group: TurnGroup }) {
       accessibilityLabel={turnBlockA11yLabel({ ...facts, replyText: turnReplyText(group.items) })}
       // R129-M — the turn container carries NO surface (no clay card, no
       // well, no bubble): the plain column's only job is the siblings' real
-      // spacing (the house 8dp beat — the tool cards' own 8px gaps
-      // included).
+      // spacing (the house 8dp beat — the tool groups' inline rows ride it
+      // like every other sibling, R132-MT).
       style={styles.turnBlock}
       testID="transcript-turn-block"
     >
@@ -1860,42 +1855,49 @@ function PulseDot({ color, size }: { color: string; size: number }) {
   );
 }
 
-// ── the tool groups (R130 — the PC Working-fold grammar, PORTED: one clay
-// CARD per RUN of consecutive calls + one-line color-coded rows) ───────────
+// ── the tool groups (R130 — the PC Working-fold grammar, PORTED: one run
+// of consecutive calls + one-line color-coded rows) ──────────────────────
 //
-// THE TOOL GROUP (R131-M — the faded register): the RECESSED WELL
-// treatment (12px padding, r12, the surfaceWell tint + the borderSubtle
-// hairline rim, NO elevation shadow — the R129 card + clayRim + clayShadow
-// treatment retired by the owner's v0.123.0 "faded out kind of vibe"
-// verdict) wrapping either a SINGLE call's row
-// (the row IS the group's fold head — its details render behind the group's
-// own disclosure) or a GROUP HEADER + the calls as ONE-LINE rows behind the
-// fold. The auto-lifecycle law ports from the PC's own ToolLine
-// (WorkingSection.tsx, MOTION.md §4): OPEN while the turn is live (the
-// owner watches the work happen — the R123-W-m seeing, now scoped to
-// live), a ~2.5s HOLD after the turn settles, then COLLAPSE (the quiet
-// transcript the owner asked for); a group holding a FAILED call NEVER
-// auto-collapses; the user's tap wins for the group's lifetime. Compact
-// pins the group to its one line(s) — no expansion; hidden renders no
-// groups at all.
+// THE TOOL GROUP (R132-MT — the NO-SECTION law): the R131-M recessed-well
+// CARD is DEAD (the owner's round-132 verdict, his second pass on the
+// surface: "the toolbars were most definitely highlighted way too much
+// too. Like they can show the SVG icon alongside with them, but getting a
+// dedicated section is most definitely not good") — a run of calls renders
+// as PLAIN INLINE ROWS directly in the transcript flow: no container, no
+// backgroundColor, no border, no boxed padding, no tinted well, no section
+// header. A SINGLE call's row IS the group's fold head (its details render
+// behind the group's own disclosure); a MULTI-call run keeps ONE quiet
+// summary line as its fold anchor (the Layers glyph + the glance label —
+// icon+text, no container) with the calls as ONE-LINE rows behind the
+// fold, each row its own collapsible line. The rows separate from the
+// surrounding text by the turn column's own 8dp beat and from each other
+// by a small vertical gap — whitespace alone. The auto-lifecycle law ports
+// from the PC's own ToolLine (WorkingSection.tsx, MOTION.md §4) and rides
+// BYTE-UNTOUNCHED: OPEN while the turn is live (the owner watches the work
+// happen — the R123-W-m seeing, now scoped to live), a ~2.5s HOLD after
+// the turn settles, then COLLAPSE (the quiet transcript the owner asked
+// for); a group holding a FAILED call NEVER auto-collapses; the user's tap
+// wins for the group's lifetime. Compact pins the group to its one
+// line(s) — no expansion; hidden renders no groups at all.
 //
-// THE TOOL ROW (R131-M — the secondary register): one line — the family
-// stripe (a 1.5px hairline, the family color FADED to ~50% over the well)
-// + the family icon (the SAME quiet family color — the one faded spelling
-// per row: the color coding survives at a glance, the saturation dies) +
-// the verb·target title (mono, one line, SECONDARY ink — the PC ToolLine's
-// own calm register) + the write family's +A/−B diff chips + the QUIET
-// status chip + the chevron while expandable. THE ROW IS THE PRESS TARGET
-// — the whole row, not a head-line strip inside it (the R129 head-row-only
-// target left dead zones in the card padding — the owner: "I tapped on it,
-// it apparently did nothing. I had to click the arrow"). A RUNNING call's
-// streaming tails render OUTSIDE the fold (always visible live work); the
-// settled details render behind the row's own disclosure clip. The failed
-// call's tell stays the R116-m grammar at FULL STRENGTH (the inline danger
-// chip + the row's quiet danger wash — failures never fade, the
-// honest-error law); running = the small warning chip (the live-open law's
-// visible live indicator); success = NOTHING; R128-W6's INTERRUPTED settle
-// stays NEUTRAL.
+// THE TOOL ROW (R132-MT — the inline register): one line — the 13px family
+// icon (the family color FADED to ~50% — the ONE faded spelling per row;
+// the color coding survives at a glance, and the icon is the family
+// identity now that the stripe died with the card) + the verb·target title
+// (mono, one line, SECONDARY ink — the PC ToolLine's own calm register) +
+// the write family's +A/−B diff chips + the QUIET status chip + the
+// chevron while expandable. THE ROW IS THE PRESS TARGET — the whole row,
+// not a head-line strip inside it (the R129 head-row-only target left dead
+// zones in the card padding — the owner: "I tapped on it, it apparently
+// did nothing. I had to click the arrow"). The row paints NOTHING at rest
+// (transparent, on the flat background). A RUNNING call's streaming tails
+// render OUTSIDE the fold (always visible live work); the settled details
+// render behind the row's own disclosure clip. The failed call's tell
+// stays the R116-m grammar at FULL STRENGTH (the inline danger chip + the
+// row's quiet danger wash — failures never fade, the honest-error law);
+// running = the small warning chip (the live-open law's visible live
+// indicator); success = NOTHING; R128-W6's INTERRUPTED settle stays
+// NEUTRAL.
 
 function ToolGroup({
   items,
@@ -1910,8 +1912,9 @@ function ToolGroup({
   /** The auto-collapse hold after a live group settles (the plan's constant). */
   holdMs: number;
 }) {
-  const { tokens } = useTheme();
-  const prefs = useChatPrefs();
+  // R132-MT — the card's death took the group's only theme/pref reads with
+  // it (the surfaceWell tint, the borderSubtle rim, the density padding):
+  // the group is a plain column of inline rows now — nothing to paint.
   // R128-W6 — an INTERRUPTED settle is neutral, not a failure: a group of
   // interrupted calls collapses like any other (only real failures pin).
   const hasFailed = items.some((it) => it.ok === false && it.interrupted !== true);
@@ -1969,24 +1972,12 @@ function ToolGroup({
   const running = items.some((it) => it.ok === null);
 
   return (
-    <View
-      style={[
-        styles.toolCallCard,
-        {
-          // R131-M — the faded register: the group card IS the recessed well
-          // now — the surfaceWell tint + the borderSubtle hairline rim, and
-          // NO elevation shadow (a recessed surface casts none; the R129-M
-          // card + clayRim + clayShadowSm treatment is retired by the
-          // owner's "faded out kind of vibe" verdict). The rows sit ON this
-          // well, transparent; a failed call washes its own ROW over it,
-          // not the whole group.
-          backgroundColor: tokens.surfaceWell,
-          borderColor: tokens.borderSubtle,
-          paddingVertical: densityVerticalPadding(prefs.chatDensity),
-        },
-      ]}
-      testID="transcript-tool-group"
-    >
+    // R132-MT — THE CARD IS DEAD: no container, no backgroundColor, no
+    // border, no boxed padding around the group — the rows sit directly in
+    // the transcript flow, separated from the surrounding text by the turn
+    // column's own 8dp beat and from each other by the small vertical gap
+    // this wrapper carries (whitespace alone; the wrapper paints nothing).
+    <View style={styles.toolGroup} testID="transcript-tool-group">
       {single ? (
         // A single call: the row IS the group's fold head — its details
         // render behind the group's own lifecycle, so the row takes the
@@ -1996,7 +1987,7 @@ function ToolGroup({
         )
       ) : (
         <>
-          <ToolGroupHeader
+          <ToolGroupSummary
             label={label}
             running={running}
             failed={hasFailed}
@@ -2004,13 +1995,16 @@ function ToolGroup({
             expandable={expandable}
             onToggle={toggle}
           />
-          {/* The calls as ONE-LINE rows behind the group's fold — compact
-              renders no rows at all (the header only). */}
+          {/* The calls as ONE-LINE rows behind the group's fold — each row
+              its own collapsible line (the per-row mechanics survive);
+              compact renders no rows at all (the summary line only). */}
           {expandable && (
             <DisclosureClip open={open}>
-              {items.map((item) => (
-                <ToolRow key={item.key} item={item} expandable={expandable} />
-              ))}
+              <View style={styles.toolGroupRows}>
+                {items.map((item) => (
+                  <ToolRow key={item.key} item={item} expandable={expandable} />
+                ))}
+              </View>
             </DisclosureClip>
           )}
         </>
@@ -2019,14 +2013,17 @@ function ToolGroup({
   );
 }
 
-/** The multi-call group's HEADER line: the stacked-layers glyph + the glance
- * label (toolGroupLabel — "3 calls · 2 read · 1 edit"; a single call never
- * renders a header, its row speaks) + the running/failed chip + the chevron
- * while expandable. The WHOLE line is the press target (R130's tap-anywhere
- * law at the group level too). R131-M — the header speaks the SECONDARY
- * register with its rows (the glyph's accent fill prominence dies; the
- * running/failed chips stay full-strength — the only two that may). */
-function ToolGroupHeader({
+/** The multi-call group's QUIET SUMMARY LINE (R132-MT): the group fold's
+ * ONE anchor, in the rows' own inline register — the stacked-layers glyph +
+ * the glance label (toolGroupLabel — "3 calls · 2 read · 1 edit"; a single
+ * call never renders a summary, its row speaks) + the running/failed chip +
+ * the chevron while expandable. Icon+text, NO container — the R131-M
+ * section-title header (a Layers glyph + label + chips + chevron ATOP A
+ * BOXED AREA) died with the box; this line is the thinking row's own
+ * label-line grammar, and the WHOLE line is the press target (R130's
+ * tap-anywhere law at the group level too). The running/failed chips stay
+ * full-strength — the only two that may. */
+function ToolGroupSummary({
   label,
   running,
   failed,
@@ -2043,7 +2040,7 @@ function ToolGroupHeader({
 }) {
   const { tokens } = useTheme();
   const row = (
-    <View style={styles.toolGroupHead}>
+    <View style={styles.toolGroupSummary}>
       <Layers size={13} color={tokens.textSecondary} strokeWidth={2.2} />
       <TypeMono
         style={{ color: tokens.textSecondary, fontFamily: fontFamily.monoMedium, flex: 1 }}
@@ -2077,19 +2074,21 @@ function ToolGroupHeader({
 }
 
 /**
- * R130/R131-M — THE TOOL ROW: one call's ONE-LINE row inside the group (or
- * AS a single-call group's whole fold head): the family STRIPE (R131-M: a
- * 1.5px hairline in the family color FADED over the well) + the family
- * ICON (the same quiet family color — the color-coding contract at the
- * secondary register) + the verb·target title (`toolRowTitle`, mono, one
- * line, SECONDARY ink) + the write family's +A/−B diff chips + the QUIET
- * status chip (running = warning; failed = danger + the row's quiet danger
- * wash — both FULL-STRENGTH, never faded; interrupted = neutral; success =
- * NOTHING — the result rides the line) + the chevron while expandable.
+ * R130/R131-M/R132-MT — THE TOOL ROW: one call's ONE-LINE row inside the
+ * group (or AS a single-call group's whole fold head), a PLAIN INLINE LINE
+ * in the transcript flow (the no-section law: no card, no well, no
+ * stripe): the 13px family ICON (the quiet family color — the ONE faded
+ * spelling per row; the icon is the family identity now) + the verb·target
+ * title (`toolRowTitle`, mono, one line, SECONDARY ink) + the write
+ * family's +A/−B diff chips + the QUIET status chip (running = warning;
+ * failed = danger + the row's quiet danger wash — both FULL-STRENGTH,
+ * never faded; interrupted = neutral; success = NOTHING — the result rides
+ * the line) + the chevron while expandable. The row paints NOTHING at rest
+ * (transparent, on the flat background).
  *
  * THE WHOLE ROW IS THE PRESS TARGET (R130's tap-anywhere fix): the
- * Pressable wraps the row's own card — no dead zones in the padding; a
- * compact row is a plain View (no press, no chevron, no details).
+ * Pressable wraps the whole line — no dead zones; a compact row is a plain
+ * View (no press, no chevron, no details).
  *
  * The RUNNING call's streaming tails (the write family's content tail, the
  * terminal family's output tail) render OUTSIDE every fold — the live work
@@ -2123,10 +2122,10 @@ function ToolRow({
   const isWeb = WEB_TOOLS.has(item.toolName);
   const isBrowser = BROWSER_TOOLS.has(item.toolName);
 
-  // R130/R131-M — the family's quiet COLOR + ICON (one spelling per family:
-  // the stripe, the icon, and the glance word in the group label all read
+  // R130/R131-M/R132-MT — the family's quiet COLOR + ICON (one spelling per
+  // family: the icon and the glance word in the group label read
   // toolFamily; the color is the FADED register — TOOL_FAMILY_FADE over the
-  // well the row sits on).
+  // fixed well tone, byte-identical through the card's death).
   const family = toolFamily(item.toolName);
   const familyColor = toolFamilyColor(family, tokens, isDark);
   const icon = isWrite ? (
@@ -2179,23 +2178,20 @@ function ToolRow({
       style={[
         styles.toolRow,
         {
-          // R131-M — the rows sit ON the group's recessed well (transparent;
-          // the group card carries the surfaceWell tint), and the failed
-          // call's quiet danger wash (donts #37's card-wide tint, translated
-          // to the ROW inside the group — precise, never the whole group)
-          // rides the FULL-STRENGTH treatment: the R130-B depth carried
-          // verbatim over the row's new resting surface (failures never
-          // fade — the honest-error law; toolFailedRowTreatment is the one
-          // pure spelling, pinned).
+          // R132-MT — the row paints NOTHING at rest (transparent, directly
+          // in the transcript flow — no card, no well, no stripe); the
+          // failed call's quiet danger wash (donts #37's card-wide tint,
+          // translated to the ROW — precise, never the whole group) rides
+          // the FULL-STRENGTH treatment: the R130-B depth carried verbatim
+          // (failures never fade — the honest-error law;
+          // toolFailedRowTreatment is the one pure spelling, pinned).
           backgroundColor: failed ? toolFailedRowTreatment(tokens).wash : "transparent",
         },
       ]}
     >
-      {/* R130/R131-M — the family STRIPE: a 1.5px family-colored hairline at
-          the row's left edge (the glanceable color coding at the faded
-          register — the quiet family color over the well; the R130-B 2.5px
-          full-strength bar retired by the owner's "faded out" verdict). */}
-      <View style={[styles.toolRowStripe, { backgroundColor: familyColor }]} />
+      {/* R132-MT — the 13px family ICON is the row's ONE colored carrier
+          (the stripe died with the card): the glanceable color coding at
+          the faded register — the quiet family color, byte-identical. */}
       {icon}
       <TypeMono
         style={{ color: tokens.textSecondary, fontFamily: fontFamily.monoMedium, flex: 1 }}
@@ -3531,52 +3527,44 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
     borderRadius: RADIUS_PILL,
   },
-  /** R129-M/R130/R131-M — THE TOOL GROUP CARD: one group card per RUN of
-   *  consecutive calls — the house CARD padding (spacing.md = 12px all
-   *  sides; the density pref's compact rung halves the VERTICAL at the call
-   *  site, its pinned contract), r12 (chat.md). R131-M — the faded register:
-   *  the surface + rim + shadow are THEME values at the call site now (the
-   *  recessed surfaceWell tint + the borderSubtle hairline, NO elevation
-   *  shadow — a recessed surface casts none; the R130 card + clayRim +
-   *  clayShadowSm treatment is retired). The 8px gaps BETWEEN groups ride
-   *  the turn column's own beat (the plan's toolGroupGap). */
-  toolCallCard: {
-    borderRadius: RADIUS_TOOL_CARD,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: spacing.md,
-    gap: spacing.sm,
+  /** R132-MT — THE TOOL GROUP: the CARD DIED (the owner's round-132 verdict
+   *  — "getting a dedicated section is most definitely not good"); the
+   *  group is a plain column of inline rows now, and this style carries
+   *  ONLY the small vertical gap between the summary line and its rows
+   *  (whitespace alone — the turn column's own 8dp beat separates the group
+   *  from the surrounding text). NO background, NO border, NO padding. */
+  toolGroup: {
+    gap: spacing.xs,
   },
-  /** R130 — the multi-call group's HEADER line: the Layers glyph + the
-   *  glance label + the status chip + the chevron; the WHOLE line is the
-   *  press target (the tap-anywhere law at the group level). */
-  toolGroupHead: {
+  /** R130/R132-MT — the multi-call group's QUIET SUMMARY LINE: the Layers
+   *  glyph + the glance label + the status chip + the chevron — the group
+   *  fold's anchor in the ROW register (transparent, secondary ink, the
+   *  same 32 touch height); the WHOLE line is the press target (the
+   *  tap-anywhere law at the group level). */
+  toolGroupSummary: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
+    gap: spacing.xs,
     minHeight: 32,
   },
-  /** R130/R131-M — THE TOOL ROW: one call's one-line row — the family
-   *  stripe + icon + title + chips + chevron; the whole row is the press
+  /** R130/R131-M/R132-MT — THE TOOL ROW: one call's one-line row — the
+   *  family icon + title + chips + chevron; the whole row is the press
    *  target. The row itself paints NOTHING at rest (transparent — it sits
-   *  ON the group's recessed well); only a FAILED call washes it (the
-   *  full-strength danger treatment, never faded). */
+   *  directly in the transcript flow, the no-section law); only a FAILED
+   *  call washes it (the full-strength danger treatment, never faded). The
+   *  32 touch height + the Pressable's hitSlop keep the tap-anywhere target
+   *  at the transcript's own row minimum. */
   toolRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.xs,
     minHeight: 32,
-    borderRadius: 8,
-    paddingHorizontal: spacing.xs,
   },
-  /** R130/R131-M — the row's family STRIPE: a 1.5px family-colored hairline
-   *  at the row's left edge (the glanceable color coding at the FADED
-   *  register — the quiet family color over the well; the R130-B 2.5px
-   *  full-strength bar is retired by the owner's "faded out" verdict —
-   *  TOOL_ROW_STRIPE_WIDTH is the pinned constant). */
-  toolRowStripe: {
-    width: TOOL_ROW_STRIPE_WIDTH,
-    alignSelf: "stretch",
-    borderRadius: TOOL_ROW_STRIPE_WIDTH / 2,
+  /** R132-MT — the stacked rows inside the group's fold: the small vertical
+   *  gap between one call's line and the next (whitespace alone — the boxed
+   *  card that used to hold them died with the section). */
+  toolGroupRows: {
+    gap: spacing.xs,
   },
   assistantLive: {
     flexDirection: "row",

@@ -25,16 +25,23 @@
  * (toolStatusWord, the tools-hidden hint, the user bubble's plan) ride
  * untouched below.
  *
- * ROUND-131 (R131-M — the tool rows' FADED register): the owner's v0.123.0
- * verdict on the tool groups' UI — "it should be faded out kind of vibe. It
- * should not be that highlighted or such" — is pinned at the STYLE-REGISTER
- * level: the thinned 1.5px family stripe (TOOL_ROW_STRIPE_WIDTH), the
- * family colors at the ~50% fade over the recessed well (TOOL_FAMILY_FADE
- * + toolFamilyColor), and the FAILED row's danger treatment SURVIVING the
- * fade at full strength (toolFailedRowTreatment + TOOL_FAILED_WASH_DEPTH).
- * The R130 STRUCTURAL pins above (interleaving, grouping, collapsed-default,
- * live-open, failed-stays-open, the geometry family) ride byte-untouched —
- * only the visual register changed.
+ * ROUND-131 (R131-M — the tool rows' first fade): the owner's v0.123.0
+ * verdict ("it should be faded out kind of vibe. It should not be that
+ * highlighted or such") thinned the register — the 1.5px family stripe, the
+ * ~50% family fade, the recessed well card. The fade's SURVIVORS are pinned
+ * below (TOOL_FAMILY_FADE + toolFamilyColor on the icon, the FAILED
+ * treatment at full strength); the stripe and the well card are history.
+ *
+ * ROUND-132 (R132-MT — the NO-SECTION law): the owner's second pass —
+ * "the toolbars were most definitely highlighted way too much too. Like
+ * they can show the SVG icon alongside with them, but getting a dedicated
+ * section is most definitely not good" — kills the SECTION, not the rows:
+ * the group card (the plan carries NO container geometry at all), the
+ * family stripe (no TOOL_ROW_STRIPE_WIDTH export), and the section-title
+ * header all die; the icon+title inline register, the ~50% family fade ON
+ * THE ICON, and the full-strength failed treatment survive. The R130
+ * STRUCTURAL pins (interleaving, grouping, collapsed-default, live-open,
+ * failed-stays-open, the 2.5s hold, the pref matrix) ride byte-untouched.
  *
  * The component module's import graph is jest-mocked the
  * transcript-delivery.test.ts way (reanimated, lucide, router/clipboard,
@@ -75,7 +82,6 @@ import {
   TOOLS_HIDDEN_HINT_COPY,
   TOOL_FAMILY_FADE,
   TOOL_FAILED_WASH_DEPTH,
-  TOOL_ROW_STRIPE_WIDTH,
   acquireToolsHiddenHint,
   dismissToolsHiddenHint,
   mountToolsHiddenHintBlock,
@@ -88,9 +94,14 @@ import {
   userBubbleBodyPlan,
   type TurnElementsPlan,
 } from "@/components/transcript";
+// R132-MT — the module's SURFACE is itself part of the pinned law now: the
+// no-section register asserts the DEAD exports are gone (the stripe width
+// must not exist on the module at all), so the namespace rides alongside
+// the named imports.
+import * as TranscriptModule from "@/components/transcript";
 import { groupDisplayRows, type ToolItem, type TurnGroup } from "@/features/turn-block";
 import type { ToolActivity } from "@/design/theme";
-import { CHART_HUES, chartHue, mixHex, spacing } from "@/design/tokens";
+import { CHART_HUES, chartHue, mixHex } from "@/design/tokens";
 import type { AttachmentView, TranscriptItem } from "@/features/sessions";
 
 function attachment(name: string, path?: string): AttachmentView {
@@ -333,14 +344,16 @@ describe("R130 — EMISSION-ORDER INTERLEAVING (the text renders WHERE IT WAS RE
   });
 });
 
-describe("R130 — the tool groups' geometry + lifecycle (the PC Working-fold grammar, ported)", () => {
-  it("the house CARD padding (12 = spacing.md), the r12 radius, the 8px gaps between groups, and the 2.5s auto-collapse hold", () => {
+describe("R130/R132-MT — the tool groups' lifecycle + the no-section geometry (the PC Working-fold grammar, ported)", () => {
+  it("R132-MT — the card geometry DIED with the card (the plan carries no padding/radius/boxed-gap); the 2.5s auto-collapse hold SURVIVES", () => {
     const plan = planOf([toolItem("t1"), toolItem("t2")]);
-    expect(plan.toolGroupPadding).toBe(12);
-    expect(plan.toolGroupPadding).toBe(spacing.md);
-    expect(plan.toolGroupRadius).toBe(12);
-    expect(plan.toolGroupGap).toBe(8);
-    expect(plan.toolGroupGap).toBe(spacing.sm);
+    // The container contract is gone from the render plan — the rows sit
+    // directly in the transcript flow, separated by whitespace alone (no
+    // boxed padding, no border, no tinted well around a run of calls).
+    expect(plan).not.toHaveProperty("toolGroupPadding");
+    expect(plan).not.toHaveProperty("toolGroupRadius");
+    expect(plan).not.toHaveProperty("toolGroupGap");
+    // The plan's one surviving tool geometry: the behavior law (the hold).
     expect(plan.toolGroupCollapseHoldMs).toBe(2500);
   });
 
@@ -504,17 +517,22 @@ describe("R130 — the tool group label's grammar (toolGroupLabel, pure)", () =>
   });
 });
 
-// ── R131-M — the tool rows' FADED register (the owner's v0.123.0 verdict) ───
-// The tool groups/rows read too LOUD ("it should be faded out kind of vibe.
-// It should not be that highlighted or such") — the register steps down to
-// the calm, recessed secondary one. The pure exports below ARE the register
-// the component renders (toolFamilyColor feeds the stripe + the icon,
-// TOOL_ROW_STRIPE_WIDTH is styles.toolRowStripe's width, toolFailedRowTreatment
-// feeds the failed row's wash + the chip's ink); the R130-B structural laws
-// above ride byte-untouched.
+// ── R131-M/R132-MT — the tool rows' register (two owner passes) ────────────
+// The v0.123.0 pass ("it should be faded out kind of vibe. It should not be
+// that highlighted or such") thinned the register; the round-132 pass ("the
+// toolbars were most definitely highlighted way too much too. Like they can
+// show the SVG icon alongside with them, but getting a dedicated section is
+// most definitely not good") killed the SECTION: the card, the stripe, and
+// the header died. The pure exports below ARE the register the component
+// renders (toolFamilyColor feeds the row's 13px family ICON — the one
+// colored carrier left; toolFailedRowTreatment feeds the failed row's wash +
+// the chip's ink, still full-strength); the R130 structural laws above ride
+// byte-untouched.
 
 /** Clay's resolved pairs (tokens.ts's own values — the fixture the register
- *  math runs against; surfaceWell is the RECESSED well the rows sit on). */
+ *  math runs against; surfaceWell is the FADE's fixed calibration base —
+ *  the R131 well tone, kept byte-identical now that the rows sit on the
+ *  flat background). */
 const CLAY_LIGHT = {
   card: "#FDFDFB",
   accent: "#C4653F",
@@ -534,19 +552,18 @@ const CLAY_DARK = {
   textSecondary: "rgba(255,255,255,0.62)",
 } as const;
 
-describe("R131-M — the tool rows' faded register (thin stripes, faded family colors)", () => {
-  it("the family STRIPE thins to the 1.5px hairline (the R130-B 2.5px full-strength bar is retired)", () => {
-    // The loud register dies here: 2.5px at the family color read as a
-    // highlighted bar; 1.5px reads as the quiet hairline coding.
-    expect(TOOL_ROW_STRIPE_WIDTH).toBe(1.5);
-    expect(TOOL_ROW_STRIPE_WIDTH).not.toBe(2.5);
+describe("R132-MT — the tool rows' inline register (no section, no stripe — the icon carries the family)", () => {
+  it("the family STRIPE is GONE — the module exports no stripe width (the 13px icon is the one colored carrier)", () => {
+    // The section era's colored-edge grammar died with the card: no
+    // TOOL_ROW_STRIPE_WIDTH on the module surface at all.
+    expect("TOOL_ROW_STRIPE_WIDTH" in TranscriptModule).toBe(false);
   });
 
-  it("the family FADE depth is the ~50% band's midpoint over the recessed well", () => {
+  it("the family FADE depth stays the ~50% band's midpoint — the ICON's quiet register, byte-identical", () => {
     expect(TOOL_FAMILY_FADE).toBe(0.5);
   });
 
-  it("every chromatic family reads its hue at the fade over the WELL — never the full-strength token (both modes)", () => {
+  it("every chromatic family reads its hue at the fade over the WELL tone — never the full-strength token (both modes)", () => {
     for (const [clay, isDark] of [
       [CLAY_LIGHT, false],
       [CLAY_DARK, true],
@@ -574,7 +591,7 @@ describe("R131-M — the tool rows' faded register (thin stripes, faded family c
     expect(toolFamilyColor("other", CLAY_DARK, true)).toBe(CLAY_DARK.textSecondary);
   });
 
-  it("the faded family colors still differ per family (the color CODING survives the fade — quiet, not gone)", () => {
+  it("the faded family colors still differ per family (the color CODING survives on the icon — quiet, not gone)", () => {
     const colors = (["write", "terminal", "read", "web"] as const).map(
       (family) => toolFamilyColor(family, CLAY_LIGHT, false),
     );
@@ -582,8 +599,8 @@ describe("R131-M — the tool rows' faded register (thin stripes, faded family c
   });
 });
 
-describe("R131-M — the FAILED row's danger treatment SURVIVES the fade (still full-strength)", () => {
-  it("the wash keeps the R130-B depth (0.08) over the row's new resting well surface — never the family fade", () => {
+describe("R131-M/R132-MT — the FAILED row's danger treatment SURVIVES (still full-strength)", () => {
+  it("the wash keeps the R130-B depth (0.08) over the fixed quiet-well base — never the family fade", () => {
     expect(TOOL_FAILED_WASH_DEPTH).toBe(0.08);
     const treatment = toolFailedRowTreatment(CLAY_LIGHT);
     expect(treatment.wash).toBe(mixHex(CLAY_LIGHT.surfaceWell, CLAY_LIGHT.danger, TOOL_FAILED_WASH_DEPTH));
