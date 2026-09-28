@@ -86,7 +86,13 @@ windows-sys = { version = "0.59", features = [
 # is unconditional in windows 0.61), and the suggested-path string is freed
 # INSIDE webview2-com's take_pwstr (its own CoTaskMemFree RAII), never by
 # us. CI's cargo check is the gate (ADR-0012 — no local toolchain).
-webview2-com = "0.38"
+# R131 gate-fix: the EXACT pin — a bare "0.38" let CI's fresh resolve pick
+# 0.39.1 (semver-compatible), which pulls webview2-com-sys on windows-core
+# 0.62 while wry 0.55.1's own webview2-com 0.38.2 rides windows-core 0.61 —
+# TWO webview2_com_sys versions in the graph, and ICoreWebView2 stops being
+# one type (E0308 at the controller cast). The "=0.38.2" pin forces the
+# SAME version wry uses: one sys crate, one windows-core, unified types.
+webview2-com = "=0.38.2"
 windows = { version = "0.61" }
 
 # ROUND-100 (R100-B, ADR-0031): the Linux key store — the freedesktop Secret

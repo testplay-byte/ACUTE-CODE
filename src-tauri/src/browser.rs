@@ -1198,7 +1198,7 @@ mod downloads {
     use tauri::{AppHandle, Emitter, Manager, Webview};
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         ICoreWebView2, ICoreWebView2_4, COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED,
-        COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED, COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS,
+        COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS,
     };
     use webview2_com::{DownloadStartingEventHandler, StateChangedEventHandler, take_pwstr};
     use windows::core::{HSTRING, Interface, PWSTR};
