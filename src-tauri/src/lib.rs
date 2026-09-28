@@ -96,6 +96,11 @@ pub fn run() {
             // (popout.html) asks for its initial URL on mount — the stash
             // open_browser_window published.
             browser::popout_initial_url,
+            // ROUND-132 (R132-BD, BD4): the pop-out page's download-dir
+            // courier — reads the stash open_browser_window published so it
+            // can register the content tab's downloads into the bound
+            // project's <root>/.acute/downloads (pop-out save parity).
+            browser::popout_download_dir,
             // ROUND-58 (R58-b): hand a URL to the OS default browser from
             // Rust — the BrowserPanel's "Open externally" affordance
             // (window.open inside WebView2 is silently swallowed by wry).
@@ -120,15 +125,18 @@ pub fn run() {
             browser::browser_tab_scroll_to,
             browser::browser_tab_set_zoom,
             browser::browser_tab_eval,
-            // ROUND-131 (R131-B-ui, BU2): the per-tab download dir for the
-            // native download pipeline — the PANEL resolves the bound
-            // project's rootPath and registers `<root>/downloads` (the
-            // ROUND-115-pinned location; the agent-side download ACTION
-            // writes to the same folder). WebView2's DownloadStarting
-            // handler (registered inside browser_tab_create) saves there
-            // and emits `browser-download` for the panel's toast. Refuses
-            // honestly on non-Windows ("downloads are Windows-only in this
-            // build").
+            // ROUND-131 (R131-B-ui, BU2) + ROUND-132 (R132-BD, BD1): the
+            // per-tab download dir for the native download pipeline — the
+            // PANEL resolves the bound project's rootPath and registers
+            // `<root>/.acute/downloads` (the R131-X re-point; the agent-side
+            // download ACTION writes to the same folder), and the command
+            // ALSO pushes the dir onto the shared profile's
+            // DefaultDownloadFolderPath so the SAVE-AS dialog defaults
+            // there (BD1). WebView2's DownloadStarting handler (registered
+            // inside browser_tab_create) saves there and emits
+            // `browser-download` (now with `interrupt_reason`) for the
+            // panel's toast. Refuses honestly on non-Windows ("downloads
+            // are Windows-only in this build").
             browser::browser_tab_set_download_dir,
             // ROUND-128 (R128-W7a): restore the main window from minimized —
             // the staged screenshot capture's guard-3 recovery leg (a

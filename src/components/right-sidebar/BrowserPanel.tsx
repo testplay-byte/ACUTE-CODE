@@ -48,8 +48,9 @@ import {
   // R131-B-ui (BU2): the per-tab download dir the Rust DownloadStarting
   // handler saves into — set when the panel binds a project.
   nativeTabSetDownloadDir,
-  // R131-B-ui (BU2): the `<root>/downloads` join (the ROUND-115-pinned
-  // save location — pure helper, tested in native-browser.test.tsx).
+  // R131-B-ui (BU2) / R131-X: the `<root>/.acute/downloads` join (the
+  // hidden-folder save location — pure helper, tested in
+  // native-browser.test.tsx).
   downloadDirForRoot,
   // R131-B-ui (BU3): native download events (the Rust browser-download
   // Tauri event — the DOM-side channel; the sibling B-core's SSE frame is a
@@ -1728,13 +1729,16 @@ export function BrowserPanel({
 
   // ── R131-B-ui (BU2): the per-tab download dir ─────────────────────────────
   // The Rust DownloadStarting handler saves into the tab's download dir
-  // (<projectRoot>/downloads — the ROUND-115-pinned location); Rust does not
-  // know the project root (the sidecar owns project state), so the PANEL —
-  // which knows the project — tells it. Fire-and-forget + idempotent: the
-  // effect re-runs whenever the resolved rootPath changes (project switch on
-  // the same tab id), and a rejection (the honest "downloads are
-  // Windows-only in this build" refusal on the Linux shell) logs once via
-  // the standard nativeWarn channel, never breaks the panel.
+  // (<projectRoot>/.acute/downloads — the R131-X hidden-folder location);
+  // Rust does not know the project root (the sidecar owns project state),
+  // so the PANEL — which knows the project — tells it. Fire-and-forget +
+  // idempotent: the effect re-runs whenever the resolved rootPath changes
+  // (project switch on the same tab id), and a rejection (the honest
+  // "downloads are Windows-only in this build" refusal on the Linux shell)
+  // logs once via the standard nativeWarn channel, never breaks the panel.
+  // R132-BD (BD1): the command ALSO pushes the dir onto the shared profile's
+  // DefaultDownloadFolderPath on the Rust side, so the SAVE-AS dialog
+  // defaults to the project folder even when DownloadStarting never fires.
   const projectsQuery = useProjects();
   const projectRoot = projectsQuery.data?.find((p) => p.id === projectId)?.rootPath ?? null;
   useEffect(() => {
@@ -1794,7 +1798,17 @@ export function BrowserPanel({
           true,
         );
       } else if (info.state === "interrupted") {
-        showDownloadToast(info.fileName, "the download was interrupted", false);
+        // R132-BD (BD3): the toast names WHY (the Rust follower's
+        // InterruptReason mapping — "file access denied", "network
+        // timeout", …) when the wire carried one; the bare phrase stays
+        // for the reason-less class (an old runtime, a NONE reason).
+        showDownloadToast(
+          info.fileName,
+          info.interruptReason !== null
+            ? `the download was interrupted — ${info.interruptReason}`
+            : "the download was interrupted",
+          false,
+        );
       }
     });
   }, [nativeMode, tabId, showDownloadToast]);
@@ -2115,8 +2129,18 @@ export function BrowserPanel({
       // user clicking a dead button ("not working at all", the v0.88.0
       // report). A wedged shell now answers with the honest error card; a
       // REJECTED command always did.
+      // R132-BD (BD4): the pop-out needs the project's download dir handed
+      // over (it has NO project context of its own — popout.html is a
+      // standalone page), so the dir rides the command's stash exactly like
+      // the URL does; null when no project is bound (the pop-out then keeps
+      // the app download dir fallback, honestly).
       await withTimeout(
-        Promise.resolve(invoke("open_browser_window", { url })),
+        Promise.resolve(
+          invoke("open_browser_window", {
+            url,
+            downloadDir: projectRoot !== null ? downloadDirForRoot(projectRoot) : null,
+          }),
+        ),
         NATIVE_AFFORDANCE_TIMEOUT_MS,
         "opening the pop-out window",
       );

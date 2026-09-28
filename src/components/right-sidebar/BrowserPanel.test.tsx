@@ -70,6 +70,9 @@ const nativeState = vi.hoisted(() => ({
         fileName: string;
         receivedBytes: number;
         totalBytes: number | null;
+        /** R132-BD (BD3): the interrupt cause on the interrupted state
+         * (null everywhere else — the wire omits it when None). */
+        interruptReason?: string | null;
       }) => void)
     | null,
   // R62 (D8): the agent-browser command handler's Rust side fakes.
@@ -2641,7 +2644,9 @@ describe("BrowserPanel R131-B-ui (BU3) — the native title delivery + the downl
     expect(toast).toContain("report.pdf");
     expect(toast).toContain("2 KiB");
 
-    // An interrupted download shows the danger spelling.
+    // An interrupted download shows the danger spelling — R132-BD (BD3):
+    // WITH the cause when the wire carried one (the Rust follower's
+    // InterruptReason mapping names WHY, the owner's device pass reads it).
     await act(async () => {
       nativeState.downloadListener?.("tab-test-1", {
         state: "interrupted",
@@ -2649,9 +2654,11 @@ describe("BrowserPanel R131-B-ui (BU3) — the native title delivery + the downl
         fileName: "report.pdf",
         receivedBytes: 10,
         totalBytes: null,
+        interruptReason: "file access denied",
       });
     });
     expect(screen.getByTestId("browser-download-toast").textContent).toContain("interrupted");
+    expect(screen.getByTestId("browser-download-toast").textContent).toContain("file access denied");
 
     // Another tab's downloads never surface here.
     await act(async () => {

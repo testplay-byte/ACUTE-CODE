@@ -405,12 +405,81 @@ describe("R131-B-ui (BU3): onBrowserDownload — the Rust browser-download chann
     emit({ tab_id: "tab-1", state: "completed", path: "x", file_name: "y", received_bytes: "lots", total_bytes: 1 }); // non-number bytes → ignored
 
     expect(seen).toEqual([
-      ["tab-1", { state: "starting", path: "C:\\Users\\me\\proj\\downloads\\report.pdf", fileName: "report.pdf", receivedBytes: 0, totalBytes: 12345 }],
-      ["tab-1", { state: "completed", path: "C:\\Users\\me\\proj\\downloads\\report.pdf", fileName: "report.pdf", receivedBytes: 12345, totalBytes: null }],
+      ["tab-1", { state: "starting", path: "C:\\Users\\me\\proj\\downloads\\report.pdf", fileName: "report.pdf", receivedBytes: 0, totalBytes: 12345, interruptReason: null }],
+      ["tab-1", { state: "completed", path: "C:\\Users\\me\\proj\\downloads\\report.pdf", fileName: "report.pdf", receivedBytes: 12345, totalBytes: null, interruptReason: null }],
     ]);
 
     unlisten();
     expect(unlistenFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("R132-BD (BD3): interrupt_reason rides the snake_case wire — a string decodes, absent/null stay null, malformed drops the event", async () => {
+    let handler: ((ev: { payload: unknown }) => void) | null = null;
+    const unlistenFn = vi.fn();
+    vi.stubGlobal("__TAURI__", {
+      core: { invoke: vi.fn() },
+      event: {
+        listen: vi.fn(async (_event: string, h: (ev: { payload: unknown }) => void) => {
+          handler = h;
+          return unlistenFn;
+        }),
+      },
+    });
+
+    const seen: Array<NativeDownloadInfo> = [];
+    const unlisten = onBrowserDownload((_tabId, info) => seen.push(info));
+    await vi.waitFor(() => expect(handler).not.toBeNull());
+    const emit = (payload: unknown) => (handler as (ev: { payload: unknown }) => void)({ payload });
+
+    // The interrupted state WITH a reason (the Rust follower's mapping —
+    // serde skips the field when None, so only this state ever carries it).
+    emit({
+      tab_id: "tab-1",
+      state: "interrupted",
+      path: "C:\\proj\\.acute\\downloads\\images.jpg",
+      file_name: "images.jpg",
+      received_bytes: 1024,
+      total_bytes: 50000,
+      interrupt_reason: "file access denied",
+    });
+    // Absent (the starting/completed states serialize it away) → null.
+    emit({
+      tab_id: "tab-1",
+      state: "starting",
+      path: "C:\\proj\\.acute\\downloads\\x.bin",
+      file_name: "x.bin",
+      received_bytes: 0,
+      total_bytes: 10,
+    });
+    // Explicit null → null (the None leg).
+    emit({
+      tab_id: "tab-1",
+      state: "interrupted",
+      path: "C:\\proj\\.acute\\downloads\\y.bin",
+      file_name: "y.bin",
+      received_bytes: 5,
+      total_bytes: 10,
+      interrupt_reason: null,
+    });
+    // Malformed (a non-string reason) → the WHOLE event drops (the same
+    // strict law as a malformed total_bytes — never a half-decoded row).
+    emit({
+      tab_id: "tab-1",
+      state: "interrupted",
+      path: "C:\\proj\\.acute\\downloads\\z.bin",
+      file_name: "z.bin",
+      received_bytes: 5,
+      total_bytes: 10,
+      interrupt_reason: 42,
+    });
+
+    expect(seen.map((i) => [i.state, i.interruptReason])).toEqual([
+      ["interrupted", "file access denied"],
+      ["starting", null],
+      ["interrupted", null],
+    ]);
+
+    unlisten();
   });
 
   it("outside Tauri the subscription is a permanent no-op (the files still land on disk — just no toast)", () => {

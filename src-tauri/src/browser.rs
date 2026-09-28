@@ -180,7 +180,15 @@ struct BrowserNavigated {
 /// from the sidecar's same-named SSE frame (the agent's `download` ACTION,
 /// B-core) — that one rides the chat stream with `{sessionId, tabId, path,
 /// bytes}`; this one is a Tauri event for the panel's right-click
-/// "Save image as…" flow. Both land in the same `<root>/downloads` folder.
+/// "Save image as…" flow. Both land in the same `<root>/.acute/downloads`
+/// folder (the R131-X re-point).
+///
+/// ROUND-132 (R132-BD, BD3): `interrupt_reason` — WHY an interrupted
+/// download died, read off `ICoreWebView2DownloadOperation::InterruptReason`
+/// by the StateChanged follower and mapped by `interrupt_reason_name`.
+/// Skipped when absent (None) so the starting/completed events keep the exact
+/// pre-R132 wire shape — an older frontend decoding strictly never sees a
+/// key it does not know.
 #[derive(Clone, serde::Serialize)]
 struct BrowserDownload {
     tab_id: String,
@@ -189,6 +197,10 @@ struct BrowserDownload {
     file_name: String,
     received_bytes: u64,
     total_bytes: Option<i64>,
+    /// R132-BD (BD3): present ONLY on the interrupted terminal state (the
+    /// starting/completed events serialize it away — `skip_serializing_if`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interrupt_reason: Option<String>,
 }
 
 /// `acute-tab-<tab_id>` — the webview label for a browser tab.
@@ -214,10 +226,12 @@ static TAB_LAST_BOUNDS: std::sync::LazyLock<std::sync::Mutex<std::collections::H
 /// ROUND-131 (R131-B-ui, BU2): the per-tab DOWNLOAD DIR — where the native
 /// download pipeline (WebView2's DownloadStarting handler) saves this tab's
 /// files. Written by `browser_tab_set_download_dir` (the PANEL resolves the
-/// bound project's rootPath and passes `<root>/downloads` — the
-/// ROUND-115-pinned location, the same folder the agent-side `download`
-/// ACTION writes to); read at DownloadStarting time. Falls back to the app's
-/// download dir (`app.path().download_dir()`) when a tab never got one.
+/// bound project's rootPath and passes `<root>/.acute/downloads` — the
+/// R131-X re-point of the ROUND-115 pin, the same folder the agent-side
+/// `download` ACTION writes to); read at DownloadStarting time AND pushed
+/// onto the shared profile's DefaultDownloadFolderPath (R132-BD BD1) so the
+/// SAVE-AS dialog defaults there too. Falls back to the app's download dir
+/// (`app.path().download_dir()`) when a tab never got one.
 ///
 /// DELIBERATELY NOT cleared in `browser_tab_close` (the asymmetry with
 /// TAB_LAST_BOUNDS is the point): the bounds map is safe to drop because the
@@ -291,6 +305,54 @@ fn dedupe_download_target(dir: &std::path::Path, file_name: &str, exists: &dyn F
         }
     }
     base
+}
+
+/// ROUND-132 (R132-BD, BD3): WHY an interrupted download died — the
+/// `ICoreWebView2DownloadOperation::InterruptReason` value (taken as its i32
+/// discriminant so the law is PURE and unit-testable on every platform)
+/// mapped to the short human phrase the panel toast names. `NONE` (0) maps
+/// to None (no cause to name — the payload omits the field and the toast
+/// keeps its bare phrase); an UNKNOWN future value maps to the honest
+/// `"unknown reason (<n>)"` rather than silence — the owner's device pass
+/// must be able to see what the runtime actually said. The discriminants are
+/// the COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON enum's (verified against
+/// webview2-com-sys 0.39.1's bindings.rs:254-313 — NONE 0 …
+/// DOWNLOAD_PROCESS_CRASHED 29).
+fn interrupt_reason_name(value: i32) -> Option<String> {
+    let name = match value {
+        0 => return None, // NONE — not an interruption cause
+        1 => "file failed",
+        2 => "file access denied",
+        3 => "no disk space",
+        4 => "file name too long",
+        5 => "file too large",
+        6 => "file blocked as malicious",
+        7 => "transient file error",
+        8 => "file blocked by policy",
+        9 => "file security check failed",
+        10 => "file too short",
+        11 => "file hash mismatch",
+        12 => "network failed",
+        13 => "network timeout",
+        14 => "network disconnected",
+        15 => "network server down",
+        16 => "network invalid request",
+        17 => "server failed",
+        18 => "server does not support ranges",
+        19 => "server bad content",
+        20 => "server unauthorized",
+        21 => "server certificate problem",
+        22 => "server forbidden",
+        23 => "server unexpected response",
+        24 => "server content length mismatch",
+        25 => "server cross-origin redirect",
+        26 => "user canceled",
+        27 => "app shutdown",
+        28 => "user paused",
+        29 => "browser process crashed",
+        other => return Some(format!("unknown reason ({other})")),
+    };
+    Some(name.to_string())
 }
 
 /// Records `tab_id`'s commanded bounds (clamped to sane positives — the
@@ -408,6 +470,19 @@ const POPOUT_WORK_AREA_FRACTION: f64 = 0.70;
 /// empty window.
 static POPOUT_PENDING_URL: Mutex<Option<String>> = Mutex::new(None);
 
+/// ROUND-132 (R132-BD, BD4): the DOWNLOAD DIR the pop-out's content webview
+/// should save into — stashed by `open_browser_window` on EVERY call (the
+/// panel, which knows the bound project, passes
+/// `downloadDirForRoot(projectRoot)`; null when the panel has no project
+/// bound) and read by the popout.html page via the `popout_download_dir`
+/// command, which then registers it for the fixed `popout` tab through the
+/// normal `browser_tab_set_download_dir` command (validated + recorded +
+/// profile-pushed like any tab). Same stash-not-query-param reasoning as
+/// POPOUT_PENDING_URL, and kept (not taken) for the same reload-restore
+/// property. Without this leg the pop-out's saves silently land in the
+/// device Downloads — the BD4 parity gap.
+static POPOUT_DOWNLOAD_DIR: Mutex<Option<String>> = Mutex::new(None);
+
 /// Publishes the pending pop-out URL (see the static's doc comment).
 fn set_popout_pending_url(url: String) -> Result<(), String> {
     let mut guard = POPOUT_PENDING_URL
@@ -422,6 +497,27 @@ fn popout_pending_url() -> Result<Option<String>, String> {
     let guard = POPOUT_PENDING_URL
         .lock()
         .map_err(|e| format!("popout pending-url lock poisoned: {e}"))?;
+    Ok(guard.clone())
+}
+
+/// R132-BD (BD4): publishes the pop-out's download dir (None CLEARS it — a
+/// panel without a project must not keep steering the pop-out at a stale
+/// project folder; `open_browser_window` re-stashes on every call either
+/// way).
+fn set_popout_download_dir(dir: Option<String>) -> Result<(), String> {
+    let mut guard = POPOUT_DOWNLOAD_DIR
+        .lock()
+        .map_err(|e| format!("popout download-dir lock poisoned: {e}"))?;
+    *guard = dir;
+    Ok(())
+}
+
+/// R132-BD (BD4): reads the stashed pop-out download dir (None until
+/// `open_browser_window` passed one).
+fn popout_download_dir_stash() -> Result<Option<String>, String> {
+    let guard = POPOUT_DOWNLOAD_DIR
+        .lock()
+        .map_err(|e| format!("popout download-dir lock poisoned: {e}"))?;
     Ok(guard.clone())
 }
 
@@ -503,6 +599,15 @@ struct PopoutNavigate {
 /// webview that will render it (R95-C grew the contract from http/https to
 /// include local files; every caller passes the panel's currentUrl).
 ///
+/// R132-BD (BD4): `download_dir` — the bound project's download folder
+/// (`<root>/.acute/downloads`), stashed the same way (`POPOUT_DOWNLOAD_DIR`)
+/// so the pop-out page can register it for its content tab BEFORE the first
+/// save. None (the panel's web mode / no bound project) CLEARS the stash —
+/// the pop-out then keeps whatever the app download dir resolves to. NOT
+/// validated here: the pop-out's own `browser_tab_set_download_dir` call
+/// validates (absolute + mkdir) and logs honestly — the stash is a courier,
+/// not a gate.
+///
 /// ROUND-50 (R50-a): for the in-app browser PANEL this is superseded by the
 /// `browser_tab_*` child-webview commands below (the owner wants the pages
 /// INSIDE the main window, not in a separate OS window). Kept registered: the
@@ -524,7 +629,11 @@ struct PopoutNavigate {
 /// event loop, but from this async thread the loop is free to answer — the
 /// deadlock only exists when the MAIN thread is the one waiting on us.)
 #[tauri::command]
-pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
+pub async fn open_browser_window(
+    app: AppHandle,
+    url: String,
+    download_dir: Option<String>,
+) -> Result<(), String> {
     // Validate http/https/file FIRST — the child webview that will render this
     // URL is the native browser's own (`parse_web_url` contract, R95-C: a
     // local file renders natively), and a bad URL must stash nothing and open
@@ -534,6 +643,10 @@ pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), Stri
     // Publish BEFORE anything else: the popout.html page reads this stash on
     // mount, whichever path below runs.
     set_popout_pending_url(url.clone())?;
+    // R132-BD (BD4): the download dir rides the same stash-every-call law
+    // (create path AND focus path — a re-pop-out after a project switch
+    // must steer the pop-out at the NEW project's folder).
+    set_popout_download_dir(download_dir)?;
 
     // Existing window: focus it + navigate its CONTENT webview. (Pre-R59 this
     // eval'd `window.location = url` into the WINDOW webview — back then that
@@ -595,6 +708,18 @@ pub async fn open_browser_window(app: AppHandle, url: String) -> Result<(), Stri
 #[tauri::command]
 pub fn popout_initial_url() -> Result<Option<String>, String> {
     popout_pending_url()
+}
+
+/// `popout_download_dir()` — R132-BD (BD4): the download dir the pop-out's
+/// content tab should save into (`open_browser_window`'s stash; see
+/// `POPOUT_DOWNLOAD_DIR`). Null when the pop-out was opened without a bound
+/// project — the page then leaves the tab unregistered and the download
+/// pipeline falls back to the app's download dir, honestly. The page calls
+/// `browser_tab_set_download_dir` with this value (the validation + mkdir +
+/// profile push live THERE — this command is a read-only courier).
+#[tauri::command]
+pub fn popout_download_dir() -> Result<Option<String>, String> {
+    popout_download_dir_stash()
 }
 
 /// `navigate_browser(url)` — navigate the EXISTING pop-out window's CONTENT
@@ -1151,12 +1276,12 @@ pub async fn browser_tab_create(
 // to the download folder as it needs to be." Two legs, both Windows-only:
 //
 //  1. `browser_tab_set_download_dir` — the PANEL tells Rust where this tab's
-//     downloads land (`<projectRoot>/downloads`, the ROUND-115-pinned
-//     location — the same folder the agent-side `download` ACTION writes
-//     to, so both halves of round-131 Wave B land the same place). Rust
-//     never knew the project root (the sidecar owns project state), so the
-//     frontend is the one that resolves it. Falls back to the app's
-//     download dir for a tab that never got one.
+//     downloads land (`<projectRoot>/.acute/downloads`, the R131-X re-point
+//     of the ROUND-115 pin — the same folder the agent-side `download`
+//     ACTION writes to, so both halves of round-131 Wave B land the same
+//     place). Rust never knew the project root (the sidecar owns project
+//     state), so the frontend is the one that resolves it. Falls back to
+//     the app's download dir for a tab that never got one.
 //  2. The DownloadStarting handler (registered per webview at create time
 //     via `Webview::with_webview` — the tauri escape hatch to the raw
 //     ICoreWebView2 COM surface): `Handled(true)` + `ResultFilePath =
@@ -1169,6 +1294,41 @@ pub async fn browser_tab_create(
 // In the SAME with_webview pass the default context menu is pinned ON
 // (`AreDefaultContextMenusEnabled(true)`) — right-click → "Save image as…"
 // then flows through this pipeline instead of being a dead right-click.
+//
+// ── ROUND-132 (R132-BD): the SAVE-AS truth ──
+//
+// The owner's v0.124.0 defect: right-click → "Save image as…" opened the
+// Windows Save-As dialog on the DEVICE's Downloads (not the project's
+// .acute/downloads), and the save died interrupted. ROOT CAUSE: WebView2
+// has TWO separate API families — the DOWNLOAD APIs (DownloadStarting,
+// which we registered in R131) and the SAVE-AS APIs (SaveAsUIShowing,
+// which Microsoft's docs scope explicitly: "these APIs pertain only to the
+// Save as dialog, not the Download dialog"). On the owner's runtime the
+// right-click "Save image as…" rides the SAVE-AS family: the dialog
+// defaults to the PROFILE's DefaultDownloadFolderPath (the device
+// Downloads) and never touches our DownloadStarting handler. Three legs,
+// all verified against the in-tree webview2-com-sys 0.39.1 bindings (NOT
+// the Microsoft docs' interface numbering — the crate's own surface wins,
+// the R131 lesson):
+//
+//  BD1 — the PROFILE default download folder: every dir the panel (or the
+//     pop-out) registers is ALSO pushed onto the shared profile via
+//     `ICoreWebView2_13::Profile()` →
+//     `ICoreWebView2Profile::SetDefaultDownloadFolderPath` (in THIS crate
+//     Profile() lives on _13, not the docs' _6). The Save-As dialog — and
+//     the default download dialog — then DEFAULTS to the project folder
+//     even when no handler of ours ever fires.
+//  BD2 — the SAVE-AS interception: `ICoreWebView2_25::add_SaveAsUIShowing`
+//     (in THIS crate the event rides _25, not the docs' _26) registered
+//     beside DownloadStarting; the handler steers the args' SaveAsFilePath
+//     to `<dir>/<suggested name>` and NEVER cancels and never suppresses
+//     the dialog — the native save-as experience stays, the owner picks
+//     the final name, it just STARTS in the right folder.
+//  BD3 — the interrupt truth: the StateChanged follower reads
+//     `ICoreWebView2DownloadOperation::InterruptReason` and puts
+//     `interrupt_reason` on the wire (the payload struct + the panel toast
+//     name WHY); EVERY download state change logs a `browser:` line to the
+//     sidecar log so the owner's device pass yields diagnostics.
 //
 // Non-Windows: the module below is a no-op `register` and the
 // set-download-dir command refuses honestly ("downloads are Windows-only in
@@ -1189,18 +1349,31 @@ pub async fn browser_tab_create(
 // `add_StateChanged` + `SetResultFilePath(&HSTRING)` + `SetHandled(true)`
 // block — the exact in-tree-family precedent, including the enum spelling
 // `COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS` — there is no `_RUNNING`
-// constant in this crate's WebView2 bindings).
+// constant in this crate's WebView2 bindings). The R132-BD additions were
+// verified the same way against webview2-com-sys 0.39.1's OWN bindings.rs
+// (`add_SaveAsUIShowing` + the SaveAsFilePath getter/setter at :33167-33300,
+// `Profile()` at :40291, `SetDefaultDownloadFolderPath` at :31548,
+// `InterruptReason` at :13252) and webview2-com 0.39.1's callback.rs
+// (`SaveAsUIShowingEventHandler` at :633 — the same EventClosure shape as
+// DownloadStarting's).
 
 /// The Windows pipeline (see the section comment above).
 #[cfg(windows)]
 mod downloads {
-    use super::{dedupe_download_target, suggested_download_name, BrowserDownload, TAB_DOWNLOAD_DIRS};
+    use super::{
+        dedupe_download_target, interrupt_reason_name, suggested_download_name, BrowserDownload,
+        TAB_DOWNLOAD_DIRS,
+    };
     use tauri::{AppHandle, Emitter, Manager, Webview};
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2, ICoreWebView2_4, COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED,
-        COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS,
+        ICoreWebView2, ICoreWebView2_13, ICoreWebView2_4, ICoreWebView2_25,
+        ICoreWebView2SaveAsUIShowingEventArgs, COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON,
+        COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED, COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS,
     };
-    use webview2_com::{DownloadStartingEventHandler, StateChangedEventHandler, take_pwstr};
+    use webview2_com::{
+        DownloadStartingEventHandler, SaveAsUIShowingEventHandler, StateChangedEventHandler,
+        take_pwstr,
+    };
     use windows::core::{HSTRING, Interface, PWSTR};
 
     /// WebView2 answers `-1` for "total unknown" — map to the payload's null.
@@ -1212,12 +1385,107 @@ mod downloads {
         }
     }
 
+    /// The download dir a tab saves into: its registered dir, else the app's
+    /// download dir. ONE fallback chain shared by BOTH families (the
+    /// DownloadStarting handler and the SaveAsUIShowing handler) so a
+    /// right-click save and a plain download can never disagree about where
+    /// files land. None → leave WebView2's own default alone (honest).
+    fn download_dir_for(app: &AppHandle, tab_id: &str) -> Option<std::path::PathBuf> {
+        TAB_DOWNLOAD_DIRS
+            .lock()
+            .ok()
+            .and_then(|map| map.get(tab_id).cloned())
+            .or_else(|| app.path().download_dir().ok())
+    }
+
+    /// R132-BD (BD1): push `dir` onto the shared profile's
+    /// DefaultDownloadFolderPath — the folder the SAVE-AS dialog (and the
+    /// default download dialog) opens at. Best-effort with honest logs: a
+    /// runtime without `ICoreWebView2_13` (THIS crate's Profile() owner) or
+    /// a failed put keeps the runtime's own default, and the per-tab
+    /// DownloadStarting handler still routes the bytes correctly either way.
+    ///
+    /// SAFETY: `core` must be a live ICoreWebView2 on the UI thread (both
+    /// call sites hold one straight from a with_webview pass).
+    unsafe fn apply_profile_default_download_dir(
+        core: &ICoreWebView2,
+        dir: &std::path::Path,
+        tab_id: &str,
+    ) {
+        let core13 = match core.cast::<ICoreWebView2_13>() {
+            Ok(core13) => core13,
+            Err(_) => {
+                crate::sidecar::log_line(&format!(
+                    "browser: WebView2 runtime has no profile API (tab \"{tab_id}\") — the save-as dialog keeps the runtime default folder"
+                ));
+                return;
+            }
+        };
+        let profile = match core13.Profile() {
+            Ok(profile) => profile,
+            Err(e) => {
+                crate::sidecar::log_line(&format!(
+                    "browser: Profile() failed (tab \"{tab_id}\") — the save-as dialog keeps the runtime default folder: {e}"
+                ));
+                return;
+            }
+        };
+        let dir_str = dir.to_string_lossy().into_owned();
+        match profile.SetDefaultDownloadFolderPath(&HSTRING::from(dir_str.clone())) {
+            Ok(()) => crate::sidecar::log_line(&format!(
+                "browser: profile default download folder set to \"{dir_str}\" (tab \"{tab_id}\")"
+            )),
+            Err(e) => crate::sidecar::log_line(&format!(
+                "browser: SetDefaultDownloadFolderPath(\"{dir_str}\") failed (tab \"{tab_id}\") — the save-as dialog keeps the previous default: {e}"
+            )),
+        }
+    }
+
+    /// R132-BD (BD1): the command-side leg — `browser_tab_set_download_dir`
+    /// calls this AFTER recording the dir, so the profile default follows
+    /// the map WITHOUT waiting for a webview (re)creation. `with_webview`
+    /// DISPATCHES to the main thread (non-blocking); a tab whose webview
+    /// does not exist YET is skipped here and covered by `register`'s own
+    /// apply at create time (the map is written before either leg can run).
+    pub fn reapply_profile_download_dir(app: &AppHandle, tab_id: &str) {
+        let Some(dir) = TAB_DOWNLOAD_DIRS
+            .lock()
+            .ok()
+            .and_then(|map| map.get(tab_id).cloned())
+        else {
+            return;
+        };
+        let tab_id = tab_id.to_string();
+        if let Some(webview) = super::find_tab_webview(app, &tab_id) {
+            let _ = webview.with_webview(move |wv| {
+                // SAFETY: same as register()'s pass — the core pointer is a
+                // live object of THIS webview handed to us on the main
+                // thread (the single apartment ICoreWebView2 requires).
+                unsafe {
+                    if let Ok(core) = wv.controller().CoreWebView2() {
+                        apply_profile_default_download_dir(&core, &dir, &tab_id);
+                    }
+                }
+            });
+        } else {
+            crate::sidecar::log_line(&format!(
+                "browser: download dir recorded before the tab's webview exists (tab \"{tab_id}\") — the profile default applies at webview create"
+            ));
+        }
+    }
+
     /// Registers the pipeline on a freshly-created tab webview (called from
     /// `browser_tab_create` — the chokepoint for panel tabs AND the pop-out's
     /// content). `with_webview` DISPATCHES the closure to the main thread
     /// (non-blocking — the same channel gtk_child_webviews rides from sync
     /// commands); `browser_tab_create` is async for exactly the main-thread
     /// discipline (see its doc), so this never waits on the thread it needs.
+    ///
+    /// R132-BD: the SAME pass now also applies the PROFILE default download
+    /// folder (BD1, when the tab already has a recorded dir — the panel can
+    /// register a dir BEFORE the webview exists, and a watchdog re-create
+    /// must re-apply it) and registers the SAVE-AS interception (BD2) beside
+    /// DownloadStarting.
     pub fn register(app: &AppHandle, tab_id: &str, webview: &Webview) {
         let app = app.clone();
         let tab_id = tab_id.to_string();
@@ -1244,6 +1512,17 @@ mod downloads {
                 if let Ok(settings) = core.Settings() {
                     let _ = settings.SetAreDefaultContextMenusEnabled(true);
                 }
+                // R132-BD (BD1): a dir recorded for THIS tab before the
+                // webview existed (the panel's mount effect, the pop-out's
+                // pre-create registration) rides along now — the save-as
+                // dialog defaults right from the FIRST right-click.
+                if let Some(dir) = TAB_DOWNLOAD_DIRS
+                    .lock()
+                    .ok()
+                    .and_then(|map| map.get(&tab_id).cloned())
+                {
+                    apply_profile_default_download_dir(&core, &dir, &tab_id);
+                }
                 // The download API rides ICoreWebView2_4 — an older runtime
                 // without it keeps the pre-R131 behavior, logged honestly.
                 let core4: ICoreWebView2_4 = match core.cast::<ICoreWebView2_4>() {
@@ -1267,8 +1546,12 @@ mod downloads {
                 // 'static bound), so `tab_id` moves into it — clone the log
                 // leg's copy BEFORE the move (the E0382 the audits and the
                 // linux-only checks could not see; the windows-target
-                // cargo check caught it).
+                // cargo check caught it). R132-BD: the save-as closure below
+                // needs its OWN owned copies for the same reason — the
+                // download closure consumes `app`/`tab_id` here.
                 let log_tab_id = tab_id.clone();
+                let save_as_app = app.clone();
+                let save_as_tab_id = tab_id.clone();
                 let handler = DownloadStartingEventHandler::create(Box::new(move |_, args| {
                     download_starting(&app, &tab_id, args)
                 }));
@@ -1281,8 +1564,76 @@ mod downloads {
                         "browser: download pipeline registration failed (tab \"{log_tab_id}\"): {e}"
                     ));
                 }
+                // R132-BD (BD2): the SAVE-AS family — `add_SaveAsUIShowing`
+                // rides ICoreWebView2_25 in THIS crate (NOT the docs' _26 —
+                // verified against webview2-com-sys 0.39.1 bindings.rs:42403;
+                // _26 adds SaveFileSecurityCheckStarting). An older runtime
+                // without it keeps BD1 alone (the profile default folder
+                // still steers the dialog), logged honestly.
+                if let Ok(core25) = core.cast::<ICoreWebView2_25>() {
+                    let save_as_handler =
+                        SaveAsUIShowingEventHandler::create(Box::new(move |_, args| {
+                            save_as_ui_showing(&save_as_app, &save_as_tab_id, args)
+                        }));
+                    let mut save_as_token: i64 = 0;
+                    if let Err(e) = core25.add_SaveAsUIShowing(&save_as_handler, &mut save_as_token) {
+                        crate::sidecar::log_line(&format!(
+                            "browser: save-as interception registration failed (tab \"{log_tab_id}\"): {e}"
+                        ));
+                    }
+                } else {
+                    crate::sidecar::log_line(&format!(
+                        "browser: WebView2 runtime has no save-as API (tab \"{log_tab_id}\") — the save-as dialog follows the profile default folder only"
+                    ));
+                }
             }
         });
+    }
+
+    /// R132-BD (BD2): the SaveAsUIShowing body — the SAVE-AS dialog is about
+    /// to open (right-click → "Save image as…", Ctrl+S on a page): steer its
+    /// DEFAULT path to `<dir>/<suggested name>` and let the native dialog
+    /// run. NEVER `SetCancel` and NEVER `SetSuppressDefaultDialog` — the
+    /// owner picks the final name in the OS's own save-as experience; we only
+    /// make it START in the project's download folder. The args' current
+    /// SaveAsFilePath (the runtime's default — `<profile default folder>\
+    /// <suggested>`) supplies the file NAME via the same pure
+    /// `suggested_download_name` law the download family uses.
+    fn save_as_ui_showing(
+        app: &AppHandle,
+        tab_id: &str,
+        args: Option<ICoreWebView2SaveAsUIShowingEventArgs>,
+    ) -> windows::core::Result<()> {
+        let Some(args) = args else {
+            return Ok(());
+        };
+        // The dir: the SAME fallback chain as download_starting (the tab's
+        // registered dir, else the app's download dir). Neither exists →
+        // leave the dialog's own default alone — honest.
+        let Some(dir) = download_dir_for(app, tab_id) else {
+            return Ok(());
+        };
+        // SAFETY: the args pointer is a live WebView2 event object on the UI
+        // thread; the suggested-path string is OS-allocated and freed by
+        // take_pwstr (CoTaskMemFree inside webview2-com's own RAII holder)
+        // in this scope.
+        let suggested: String = unsafe {
+            let mut path = PWSTR::null();
+            args.SaveAsFilePath(&mut path)?;
+            take_pwstr(path)
+        };
+        let file_name = suggested_download_name(&suggested);
+        let target = dir.join(&file_name);
+        let target_str = target.to_string_lossy().into_owned();
+        unsafe {
+            args.SetSaveAsFilePath(&HSTRING::from(target_str.clone()))?;
+        }
+        // The diagnostic line: WHAT the dialog was steered to (the owner's
+        // device pass reads the path the save-as actually opened at).
+        crate::sidecar::log_line(&format!(
+            "browser: save-as dialog defaulting to \"{target_str}\" (tab \"{tab_id}\")"
+        ));
+        Ok(())
     }
 
     /// The DownloadStarting body (the closure the wrapper invokes per
@@ -1298,15 +1649,11 @@ mod downloads {
         let Some(args) = args else {
             return Ok(());
         };
-        // The dir: the tab's registered dir, else the app's download dir.
-        // Neither exists (no registration AND no resolvable OS download
-        // dir) → leave WebView2's default behavior alone — honest.
-        let dir = TAB_DOWNLOAD_DIRS
-            .lock()
-            .ok()
-            .and_then(|map| map.get(tab_id).cloned())
-            .or_else(|| app.path().download_dir().ok());
-        let Some(dir) = dir else {
+        // The dir: the shared fallback chain (the tab's registered dir, else
+        // the app's download dir). Neither exists (no registration AND no
+        // resolvable OS download dir) → leave WebView2's default behavior
+        // alone — honest.
+        let Some(dir) = download_dir_for(app, tab_id) else {
             return Ok(());
         };
         // SAFETY: the args pointer is a live WebView2 event object on the UI
@@ -1326,6 +1673,12 @@ mod downloads {
             args.SetHandled(true)?;
             args.SetResultFilePath(&HSTRING::from(target.to_string_lossy().into_owned()))?;
         }
+        // R132-BD (BD3): the diagnostic trail starts at the target itself —
+        // the owner's device pass reads WHERE the pipeline routed the bytes.
+        crate::sidecar::log_line(&format!(
+            "browser: download starting (tab \"{tab_id}\") → \"{}\"",
+            target.to_string_lossy()
+        ));
         // The starting announcement + the state follower.
         let op: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2DownloadOperation =
             unsafe { args.DownloadOperation()? };
@@ -1340,17 +1693,22 @@ mod downloads {
                 file_name: file_name.clone(),
                 received_bytes: received,
                 total_bytes: total_bytes_or_none(total),
+                // BD3: only the interrupted terminal state carries a reason.
+                interrupt_reason: None,
             },
         );
         // The StateChanged follower: emits the terminal state with the final
-        // byte count (IN_PROGRESS churn is ignored — only the landing matters
-        // to the UI's quiet line). Captures exactly what the emit needs —
-        // OWNED clones, not the `&AppHandle`/`&str` params: EventClosure's
-        // `Box<dyn FnMut …>` carries the default 'static bound, and the
-        // register()-time owned app/tab_id outlive any one DownloadStarting
-        // call by the webview's whole lifetime — a borrowed capture would
-        // fail to compile (the audit catch: the interrupted run wrote this
-        // closure against the references).
+        // byte count AND — R132-BD (BD3) — the interrupt reason (WHY an
+        // interrupted download died, read off the operation itself). EVERY
+        // state change logs a `browser:` line now (IN_PROGRESS churn too):
+        // the owner's device pass yields diagnostics, not ambiguity.
+        // Captures exactly what the emit needs — OWNED clones, not the
+        // `&AppHandle`/`&str` params: EventClosure's `Box<dyn FnMut …>`
+        // carries the default 'static bound, and the register()-time owned
+        // app/tab_id outlive any one DownloadStarting call by the webview's
+        // whole lifetime — a borrowed capture would fail to compile (the
+        // audit catch: the interrupted run wrote this closure against the
+        // references).
         let follower_app = app.clone();
         let follower_tab_id = tab_id.to_string();
         let follower = StateChangedEventHandler::create(Box::new(move |op, _| {
@@ -1360,10 +1718,29 @@ mod downloads {
             // SAFETY: same-thread event callback on a live WebView2 object.
             let mut state = COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS;
             unsafe { op.State(&mut state)? };
+            let (received, _) = unsafe { download_progress(&op) };
             if state == COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS {
+                // BD3's per-change log: even the churn line carries the
+                // bytes so a stalled transfer is visible in the sidecar log.
+                crate::sidecar::log_line(&format!(
+                    "browser: download in progress (tab \"{follower_tab_id}\") — {received} bytes so far"
+                ));
                 return Ok(());
             }
-            let (received, _) = unsafe { download_progress(&op) };
+            // BD3: the interrupt reason — read BEFORE the state_name fork so
+            // BOTH terminals can log it; a failed read degrades to the bare
+            // class word, never the download truth.
+            // SAFETY: same-thread event callback on a live WebView2 object;
+            // the out-pointer is a stack local valid for the call.
+            let mut reason = COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON(0);
+            let reason_read = unsafe { op.InterruptReason(&mut reason) };
+            let interrupt_reason = if state == COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED {
+                // A completed download has no reason to name (and WebView2
+                // answers NONE) — keep the wire field absent.
+                None
+            } else {
+                reason_read.ok().and_then(|()| interrupt_reason_name(reason.0))
+            };
             let state_name = if state == COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED {
                 "completed"
             } else {
@@ -1372,6 +1749,13 @@ mod downloads {
                 // rather than inventing a wire word the frontend lacks.
                 "interrupted"
             };
+            crate::sidecar::log_line(&format!(
+                "browser: download {state_name} (tab \"{follower_tab_id}\") — {received} bytes{}",
+                interrupt_reason
+                    .as_deref()
+                    .map(|r| format!(", reason: {r}"))
+                    .unwrap_or_default()
+            ));
             let _ = follower_app.emit(
                 "browser-download",
                 BrowserDownload {
@@ -1381,6 +1765,7 @@ mod downloads {
                     file_name: file_name.clone(),
                     received_bytes: received,
                     total_bytes: total_bytes_or_none(total),
+                    interrupt_reason,
                 },
             );
             Ok(())
@@ -1413,21 +1798,33 @@ mod downloads {
 /// The non-Windows stub: no pipeline (the set-download-dir command's honest
 /// refusal — "downloads are Windows-only in this build" — is the
 /// platform's whole story; the agent-side ACTION still works everywhere).
+/// R132-BD (BD1): the profile-reapply leg stubs to a no-op the same way.
 #[cfg(not(windows))]
 mod downloads {
     use tauri::{AppHandle, Webview};
 
     pub fn register(_app: &AppHandle, _tab_id: &str, _webview: &Webview) {}
+
+    pub fn reapply_profile_download_dir(_app: &AppHandle, _tab_id: &str) {}
 }
 
 /// `browser_tab_set_download_dir(tab_id, dir)` — R131-B-ui (BU2): record
 /// where THIS tab's native downloads land (see TAB_DOWNLOAD_DIRS + the
 /// downloads module's section comment). The PANEL calls it when the tab
 /// binds a project (it resolves the project's rootPath — Rust never knows
-/// project state). Validation: the dir must be ABSOLUTE (a relative path
-/// would silently resolve against the app's CWD) and is created recursively
-/// up front so the first download never races a mkdir. Idempotent — the
-/// panel re-sends it on every mount; the map just overwrites.
+/// project state); the POP-OUT page calls it for its fixed content tab with
+/// the dir `open_browser_window` stashed (R132-BD BD4). Validation: the dir
+/// must be ABSOLUTE (a relative path would silently resolve against the
+/// app's CWD) and is created recursively up front so the first download
+/// never races a mkdir. Idempotent — the panel re-sends it on every mount;
+/// the map just overwrites.
+///
+/// R132-BD (BD1): after recording, the SAME dir is pushed onto the shared
+/// profile's DefaultDownloadFolderPath (the save-as dialog's default
+/// folder) via `downloads::reapply_profile_download_dir` — a with_webview
+/// DISPATCH (non-blocking), so the async/main-thread discipline below is
+/// unchanged. A tab whose webview does not exist yet is covered by
+/// `downloads::register`'s own apply at create time.
 ///
 /// Non-Windows: the honest refusal — the native pipeline is WebView2-only
 /// in this build (the agent-side `download` ACTION still works everywhere
@@ -1437,11 +1834,19 @@ mod downloads {
 /// SYNC command runs on the MAIN thread, and the command does real I/O here
 /// (the absolute-path check + `create_dir_all`) — off the main thread it can
 /// never stall the UI on a slow disk. Nothing in the body blocks on the main
-/// thread (no window/webview round-trips), so async is unconditionally safe
-/// here, unlike the window-building commands above.
+/// thread (the with_webview dispatch is fire-and-forget), so async is
+/// unconditionally safe here, unlike the window-building commands above.
 #[tauri::command]
-pub async fn browser_tab_set_download_dir(tab_id: String, dir: String) -> Result<(), String> {
-    set_tab_download_dir_impl(&tab_id, &dir)
+pub async fn browser_tab_set_download_dir(
+    app: AppHandle,
+    tab_id: String,
+    dir: String,
+) -> Result<(), String> {
+    set_tab_download_dir_impl(&tab_id, &dir)?;
+    // R132-BD (BD1): the profile default folder follows the map immediately
+    // (best-effort; no-op on non-Windows).
+    downloads::reapply_profile_download_dir(&app, &tab_id);
+    Ok(())
 }
 
 /// The Windows leg of the command (validation + mkdir + record).
@@ -1823,13 +2228,16 @@ pub fn browser_tabs_close_all(app: AppHandle) -> Result<(), String> {
 //
 // Pure functions only (the keys.rs/sidecar.rs tests-module pattern): the
 // window/webview plumbing needs a running Tauri shell. CI runs `cargo
-// check`; these compile + run under `cargo test`.
+// check`; these compile + run under `cargo test` (and, in a sandbox whose
+// host build dies on missing GTK -dev packages, under the rustc --test
+// byte-extraction — the keys.rs precedent, R132-BD).
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_popout_size, dedupe_download_target, parse_http_url, parse_web_url,
-        popout_pending_url, set_popout_pending_url, suggested_download_name, POPOUT_DEFAULT_H,
-        POPOUT_DEFAULT_W, POPOUT_MIN_H, POPOUT_MIN_W,
+        clamp_popout_size, dedupe_download_target, interrupt_reason_name, parse_http_url,
+        parse_web_url, popout_download_dir_stash, popout_pending_url, set_popout_download_dir,
+        set_popout_pending_url, suggested_download_name, POPOUT_DEFAULT_H, POPOUT_DEFAULT_W,
+        POPOUT_MIN_H, POPOUT_MIN_W,
     };
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
@@ -1989,8 +2397,12 @@ mod tests {
     }
 
     /// An in-memory `exists` for the dedupe law's tests (no filesystem —
-    /// the injected closure keeps the law pure).
-    fn existing(paths: &[&str]) -> impl Fn(&Path) -> bool + '_ {
+    /// the injected closure keeps the law pure). The returned closure OWNS
+    /// its materialized set (R132-BD fix: the `+ '_` elision was ambiguous
+    /// with the slice's two lifetimes and failed E0106 on the windows-target
+    /// `--tests` check — the closure borrows nothing, so no capture is
+    /// needed at all).
+    fn existing(paths: &[&str]) -> impl Fn(&Path) -> bool {
         let set: HashSet<PathBuf> = paths.iter().map(|p| PathBuf::from(p)).collect();
         move |p: &Path| set.contains(p)
     }
@@ -2039,5 +2451,69 @@ mod tests {
             dedupe_download_target(Path::new("/dl"), "photo.png", &exists),
             PathBuf::from("/dl/photo.png")
         );
+    }
+
+    // ── R132-BD: the save-as truth's PURE laws ─────────────────────────────
+
+    /// BD3 — the interrupt-reason mapping: the values the owner's toast can
+    /// actually name map to their human phrases (spot-checks across the
+    /// enum's families, not the whole 30 — the arms are a match table, and
+    /// the discriminants are pinned against webview2-com-sys 0.39.1's own
+    /// bindings.rs:254-313).
+    #[test]
+    fn interrupt_reason_names_the_known_causes() {
+        // NONE is not a cause — the payload omits the field entirely.
+        assert_eq!(interrupt_reason_name(0), None);
+        assert_eq!(interrupt_reason_name(1).as_deref(), Some("file failed"));
+        assert_eq!(interrupt_reason_name(2).as_deref(), Some("file access denied"));
+        assert_eq!(interrupt_reason_name(3).as_deref(), Some("no disk space"));
+        assert_eq!(interrupt_reason_name(4).as_deref(), Some("file name too long"));
+        assert_eq!(interrupt_reason_name(6).as_deref(), Some("file blocked as malicious"));
+        assert_eq!(interrupt_reason_name(12).as_deref(), Some("network failed"));
+        assert_eq!(interrupt_reason_name(14).as_deref(), Some("network disconnected"));
+        assert_eq!(interrupt_reason_name(17).as_deref(), Some("server failed"));
+        assert_eq!(interrupt_reason_name(21).as_deref(), Some("server certificate problem"));
+        assert_eq!(interrupt_reason_name(26).as_deref(), Some("user canceled"));
+        assert_eq!(interrupt_reason_name(29).as_deref(), Some("browser process crashed"));
+    }
+
+    /// BD3 — the honest unknown: a value the mapping does not know (a future
+    /// runtime's new reason) answers `"unknown reason (<n>)"` — never None
+    /// (silence would hide the runtime's actual answer from the owner's
+    /// device pass) and never a guessed name.
+    #[test]
+    fn interrupt_reason_unknown_values_answer_honestly() {
+        assert_eq!(
+            interrupt_reason_name(30).as_deref(),
+            Some("unknown reason (30)")
+        );
+        assert_eq!(
+            interrupt_reason_name(-1).as_deref(),
+            Some("unknown reason (-1)")
+        );
+        assert_eq!(interrupt_reason_name(i32::MAX).as_deref(), Some("unknown reason (2147483647)"));
+    }
+
+    /// BD4 — the pop-out's download-dir stash round-trips; the LAST write
+    /// wins; and a None write CLEARS it (a panel without a bound project
+    /// must not keep steering the pop-out at a stale project folder). One
+    /// test function because the stash is a shared static — parallel sibling
+    /// tests must not interleave writes (the pending-url suite's law).
+    #[test]
+    fn popout_download_dir_roundtrips_last_write_wins_and_clears() {
+        assert_eq!(popout_download_dir_stash().expect("stash read"), None, "the stash starts empty");
+        set_popout_download_dir(Some("C:\\proj\\downloads".to_string())).expect("stash write");
+        assert_eq!(
+            popout_download_dir_stash().expect("stash read"),
+            Some("C:\\proj\\downloads".to_string())
+        );
+        set_popout_download_dir(Some("C:\\other\\downloads".to_string())).expect("second write");
+        assert_eq!(
+            popout_download_dir_stash().expect("stash read"),
+            Some("C:\\other\\downloads".to_string()),
+            "the last write wins (the project-switch re-pop-out)"
+        );
+        set_popout_download_dir(None).expect("clearing write");
+        assert_eq!(popout_download_dir_stash().expect("stash read"), None, "None clears the stash");
     }
 }
