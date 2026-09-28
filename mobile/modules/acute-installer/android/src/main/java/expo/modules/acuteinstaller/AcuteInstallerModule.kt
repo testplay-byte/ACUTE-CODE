@@ -58,6 +58,17 @@ import java.io.IOException
  *       Sends the user to THIS app's page in the system's "Install unknown
  *       apps" screen (ACTION_MANAGE_UNKNOWN_APP_SOURCES) — the one-tap path
  *       from a failed install to the grant.
+ *   getDownloadState() (R132-MU2)
+ *       The live-transfer PROBE — a direct read of the in-flight call's
+ *       witness fields ({active, url, received, total}), no throttle and
+ *       no event hop. The JS download state used to be component-local in
+ *       the update route (R132's owner defect: the downloading options
+ *       disappeared on back-navigation while THIS module kept streaming);
+ *       the JS side now lives in a process-lifetime manager, and a
+ *       re-mounted screen asks ONCE — if the JS state was lost to a
+ *       reload-class desync, the probe re-attaches the UI to the real
+ *       transfer instead of a blank menu (a second downloadApk would only
+ *       reject "busy").
  *
  * WHY A SEPARATE MODULE (not a third function on acute-net): acute-net's
  * whole identity is the TOFU PIN — every byte to the DESKTOP rides pinned
@@ -77,6 +88,16 @@ class AcuteInstallerModule : Module() {
    * design — one APK at a time; a second downloadApk call while one runs
    * rejects with "busy" instead of silently racing two partial files). */
   private var activeCall: Call? = null
+
+  /** R132-MU2 — the live-transfer WITNESS getDownloadState() reads: the
+   * running call's url + byte counts, written per-chunk in the read loop
+   * (a volatile write per 64 KB read — far cheaper than the throttled
+   * progress event's own main-thread hop) and read DIRECTLY by the probe,
+   * with no throttle between. totalBytes stays -1 when the server sent no
+   * Content-Length (the progress event grammar's own rule). */
+  @Volatile private var activeUrl: String? = null
+  @Volatile private var receivedBytes = 0L
+  @Volatile private var totalBytes = 0L
 
   /** Event emissions hop through the main thread — one guaranteed-safe path
    * to sendEvent, whatever OkHttp dispatcher thread the body reads on (the
@@ -133,6 +154,12 @@ class AcuteInstallerModule : Module() {
         .build()
 
       val call = client.newCall(request)
+      // R132-MU2 — the witness is armed BEFORE activeCall so an active
+      // probe answer always carries its url (the probe reads activity off
+      // activeCall itself).
+      activeUrl = url
+      receivedBytes = 0L
+      totalBytes = 0L
       activeCall = call
       call.enqueue(object : Callback {
         override fun onFailure(call: Call, e: IOException) {
@@ -159,6 +186,7 @@ class AcuteInstallerModule : Module() {
               return
             }
             val total = res.body?.contentLength() ?: -1L
+            totalBytes = total
             try {
               val sink = java.io.FileOutputStream(target)
               val source = res.body?.byteStream()
@@ -182,6 +210,7 @@ class AcuteInstallerModule : Module() {
                     if (read < 0) break
                     out.write(buffer, 0, read)
                     received += read.toLong()
+                    receivedBytes = received
                     // Throttle progress events to ~1% steps — a per-chunk
                     // event would flood the bridge worse than the download
                     // floods the socket.
@@ -231,6 +260,34 @@ class AcuteInstallerModule : Module() {
       } else {
         promise.resolve(false)
       }
+    }
+
+    // ── getDownloadState() — the live-transfer probe (R132-MU2) ──────────
+    // The re-attach leg for a re-mounted update screen: ONE question, one
+    // direct read — {active:true, url, received, total} while the single
+    // in-flight download streams, {active:false, url:null, received:0,
+    // total:0} when nothing runs. isCanceled() is part of the honesty: a
+    // call between cancel() and its onFailure reap answers INACTIVE (the
+    // JS side settles its adopted state on the stop it asked for).
+    AsyncFunction("getDownloadState") { promise: Promise ->
+      val call = activeCall
+      val active = call != null && !call.isCanceled()
+      val state: Map<String, Any?> = if (active) {
+        mapOf(
+          "active" to true,
+          "url" to (activeUrl ?: ""),
+          "received" to receivedBytes,
+          "total" to totalBytes,
+        )
+      } else {
+        mapOf(
+          "active" to false,
+          "url" to null,
+          "received" to 0L,
+          "total" to 0L,
+        )
+      }
+      promise.resolve(state)
     }
 
     // ── installApk({path}) — hand the APK to the OS installer ────────────
