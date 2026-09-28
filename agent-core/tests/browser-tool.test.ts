@@ -2847,27 +2847,27 @@ describe("R131-B (defect 8): download — the action (real fetch, hermetic upstr
     return tools;
   }
 
-  it("saves a PNG to <root>/downloads/ with the magic verdict, the project-relative path, and the browser-download frame", async () => {
+  it("saves a PNG to <root>/.acute/downloads/ (the R131-X hidden-folder location) with the magic verdict, the project-relative path, and the browser-download frame", async () => {
     const frames: unknown[] = [];
     const tools = await buildToolsWithProject({ emit: makeRecordingEmit(frames) });
     const bc = tool(tools, "browser_control");
 
     const result = await bc.execute({ action: "download", url: `${upstreamBase}/pic.png`, filename: "photo.png", sessionId: "tab-r131-dl" });
     expect(result.ok).toBe(true);
-    expect(result.output).toContain("saved downloads/photo.png");
+    expect(result.output).toContain("saved .acute/downloads/photo.png"); // R131-X: the hidden folder
     expect(result.output).toContain("12 bytes");
     expect(result.output).toContain("image/png");
     expect(result.output).toContain("magic PNG ✓");
     expect(result.output).toContain("project-relative");
     // The file on disk, exact bytes, in the pinned ROUND-115 location.
-    expect(existsSync(join(tempDir, "downloads", "photo.png"))).toBe(true);
-    expect(readFileSync(join(tempDir, "downloads", "photo.png"))).toEqual(PNG_BYTES);
+    expect(existsSync(join(tempDir, ".acute", "downloads", "photo.png"))).toBe(true);
+    expect(readFileSync(join(tempDir, ".acute", "downloads", "photo.png"))).toEqual(PNG_BYTES);
     // The announcement frame — beside the browser-navigate emit pattern.
     const frame = frames.find((f) => (f as { type?: string }).type === "browser-download") as
       | { tabId: string; sessionId: string; path: string; bytes: number }
       | undefined;
     expect(frame).toBeDefined();
-    expect(frame).toMatchObject({ tabId: "tab-r131-dl", path: "downloads/photo.png", bytes: 12 });
+    expect(frame).toMatchObject({ tabId: "tab-r131-dl", path: ".acute/downloads/photo.png", bytes: 12 });
   });
 
   it("no filename given ⇒ the URL's last path segment; a redirect hop lands the FINAL segment", async () => {
@@ -2876,14 +2876,14 @@ describe("R131-B (defect 8): download — the action (real fetch, hermetic upstr
 
     const named = await bc.execute({ action: "download", url: `${upstreamBase}/pic.png`, sessionId: "tab-r131-dl2" });
     expect(named.ok).toBe(true);
-    expect(named.output).toContain("saved downloads/pic.png");
+    expect(named.output).toContain("saved .acute/downloads/pic.png");
 
     const hopped = await bc.execute({ action: "download", url: `${upstreamBase}/hop.png`, sessionId: "tab-r131-dl2" });
     expect(hopped.ok).toBe(true);
     // The redirect chain was followed (fetchUpstreamGuarded's manual walk —
     // the FINAL url names the source and its segment named the file) and the
     // same bytes arrived, so the incumbent was REUSED (never re-written).
-    expect(hopped.output).toContain("already saved as downloads/pic.png");
+    expect(hopped.output).toContain("already saved as .acute/downloads/pic.png");
     expect(hopped.output).toContain("from " + `${upstreamBase}/pic.png`);
   });
 
@@ -2893,25 +2893,25 @@ describe("R131-B (defect 8): download — the action (real fetch, hermetic upstr
 
     const second = await bc.execute({ action: "download", url: `${upstreamBase}/alt.png`, filename: "photo.png", sessionId: "tab-r131-dl3" });
     expect(second.ok).toBe(true);
-    expect(second.output).toContain("saved downloads/photo-2.png");
-    expect(readFileSync(join(tempDir, "downloads", "photo-2.png"))).toEqual(ALT_PNG_BYTES);
+    expect(second.output).toContain("saved .acute/downloads/photo-2.png");
+    expect(readFileSync(join(tempDir, ".acute", "downloads", "photo-2.png"))).toEqual(ALT_PNG_BYTES);
     // The incumbent kept its bytes — no overwrite.
-    expect(readFileSync(join(tempDir, "downloads", "photo.png"))).toEqual(PNG_BYTES);
+    expect(readFileSync(join(tempDir, ".acute", "downloads", "photo.png"))).toEqual(PNG_BYTES);
 
     const third = await bc.execute({ action: "download", url: `${upstreamBase}/pic.png`, filename: "photo.png", sessionId: "tab-r131-dl3" });
     expect(third.ok).toBe(true);
-    expect(third.output).toContain("already saved as downloads/photo.png");
+    expect(third.output).toContain("already saved as .acute/downloads/photo.png");
     expect(third.output).toContain("byte-identical");
-    expect(existsSync(join(tempDir, "downloads", "photo-3.png"))).toBe(false);
+    expect(existsSync(join(tempDir, ".acute", "downloads", "photo-3.png"))).toBe(false);
   });
 
-  it("a filename with path separators is sanitized — no traversal out of downloads/", async () => {
+  it("a filename with path separators is sanitized — no traversal out of .acute/downloads/", async () => {
     const tools = await buildToolsWithProject();
     const bc = tool(tools, "browser_control");
     const result = await bc.execute({ action: "download", url: `${upstreamBase}/pic.png`, filename: "../../evil.png", sessionId: "tab-r131-dl4" });
     expect(result.ok).toBe(true);
-    expect(result.output).toContain("saved downloads/evil.png");
-    expect(existsSync(join(tempDir, "downloads", "evil.png"))).toBe(true);
+    expect(result.output).toContain("saved .acute/downloads/evil.png");
+    expect(existsSync(join(tempDir, ".acute", "downloads", "evil.png"))).toBe(true);
     expect(existsSync(join(tempDir, "evil.png"))).toBe(false); // never escaped
   });
 
@@ -2922,7 +2922,7 @@ describe("R131-B (defect 8): download — the action (real fetch, hermetic upstr
     expect(result.ok).toBe(true);
     expect(result.output).toContain("HONESTY NOTE: the content-type says image/png but the bytes carry no known image signature");
     expect(result.output).toContain("look like TEXT");
-    expect(result.output).toContain("saved downloads/liar.png");
+    expect(result.output).toContain("saved .acute/downloads/liar.png");
   });
 
   it("the referer + the panel's user agent + the tab's cookies ride the fetch (the page-context contract)", async () => {
@@ -2938,7 +2938,7 @@ describe("R131-B (defect 8): download — the action (real fetch, hermetic upstr
     // The echoed headers, verbatim in the saved body: the page as referer,
     // the PANEL's UA (Chrome-lineage, AcuteBrowser-free server-side fetch
     // UA is the proxy's own — pinned by its own string), and the cookie.
-    const body = readFileSync(join(tempDir, "downloads", "echo.txt"), "utf8");
+    const body = readFileSync(join(tempDir, ".acute", "downloads", "echo.txt"), "utf8");
     expect(body).toContain("referer=https://en.wikipedia.org/wiki/Downloads");
     expect(body).toContain("ua=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
     expect(body).toContain("cookie=dl=sess321");

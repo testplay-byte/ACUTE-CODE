@@ -4034,6 +4034,20 @@ export type StreamTurnEvent =
       chatSessionId: string;
       url: string | null;
     }
+  /** ROUND-131 (R131-B-core/B-ui, X3): the agent's download ACTION landed a
+   * file into <projectRoot>/.acute/downloads/ (the R131-X hidden-folder
+   * location) — the sidecar's turn-independent announcement so the browser
+   * panel can surface the quiet toast. `sessionId` is the CHAT session id
+   * the action ran for; `tabId` the browser tab it used; `path` the
+   * PROJECT-RELATIVE path; `bytes` the file size. Turn-independent (rides
+   * before the liveTurn guard like the navigate/open frames). */
+  | {
+      type: "browser-download";
+      sessionId: string;
+      tabId: string;
+      path: string;
+      bytes: number;
+    }
   /** ROUND-67 (R67/D), ROUND-68 (R68-A): the agent captured a screenshot
    * (computer-use screenshot / zoom / get_app_state includeScreenshot, or
    * the browser_control screenshot action) and the bytes are now fetchable

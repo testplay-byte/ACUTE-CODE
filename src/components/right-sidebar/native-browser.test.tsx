@@ -330,17 +330,18 @@ describe("R67 nativeTabEval / nativeTabScrollState — both transports return da
 
 describe("R131-B-ui (BU2): downloadDirForRoot — the <root>/downloads join", () => {
   it("joins windows and posix roots, trimming trailing separators of both styles", () => {
-    // The join appends "/downloads" verbatim (Windows accepts the mixed
+    // R131-X re-pin: the join appends "/.acute/downloads" verbatim (Windows
+    // accepts the mixed
     // separator — PathBuf::is_absolute and dir.join both normalize it on
     // the Rust side; the Linux/dev shell only ever sees posix roots).
-    expect(downloadDirForRoot("C:\\Users\\me\\proj")).toBe("C:\\Users\\me\\proj/downloads");
-    expect(downloadDirForRoot("/home/z/proj")).toBe("/home/z/proj/downloads");
-    expect(downloadDirForRoot("/home/z/proj/")).toBe("/home/z/proj/downloads");
-    expect(downloadDirForRoot("/home/z/proj\\\\//")).toBe("/home/z/proj/downloads");
+    expect(downloadDirForRoot("C:\\Users\\me\\proj")).toBe("C:\\Users\\me\\proj/.acute/downloads");
+    expect(downloadDirForRoot("/home/z/proj")).toBe("/home/z/proj/.acute/downloads");
+    expect(downloadDirForRoot("/home/z/proj/")).toBe("/home/z/proj/.acute/downloads");
+    expect(downloadDirForRoot("/home/z/proj\\\\//")).toBe("/home/z/proj/.acute/downloads");
   });
 
   it("an empty root answers '/downloads' (the Rust side's absolute-path gate is the real refusal)", () => {
-    expect(downloadDirForRoot("")).toBe("/downloads");
+    expect(downloadDirForRoot("")).toBe("/.acute/downloads");
   });
 });
 

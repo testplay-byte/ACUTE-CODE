@@ -2485,7 +2485,7 @@ describe("BrowserPanel R131-B-ui (BU1) — the panel drag-resize handles", () =>
 
     // The REAL downloadDirForRoot join (importOriginal keeps the pure helper
     // live in this suite's mock) — the ROUND-115-pinned save location.
-    await waitFor(() => expect(setDownloadDir()).toHaveBeenCalledWith("tab-test-1", "C:\\Users\\me\\proj/downloads"));
+    await waitFor(() => expect(setDownloadDir()).toHaveBeenCalledWith("tab-test-1", "C:\\Users\\me\\proj/.acute/downloads")); // R131-X: the hidden-folder location
   });
 
   it("web mode never registers a download dir (the native pipeline is desktop-only)", async () => {

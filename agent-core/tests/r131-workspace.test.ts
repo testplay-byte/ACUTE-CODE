@@ -360,11 +360,19 @@ describe("R131-F F1: the boot heal — ensureGeneralProject heals the Scratchpad
 // ── 4. The Files-tree law (dot-dir hide) + list_dir reach ────────────────────
 
 describe("R131-F F1: the Files tree hides .acute — while tools still reach it", () => {
-  it("projectTree NEVER lists .acute (the dot-dir law, re-pinned against the new folder)", () => {
+  it("projectTree LISTS .acute (the R131-X re-pin: the owner-browsable exception — every OTHER dot-dir stays hidden)", () => {
+    // R131-X: the orchestrator's decision — the owner's app workspace (his
+    // downloads, his tools) must be BROWSABLE in the explorer (the .github
+    // exception pattern); the isolation law is about not scattering files,
+    // not about hiding the one folder from the owner. The R131-F pin (never
+    // listed) is retired WITH the record: the tree walker gained the
+    // `.acute` exception (fs-ops.ts) in the same round.
     const root = freshRoot();
     ensureProjectWorkspace(root);
     mkdirSync(join(root, "visible-src"), { recursive: true });
+    mkdirSync(join(root, ".other-hidden"), { recursive: true });
     writeFileSync(join(root, "visible-src", "a.ts"), "export {};\n");
+    writeFileSync(join(root, ".other-hidden", "b.ts"), "export {};\n");
 
     const names: string[] = [];
     const walk = (nodes: Array<{ name: string; children?: unknown[] }>): void => {
@@ -375,9 +383,16 @@ describe("R131-F F1: the Files tree hides .acute — while tools still reach it"
     };
     walk(projectTree(root));
 
-    expect(names).not.toContain(WORKSPACE_DIR_NAME);
-    expect(names).not.toContain("downloads");
-    expect(names).not.toContain("workspace.json");
+    // .acute IS listed (the owner can browse his downloads)…
+    expect(names).toContain(WORKSPACE_DIR_NAME);
+    expect(names).toContain("downloads");
+    // …the marker itself is a FILE inside it (the scaffold's own), listed
+    // with it…
+    expect(names).toContain("workspace.json");
+    // …every OTHER dot-dir stays hidden (the isolation law intact)…
+    expect(names).not.toContain(".other-hidden");
+    expect(names).not.toContain("b.ts");
+    // …and the visible project files are untouched.
     expect(names).toContain("visible-src");
     expect(names).toContain("a.ts");
   });

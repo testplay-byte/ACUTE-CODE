@@ -76,7 +76,11 @@ function walkDir(absBase: string, relative: string, depth: number): TreeNode[] {
     try {
       const stats = statSync(absPath);
       if (stats.isDirectory()) {
-        if (IGNORED_DIRS.has(name) || name.startsWith(".") && name !== ".github") continue;
+        // R131-X: .acute joins .github as the VISIBLE dot-dir exception — the
+        // owner's app workspace (his downloads, his tools) must be browsable in
+        // the explorer; every other dot-dir stays hidden (the isolation law
+        // is about not scattering files, not about hiding the one folder).
+        if (IGNORED_DIRS.has(name) || (name.startsWith(".") && name !== ".github" && name !== ".acute")) continue;
         nodes.push({
           name,
           type: "folder",

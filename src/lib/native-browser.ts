@@ -534,12 +534,21 @@ export function onBrowserNavigated(callback: (tabId: string, url: string) => voi
  * ROUND-115-pinned save location: "when a 'save this download' affordance
  * lands, its save location is pinned: <projectRoot>/downloads/"). Pure;
  * exported for the tests. Handles both separator styles + trailing
- * separators; an empty/blank root answers "/downloads" (the Rust side's
- * own absolute-path validation is the real gate).
+ * separators; an empty/blank root answers "/.acute/downloads" (the Rust
+ * side's own absolute-path validation is the real gate).
+ *
+ * R131-X: the location moved from <root>/downloads/ (the ROUND-115 pin) to
+ * <root>/.acute/downloads/ — the owner's hidden-folder isolation directive
+ * ("it will create a hidden folder… where it will store its own things…
+ * the files it downloads from the internet"). The scaffold
+ * (agent-core/src/storage/workspace.ts) creates the same folder; the
+ * Files tree lists .acute (the .github exception pattern) so the owner can
+ * browse his downloads. Legacy installs' existing <root>/downloads/ files
+ * stay where they are (nothing migrates, nothing deletes).
  */
 export function downloadDirForRoot(root: string): string {
   const trimmed = root.replace(/[\\/]+$/, "");
-  return `${trimmed === "" ? "" : trimmed}/downloads`;
+  return `${trimmed === "" ? "" : trimmed}/.acute/downloads`;
 }
 
 /**

@@ -326,7 +326,7 @@ needs to be… a full-fledged browser." The agent-side half is the
   work), the panel's user agent, and the tab's current page as the referer
   — never a fabricated one. Redirects are followed and re-guarded per hop;
   non-http(s) URLs are refused; the honest size cap is 50 MB.
-- **The pinned location.** Files land in `<projectRoot>/downloads/` (the
+- **The pinned location.** Files land in `<projectRoot>/.acute/downloads/` (the
   ROUND-115 pinned folder, the twin of `attachments/`), created on demand.
   The output's path is PROJECT-RELATIVE (`downloads/report.pdf`).
 - **Never a silent overwrite.** The attachments law mirrored: a name
@@ -357,7 +357,7 @@ surfaces it as the same quiet status line the native pipeline uses.
 
 The NATIVE right-click "save image as…" pipeline is LANDED (R131-B-ui,
 Windows-only, CI-verified per ADR-0012) — both halves land the same
-`<projectRoot>/downloads/` folder:
+`<projectRoot>/.acute/downloads/` folder:
 
 - **The context menu is pinned ON** (`AreDefaultContextMenusEnabled` in
   the same `with_webview` settings pass at tab-create time) — right-click →

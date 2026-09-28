@@ -1758,10 +1758,24 @@ function handleStreamEvent(
   // background turn still updates the monitor). One frame per tool
   // execution, emitted at dispatch time by the computer-use plugin.
   if (event.type === "computer-use") {
+    // R131-C/X4: the action's point + raster frameId ride the frame when
+    // the dispatcher knows them (additive fields — validated here so a
+    // malformed frame degrades to the pre-R131 shape, never a crash).
+    const rawPoint = (event as { point?: unknown }).point;
+    const rawFrameId = (event as { frameId?: unknown }).frameId;
+    const point =
+      rawPoint !== null && typeof rawPoint === "object" &&
+      typeof (rawPoint as { x?: unknown }).x === "number" && Number.isFinite((rawPoint as { x?: unknown }).x) &&
+      typeof (rawPoint as { y?: unknown }).y === "number" && Number.isFinite((rawPoint as { y?: unknown }).y)
+        ? { x: (rawPoint as { x: number }).x, y: (rawPoint as { y: number }).y }
+        : undefined;
+    const frameId = typeof rawFrameId === "string" && rawFrameId !== "" ? rawFrameId : undefined;
     useComputerMonitorStore.getState().pushLiveEvent({
       kind: event.kind,
       tool: event.tool,
       code: event.code,
+      ...(point !== undefined ? { point } : {}),
+      ...(frameId !== undefined ? { frameId } : {}),
     });
     // ROUND-67 (R67/F1): the owner — while the agent was still THINKING
     // between computer tool calls, the "Agent is using your computer"
@@ -1855,22 +1869,20 @@ function handleStreamEvent(
   // bytes}` (turn-independent, exactly like the navigate/open frames above;
   // the frame is ADDITIVE for older frontends). The per-tab browser store
   // records it (applyAgentDownload → lastDownload) and the mounted panel
-  // surfaces the quiet status line. The frame is not yet in api.ts's
-  // StreamTurnEvent union (READ-ONLY this wave) — the intercept reads it
-  // through a permissive cast, exactly how the raw SSE parser passes
-  // unknown-but-well-formed frames through to this funnel. FLAGGED for the
-  // next api.ts touch: promote the frame into the union and drop the cast. ──
-  if ((event as { type?: string }).type === "browser-download") {
-    const dl = event as { tabId?: unknown; path?: unknown; bytes?: unknown };
-    const frameTabId = typeof dl.tabId === "string" && dl.tabId !== "" ? dl.tabId : null;
+  // surfaces the quiet status line. R131-X: the frame is promoted into
+  // api.ts's StreamTurnEvent union — the permissive cast is gone, the
+  // defensive field checks stay (a malformed frame degrades to the honest
+  // no-op, never a crash).
+  if (event.type === "browser-download") {
+    const frameTabId = event.tabId !== "" ? event.tabId : null;
     if (frameTabId !== null) {
       // The frame's tabId is the SIDECAR session id — map it to the store's
       // tab key when a panel slice exists, else record under the id itself
       // (an agent-minted tab's key IS its session id — the browser-open law).
       const storeTabId = useBrowserTabStore.getState().tabIdForSession(frameTabId) ?? frameTabId;
       useBrowserTabStore.getState().applyAgentDownload(storeTabId, {
-        path: typeof dl.path === "string" ? dl.path : "",
-        bytes: typeof dl.bytes === "number" && Number.isFinite(dl.bytes) && dl.bytes >= 0 ? dl.bytes : 0,
+        path: event.path,
+        bytes: Number.isFinite(event.bytes) && event.bytes >= 0 ? event.bytes : 0,
       });
     }
     return;

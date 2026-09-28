@@ -217,7 +217,9 @@ export function nearestBrowserAction(candidate: string): string | null {
 
 // ── ROUND-131 (R131-B, defect 8): the download action's disk discipline ────
 //
-// The save location is the ROUND-115 pinned one: <projectRoot>/downloads/
+// R131-X: the save location moved to <projectRoot>/.acute/downloads/ (the
+// owner's hidden-folder isolation directive; the scaffold creates it; legacy
+// <root>/downloads/ files stay in place — nothing migrates).
 // (the twin of uploads = <root>/attachments/). The naming follows the
 // attachments-style dedupe law: a name collision NEVER overwrites — an
 // existing byte-identical file is REUSED (re-downloading the same bytes is a
@@ -788,7 +790,7 @@ export const browserPlugin: PluginDefinition = {
             filename: {
               type: "string",
               description:
-                "action=download: the file name to save under (default: derived from the URL's last path segment; path separators and control characters are stripped). Saved into <projectRoot>/downloads/ — a name collision never overwrites: identical bytes are reused, different bytes get -2/-3 suffixes",
+                "action=download: the file name to save under (default: derived from the URL's last path segment; path separators and control characters are stripped). Saved into <projectRoot>/.acute/downloads/ — a name collision never overwrites: identical bytes are reused, different bytes get -2/-3 suffixes",
             },
             preset: {
               type: "string",
@@ -1901,7 +1903,7 @@ export const browserPlugin: PluginDefinition = {
             // the agent-side half: a first-class download that fetches the URL
             // INSIDE THE PAGE'S CONTEXT — the tab's per-project cookie jar, the
             // panel's user agent, the tab's current page as Referer — and
-            // writes the bytes to <projectRoot>/downloads/ (the ROUND-115
+            // writes the bytes to <projectRoot>/.acute/downloads/ (the R131-X
             // pinned location; the native right-click "save as" pipeline is
             // the sibling B3 wave and lands the SAME folder). Honesty laws:
             // NEVER a silent overwrite (attachments-style -2/-3 dedupe, with
@@ -1929,7 +1931,7 @@ export const browserPlugin: PluginDefinition = {
                 return {
                   ok: false,
                   output:
-                    "browser_control: download unavailable — no project context in this session (downloads land in the project's downloads/ folder; a project-bound chat session is required)",
+                    "browser_control: download unavailable — no project context in this session (downloads land in the project's .acute/downloads/ folder; a project-bound chat session is required)",
                 };
               }
               const project = getProject(toolDeps.db, projectId);
@@ -1997,11 +1999,11 @@ export const browserPlugin: PluginDefinition = {
               } else {
                 magicNote = `magic: no sniffed signature (non-image content)`;
               }
-              // The write: <root>/downloads/<name> with the attachments-style
+              // The write: <root>/.acute/downloads/<name> with the attachments-style
               // dedupe — identical bytes REUSE the incumbent, different bytes
               // mint -2/-3, never a silent overwrite.
               try {
-                const downloadsDir = join(project.rootPath, "downloads");
+                const downloadsDir = join(project.rootPath, ".acute", "downloads");
                 mkdirSync(downloadsDir, { recursive: true });
                 let finalName = name;
                 let reused = false;
@@ -2023,7 +2025,7 @@ export const browserPlugin: PluginDefinition = {
                   if (counter > DOWNLOAD_SUFFIX_CAP) {
                     return {
                       ok: false,
-                      output: `browser_control: download — downloads/${name} already has ${DOWNLOAD_SUFFIX_CAP} different variants — refusing to mint more`,
+                      output: `browser_control: download — .acute/downloads/${name} already has ${DOWNLOAD_SUFFIX_CAP} different variants — refusing to mint more`,
                     };
                   }
                   finalName = downloadSuffixName(name, counter);
@@ -2033,7 +2035,7 @@ export const browserPlugin: PluginDefinition = {
                   writeFileSync(target, fetched.bytes);
                 }
                 const size = statSync(target).size;
-                const relativePath = `downloads/${finalName}`;
+                const relativePath = `.acute/downloads/${finalName}`; // R131-X: the hidden-folder location
                 // The announcement frame — beside the browser-navigate emit
                 // pattern: turn-independent fields (tabId + chatSessionId +
                 // the project-relative path + the size) so the frontend

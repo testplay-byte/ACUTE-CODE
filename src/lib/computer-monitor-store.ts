@@ -63,6 +63,16 @@ export interface ComputerMonitorEvent {
   tool?: string;
   /** Refusal error code (host_policy_denied, element_stale, …). */
   code?: string;
+  /** R131-C/X4 (the owner: "all the actions… should be shown on the screen
+   * as an overlay first — it will be tapping here"): the action's SCREEN
+   * point in global coordinates, when the dispatcher knows one (click/
+   * hover/scroll/drag/element targets). The surfaces render it as the
+   * action marker; the desktop mini-window's raster overlay is the next
+   * round's rendering leg (flagged honestly). */
+  point?: { x: number; y: number };
+  /** The raster the point refers to (the latest capture's frame id), when
+   * known — lets a future overlay paint the marker over the pixels. */
+  frameId?: string;
 }
 
 interface ComputerMonitorState {
@@ -93,7 +103,13 @@ interface ComputerMonitorState {
   error: string | null;
 
   /** A live SSE frame landed (stream-store calls this). */
-  pushLiveEvent: (frame: { kind: string; tool?: string; code?: string }) => void;
+  pushLiveEvent: (frame: {
+    kind: string;
+    tool?: string;
+    code?: string;
+    point?: { x: number; y: number };
+    frameId?: string;
+  }) => void;
   /** R67-C: hold the live surface for the WHOLE open turn (no liveActivity
    * bump, no decay arm — see the file docblock for the stream-store
    * contract). */
@@ -199,6 +215,8 @@ export const useComputerMonitorStore = create<ComputerMonitorState>((set, get) =
       label: kindLabel(frame.kind, frame.tool),
       tool: frame.tool,
       ...(frame.code !== undefined ? { code: frame.code } : {}),
+      ...(frame.point !== undefined ? { point: frame.point } : {}),
+      ...(frame.frameId !== undefined ? { frameId: frame.frameId } : {}),
     };
     const events = [event, ...get().events];
     if (events.length > RING_CAP) events.length = RING_CAP;

@@ -147,3 +147,11 @@ never-touch law, the boot heal, the dot-dir hide + tool reach).
   system as the worked example.
 - [`../architecture/api/IMPLEMENTED-API.md`](../architecture/api/IMPLEMENTED-API.md)
   — the memory routes + tools contract.
+
+<!-- R131-X: THE DOWNLOADS DECISION (the coherence wave's re-point): browser
+     downloads (the agent-side download ACTION + the native right-click
+     Save-image-as pipeline) land in <projectRoot>/.acute/downloads/ — the
+     owner's hidden-folder isolation directive. The Files tree LISTS .acute
+     (the .github exception pattern) so the owner can browse his downloads;
+     legacy installs' existing <root>/downloads/ files stay where they are
+     (nothing migrates, nothing deletes). -->

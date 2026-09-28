@@ -221,6 +221,11 @@ export function ComputerMiniWindow({
     : "Agent is using your computer";
   const newest = events[0] ?? null;
   const activity = newest !== null ? newest.label : "Waiting for the first action…";
+  // R131-X4 (the owner: "it will be tapping here and then it will tap
+  // there"): the newest action's point rides the pill's activity line (the
+  // desktop mini-window's raster overlay is the next rendering leg); the
+  // pulsing dot beside it is the marker's calm seed.
+  const actionPoint = newest?.point ?? null;
 
   return (
     // The plain-CSS anchor keeps framer-motion's transform (it animates the
@@ -235,6 +240,7 @@ export function ComputerMiniWindow({
             killSwitch={killSwitch}
             label={label}
             activity={activity}
+            actionPoint={actionPoint}
             error={stopError ?? (session === null ? storeError : null)}
             elapsed={
               startedAt !== null ? fmtElapsed(Math.max(0, nowMs - startedAt)) : null
@@ -257,6 +263,7 @@ function MiniPill({
   killSwitch,
   label,
   activity,
+  actionPoint,
   error,
   elapsed,
   stopping,
@@ -267,6 +274,9 @@ function MiniPill({
   killSwitch: boolean;
   label: string;
   activity: string;
+  /** R131-X4: the newest action's screen point (global px) — the marker
+   * legend rides the activity line; null when the action had none. */
+  actionPoint: { x: number; y: number } | null;
   error: string | null;
   elapsed: string | null;
   stopping: boolean;
@@ -318,6 +328,19 @@ function MiniPill({
           title={activity}
         >
           {error !== null ? error : activity}
+          {/* R131-X4 (the owner: "it will be tapping here and then it will
+              tap there"): the newest action's screen point rides the
+              activity line — the calm legend; the desktop mini-window's
+              raster-overlay marker is the next rendering leg (flagged). */}
+          {error === null && actionPoint !== null ? (
+            <span
+              className="ml-1.5 shrink-0 tabular-nums opacity-70"
+              data-testid="mini-action-point"
+              title={`The agent's latest action point (global px) — the overlay's coordinate`}
+            >
+              · at ({Math.round(actionPoint.x)}, {Math.round(actionPoint.y)})
+            </span>
+          ) : null}
         </span>
         {elapsed !== null ? (
           <span
