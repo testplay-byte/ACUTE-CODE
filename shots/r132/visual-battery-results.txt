@@ -1,0 +1,5 @@
+PASS W1 — sidecar up on 5178 + vite up on 5173 (env-wired)
+PASS W2 — the mini section rendered LIVE (status='done' actions=0) and settled (expand="expanded"; screenshots: mini-section-live.png + mini-section-settled.png)
+PASS W3 — the tool-row register screenshot captured (tool-rows.png — the no-section law rides the pinned suites; the eyeball evidence lands here)
+PASS W4 — the composer at three widths: 1280px→composer 36px | 800px→composer 36px | 420px→composer 36px — the one-line floor held (no wrap)
+PASS W5 — zero page errors through the whole pass

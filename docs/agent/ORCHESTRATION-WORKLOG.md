@@ -4223,3 +4223,22 @@ Work Log:
 
 Stage Summary:
 - The ledger's generator no longer lies about WHY the anchor is null, and future entries classify app-defect vs model-error vs capability-gap — the owner's "improve the feedback ledger too" directive honored at the two confirmed flaws (the telemetry lie was verified in the code; the classification axis was his explicit ask).
+---
+Task ID: R132-V (orchestrator, inline — the interrupted session's completion)
+Agent: Z.ai Code (orchestrator, resuming after the session interruption)
+Task: Round 132 Wave V — the live battery at full scope, and the bug it caught
+
+Work Log:
+- Resumed from the interruption mid-Wave-V: the API battery (V1–V7) had already passed and the visual battery's W2 (the live mini section) had already failed reproducibly. Re-established the environment from the repo tip, re-ran the battery to confirm the failure, then ran the root-cause hunt in five diagnostic stages (all scripts kept as scripts/diag-r132{b..j}.mjs during the hunt; only visual-r132.mjs + battery-r132.mjs ship per the round convention).
+- Stage B: dumped the REAL persisted events of a live mini turn and ran the REAL client fold over them through an esbuild bundle — the fold is CORRECT (working=[text,mini,tool], the full MiniAgentRun record with 13 actions) — the fold was never the bug.
+- Stage D: opened a SECOND events-stream subscription from Node while a real turn ran — the server-side mirror delivers EVERY frame (hello + 33 turn + 15 session) — the sidecar was never the bug.
+- Stage H: installed an IN-PAGE second consumer via eval — the frames ARRIVE at the page (49 counted) while the app's own consumer stays silent — the delivery to the browser was never the bug.
+- Stage I/J: probed the app's own stores through vite dynamic imports — the store's slice held a MINIMAL mirror (the /live poll's rehydrate) with miniRuns=0 through the whole turn, and the app's events-stream fetch showed a COMPLETED performance entry at 60ms with transferSize=0 — the connection died at birth and never reconnected.
+- THE ROOT CAUSE (the StrictMode kill): main.tsx mounts the app in <StrictMode>; React 18's dev-mode double-invoked effects ran EventStreamStarter's setup → cleanup → setup — run 1 set the startedRef guard and opened the connection, the strict cleanup ABORTED that fresh connection (stopped=true + ctrl.abort()), and run 2 EARLY-RETURNED on the still-true ref — the app lived its whole dev life with NO events stream. NotificationStreamStarter carried the identical defect (both starters dead in dev boots since their respective rounds; every live-sync path — the remote mirror, the mid-turn fold refreshes, the phone→desktop sync, in-app notifications — silently degraded to the /live poll's minimal mirror).
+- THE FIX (R132-V): the startedRef guard is GONE from both starters — each effect run OWNS its connection, the cleanup tears it down (abort + timers), every remount or dep change opens a fresh one; no duplicate can persist (the abort precedes the new connect, the server's close handler unsubscribes the dead socket).
+- THE PINS: StrictMode double-mount tests for both starters (render under <StrictMode> in live mode → the stream must open TWICE: setup 1 → abort → setup 2) + the real-remount leg + the demo-skip arm; verified FAILING on the old code (the revert check) — the pin earns its keep.
+- THE RE-VERIFICATION: the visual battery W1–W5 all PASS (the mini section renders LIVE — the store probes show the remote mirror with working=[text,tool,mini] and miniRuns=1 mid-turn — and settles expanded with the full anatomy: the skill badge, the model chip, the always-visible task line, the action rows, the "13 steps · 5,580 tokens" footer); the composer floor + zero page errors held; the battery's settled probe now EXPANDS the designed-collapsed WorkingSection before asserting (the pre-fix probe misread the collapse as a failure).
+- GATES: root tsc CLEAN; FULL root vitest 300 files / 5,460 tests GREEN (5,455 + the 5 pins); eslint 0 on the touched files; design-audit clean at-or-below baseline (105 files); docs:check 286/0/0; version:check 7/7 at 0.125.0.
+
+Stage Summary:
+- Wave V COMPLETE with a real catch: the round's own gate found a dev-mode kill that had silently broken BOTH long-lived SSE starters (events + notifications) — fixed, pinned (StrictMode-verifiable), and re-proven live end-to-end. The mini agent's live section, the remote turn mirror, and the notification stream now actually work in dev boots.

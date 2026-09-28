@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-26 round-130 -->
+<!-- last-reviewed: 2026-09-28 round-132 -->
 # Changelog
 
 All notable changes to ACUTE-CODE are documented here. Entries are written for
@@ -8,6 +8,34 @@ agents that build it. The format follows
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html); the version
 number is single-sourced from the root `package.json`
 (`pnpm version:get` / `version:check` / `version:set`).
+
+## [0.125.0] — 2026-09-28 — the mini agent + the agent's own screen + the honest computer use
+
+### THE MINI AGENT — the main agent's light partner (all surfaces)
+- **The agent can now dispatch small, fast helpers without spinning up a whole sub-agent.** A new `mini_agent` tool launches a one-task, disposable partner with a hard budget (~8 steps / 3 minutes / 4K output) that specializes in exactly one skill — browser, computer, search, or a custom specialization the main agent writes itself. It locates, observes, and executes, then reports back what happened and what the screen shows; the main agent never has to burn its own context on the small stuff.
+- **While a mini works, it gets its own dedicated section in the conversation.** You see the skill badge, the model it runs on, THE PROMPT the main agent gave it (always visible), its actions as they happen, and its final report with a steps/token footer. It's handled like a tool call — but a live one you can watch. On your phone the same run renders as one quiet inline row.
+- **Up to three minis run at once** — parallel dispatches are sibling sections that finish in any order; the fourth honest refusal says the slots are full (never a hidden queue). Each run is one-shot: no resume, no carried state, used and discarded.
+- **You choose the mini's model.** Settings → Agents gains a per-mini model override — pick any configured provider/model pair, or leave it to inherit the main agent's. The section's model chip always tells the truth about what ran.
+
+### The agent gets a screen of its own (desktop)
+- **The Agent Desk.** A new `open_desk` browser action opens the agent's own always-on-top window on the right column of your monitor — the agent gets "a custom computer kind of vibe, a section of the computer or a screen to itself" while you keep using your machine as you wish. It's a normal window to you (move, resize, close); the agent re-opens it honestly if you close it. Multi-step watchable web work happens there; quick reads stay in the embedded panel.
+- **Launching an app now actually SHOWS it to you.** The owner-reported defect — Edge "opened up in the background" — is fixed at the root: every launch path captures the fresh process, polls for its main window, and runs the verified activation ladder, so the app you asked for is the one you SEE. When a launcher re-hosts invisibly, the result says so honestly instead of pretending.
+
+### Computer use stops killing the session (Windows)
+- **A dead host capability no longer ends your conversation.** The owner's defect — "it eventually ended the session, and it said that was a host issue" — is fixed by the circuit breaker: after three consecutive host-side failures (permissions denied, accessibility off, unsupported backend) the next call tells the agent to STOP and report; the recovery texts yield to you and note that every non-computer tool still works. The turn survives; you decide what happens next.
+
+### The browser's save-as tells the truth (desktop)
+- **Right-click → "Save image as…" starts in the project's folder** — the dialog's default path is now the project's `.acute/downloads/` (the profile's default download folder is set per-project), instead of the system Downloads. The native save-as experience itself is untouched.
+- **An interrupted save says WHY.** "The download was interrupted" now names the reason (file access denied, and every other WebView2 interrupt code) — in the panel's toast and in the agent's own view of the download. Every state change logs a `browser:` line for diagnosis.
+- **The pop-out browser gets the same treatment** — saves from the popped-out window land in the project folder with their own quiet notice line.
+
+### The chat fit + the mobile quiet (all surfaces)
+- **The conversation column breathes at narrow widths** — the minimum drops one notch (400 → 360px), the composer stays one line.
+- **A mobile update download survives leaving the screen** — the download state lives in a singleton, so navigating away and back no longer loses "downloading…" or offers a second conflicting download; the menu's states (checking / available / downloading / ready) never lie.
+- **Mobile tool calls lost the dedicated section** — the cards and their stripes are gone; a run of calls renders as plain quiet inline rows (the icon beside them, as the owner asked), with the same tap-to-expand behavior and the same honesty for failures.
+
+### The live-sync backbone repaired (desktop dev)
+- **Both long-lived server-sent streams (events + notifications) survived a React StrictMode kill that had silently broken them in development mode** — the double-mount guard aborted the fresh connection and never reconnected, so remote turns, mid-turn refreshes, live theme sync and in-app notifications never arrived in the dev app. Found by the round's own live visual battery (the mini agent's live section never rendered); fixed with pinned StrictMode regression tests for both starters.
 
 ## [0.124.0] — 2026-09-28 — the update calm + the chat fit + the meter's truth + the browser leap
 

@@ -456,3 +456,31 @@ mode stays off mobile.
 - **The composer input is a pill (SUPERSEDED — R119-B):** the paperclip no longer
   lives INSIDE the bar on the right — it is its own 40dp circle BESIDE the input
   (§Composer's single-tier law); the send circle stays outside, right.
+
+## Round-132 amendments (the owner's sixth-feedback pass)
+
+- **The tool calls LOSE the section — the card dies (R132-MT supersedes the
+  R130 TOOL GROUP grammar):** the owner's verdict on the group card ("the
+  toolbars were most definitely highlighted way too much too. Like they can
+  show the SVG icon alongside with them, but getting a dedicated section is
+  most definitely not good") kills all four 'dedicated section'
+  contributors — the group CARD, the boxed gaps, the multi-call header, and
+  the left family stripe. A run of calls now renders as PLAIN INLINE ROWS
+  directly in the transcript flow: transparent row, the 13px family icon in
+  the faded family color, the secondary-ink mono-medium `verb · target`
+  title, the 32px row touch height + the tap-anywhere hitSlop 4/4,
+  whitespace alone between lines. The tool group's ONE quiet anchor line
+  survives as a summary label (icon + text, NO container, the thinking
+  row's own label grammar). BYTE-UNTOUNCHED in behavior: the auto-lifecycle
+  (live-open → 2500ms hold → auto-collapse, failed-stays-open, the user's
+  tap wins), the emission-order interleave, the collapsed default, the
+  per-row folds, and the full-strength failed wash + running chip.
+- **The mini agent row (R132-MA9):** the mini agent — the main agent's
+  light partner — renders on mobile as ONE quiet inline row per run riding
+  the R132-MT no-section register verbatim: the 13px Bot icon in the faded
+  accent, the secondary-ink mono-medium `mini · skill — task headline`
+  title, the status word + step count while running, the outcome tail
+  clamped to 2 lines when terminal. Live rows open AT THEIR DISPATCH MOMENT
+  (the `mini-agent.*` frames), concurrent minis are SIBLING rows keyed by
+  their own ids, and a reload folds the persisted `mini_agent.*` events
+  byte-identically. Full mobile mini sections are a future round, declared.

@@ -375,22 +375,22 @@
     }
   ],
   "quality": {
-    "ci": "Local gates at the R130 close: root tsc CLEAN + eslint CLEAN (whole project) + 297 files/5,208 tests GREEN (baseline R129 296/5,205 — the deltas: the R130 arrow/wrap pill pins, the dock-inset pin, the timeline slim re-pins); agent-core tsc CLEAN + 168 files/3,091 (+1 vs R129: the midway-stop actual pin + the abort-partial no-usage pin); mobile tsc CLEAN + CI=1 jest 48 suites/1,108 tests (+10: the interleaved-plan re-pins, the group label/family pins, the delete-affordance pins); design-audit CLEAN at baseline (R1 100/101, R2 1538/1635, R3 0/0, R4 15/16, R5 13/21); docs:check green; version:check 7/7 at 0.123.0. The LIVE BATTERY: real free-model turns on the dev stack (the OpenRouter nemotron-3.5-lightning 1M-window model), probe-verified with zero console errors.",
+    "ci": "Local gates at the R132 close: root tsc CLEAN + FULL vitest 300 files / 5,460 tests GREEN (baseline R131 298/5,393 — the deltas: the R132 waves' pins + the 5 R132-V StrictMode pins); agent-core tsc CLEAN + 171 files / 3,265 tests (+40 vs R131: the mini agent loop, the BD interrupt laws, the CU dispatch contracts); mobile tsc CLEAN + CI=1 jest 49 suites / 1,135 tests (+20: the MU singleton, the MT re-pins, the MA9 fold/render); eslint 0; design-audit CLEAN at-or-below baseline (105 files); docs:check 286/0/0; version:check 7/7 at 0.125.0; the LOCAL windows-target cargo check --locked GREEN + the pure desk-geometry law 1/1. THE LIVE BATTERY: the full round battery on the real sidecar with stealth/space-bunny-alpha — the API legs V1–V7 all PASS (the search mini end-to-end with the events persisted + the report reaching the main model, the parallel two-minis sibling proof, the cap's honest 4th refusal, the custom skill, the settings override live on a different model, the no-instructions refusal with the slots released) and the visual legs W1–W5 all PASS after R132-V (the mini section rendered LIVE mid-turn — the store's remote mirror carrying the mini WorkingEntry — and settled with its full anatomy; the composer one-line floor at three widths; zero page errors). R132-V itself: the StrictMode SSE kill found by the battery — both long-lived starters (events + notifications) were dead for the whole app life in dev boots (the startedRef guard + React 18's double-invoked effects aborted the fresh connection and never reconnected); fixed with the guard removed from both + StrictMode double-mount pins verified failing on the old code.",
     "suites": [
       {
         "name": "frontend",
-        "tests": 4709,
-        "detail": "267 files / 4709 passed at the R124 close (was 4676): MessageTimeline 14 (the four-verdict contract — width-dominant math, scroll ownership pure + wired, click-dismiss + wake, click-sets-active), ModelsProvidersTab 96 (configure-first + smart pre-fill + batch fetch visibility + the 12s fail auto-dismiss), agent-browser-capture 21 + BrowserPanel 57 + RightSidebar 15 + the bridge 10 (the staged capture), stream-store 69, ScreenshotRow 5."
+        "tests": 5460,
+        "detail": "the ROOT sweep at the R132 close: 300 files / 5,460 tests GREEN (the sweep includes agent-core's 171/3,265 + cli 5; baseline R131 298/5,393 — the deltas: the R132 waves' pins across MA/BD/CU/MU/MT/MA9 + the 5 R132-V StrictMode double-mount pins)"
       },
       {
         "name": "agent-core",
-        "tests": 2846,
-        "detail": "2903 tests at the R125 close (was 2846): r125-windows-capture 16 (the PrintWindow capsule's shape + the fallback markers), r124-browser-capture 13→19 (ownerPid threading + the source reply), feedback-status 10 + the checkpoint 3, the writer 13→18 + the routes 12→16 (the phase param, the status bookkeeping, GET /feedback/status), context-compaction 17→30 (providerUsageAnchor + the anchor-forces/vetoes pins + the typed decisions)."
+        "tests": 3265,
+        "detail": "171 files / 3,265 tests at the R132 close (+40 vs the R131 3,225: the mini agent loop 28, the BD interrupt laws, the CU dispatch + desk contracts)"
       },
       {
         "name": "mobile",
-        "tests": 1029,
-        "detail": "48 suites / 1049 tests at the R125 close (was 46/1029): transcript-scroll 4 (the inverted-list anchor law) + composer-draft 16 (the per-session round-trip, the cap, the blank-clear)."
+        "tests": 1135,
+        "detail": "49 suites / 1,135 tests at the R132 close (+20 vs the R131 1,115: the MU singleton, the MT no-section re-pins at 44/44 kept, the MA9 fold/render/live triple"
       }
     ],
     "cargoCheck": "green",
@@ -425,8 +425,8 @@
     ]
   },
   "round": {
-    "current": "R131-LANDED",
-    "next": "the owner's v0.124.0 device pass (the update calm, the browser downloads + resize, the meter's live truth, the .acute workspace, the computer-use honesty) — then the flagged follow-ups (the desktop overlay marker rendering, the prefix-rule UI, the api-vs-sandbox terminals)"
+    "current": "R132-LANDED",
+    "next": "the owner's v0.125.0 device pass (the mini agent system, the agent desk, the foregrounding launch, the save-as truth, the breaker's yield) — then the flagged follow-ups (the desk's set_viewport v1 limit, full mobile mini sections, the Chromium-base ADR question)"
   },
   "ci": "GREEN — v0.119.0 PUBLISHED (release 396435995, latest, end-state verified: 7/7 assets — Windows x64-setup, the two AppImages, the two debs, the android-arm64 APK, the launcher kit; all five workflows green on the R126 commit 402e1df: CI 36112145951, Rust Checks 36112146038, Mobile CI 36112145977, Release + Mobile APK on the tag)."
 }

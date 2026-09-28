@@ -40,6 +40,22 @@ import { useSessionNavStore } from "../../lib/session-nav-store";
  * Mounted ONCE in AppShell.tsx next to <NotificationStreamStarter />.
  * Returns null — this component renders nothing; it exists purely to own
  * the SSE lifecycle side-effects.
+ *
+ * R132-V (the visual-battery fix — the StrictMode kill): the OLD
+ * `startedRef` guard ("collapse duplicate subscriptions across React
+ * strict-mode double-mounts") actually KILLED the stream in dev: React 18
+ * StrictMode double-invokes effects — run 1 set startedRef and opened the
+ * connection, the strict cleanup aborted that fresh connection, and run 2
+ * returned early on the still-true ref → the app lived its WHOLE life with
+ * no events stream (the remote live mirror, the mid-turn fold refetches,
+ * the phone→desktop live sync — all silently dead in browser dev; the
+ * R132 visual battery's W2 caught it: the mini agent's live section never
+ * rendered while a page-side fetch received every frame). The guard is
+ * GONE: each effect run OWNS its connection — the cleanup tears it down
+ * (abort + timers), a remount (strict double-mount or a real one) or a
+ * dep change opens a FRESH one. No duplicates can persist: the abort
+ * precedes the new connect, and the server's close handler unsubscribes
+ * the dead socket. The exact same law fixes NotificationStreamStarter.
  */
 export function EventStreamStarter() {
   const demoData = useConfigStore((s) => s.demoData);
@@ -56,20 +72,16 @@ export function EventStreamStarter() {
     });
   }, [navigate]);
 
-  // Ref-guard: collapse duplicate subscriptions across React strict-mode
-  // double-mounts (the NotificationStreamStarter pattern).
-  const startedRef = useRef(false);
+  // R132-V: NO startedRef — see the docblock's StrictMode kill note. The
+  // effect's own cleanup is the whole teardown; every (re)run reconnects.
   // Track the active AbortController for force-abort on unmount.
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (startedRef.current) return;
-
     // Demo/fixture mode (no sidecar) — skip the stream entirely.
     if (demoData || !baseUrl || !token) {
       return;
     }
-    startedRef.current = true;
 
     let stopped = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;

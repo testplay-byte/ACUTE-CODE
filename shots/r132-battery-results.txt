@@ -1,0 +1,8 @@
+PASS V1 — dedicated sidecar up on 5311 (scratch DB, real OpenRouter key, dist rebuilt from the r132-cu tip)
+PASS V2-setup — project + agent (stealth/space-bunny-alpha) + session ready
+PASS V2 — SEARCH mini end-to-end: started=1 actions=12 done=1 ordered=true; events persisted [mini_agent.started, mini_agent.action, mini_agent.done]; the report reached the main model (the marker found in the final text)
+PASS V3 — the parallel proof: 2 distinct miniIds (mini-mulg1t0w-2jsfg2, mini-mulg1t0x-fv9zq9), every one done — the sibling-concurrency law held
+PASS V4 — the cap story: the DIRECT proof held (4 concurrent reservations → true,true,true,false — the 4th refused, never a queue); live corroboration: 4 minis started across the turn's waves + the refusal surfaced in the model's report
+PASS V5 — the custom skill: the main agent supplied the specialization, the mini ran with it and reported
+PASS V6 — the settings override: the mini ran on nvidia/nemotron-3.5-lightning:free while the main model stayed stealth/space-bunny-alpha (the started frame's model: {"providerId":"openrouter","modelId":"nvidia/nemotron-3.5-lightning:free"})
+PASS V7 — the honest refusals: the no-instructions refusal surfaced in the model's report; the slots RELEASED — a fresh dispatch after the batch ran to completion

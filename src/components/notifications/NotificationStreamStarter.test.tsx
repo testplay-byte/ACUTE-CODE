@@ -12,6 +12,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import type { NotificationRecord } from "../../lib/notifications-api";
 import { useConfigStore } from "../../lib/config-store";
 import { useNotificationStreamStore } from "../../hooks/use-notifications";
@@ -151,5 +152,46 @@ describe("R98-J: the notification stream's desktop fan-out", () => {
     });
     expect(handlers).toHaveLength(0);
     expect(notifyDesktop).not.toHaveBeenCalled();
+  });
+});
+
+describe("R132-V: the StrictMode kill — the notification stream must survive the double-mount", () => {
+  beforeEach(() => {
+    resetTestState();
+    handlers.length = 0;
+    notifyDesktop.mockClear();
+    // LIVE mode (the beforeEach above already does this; restated for this
+    // describe's isolation).
+    useConfigStore.setState({ demoData: false, baseUrl: "http://127.0.0.1:5178", token: "tok" });
+    useNotificationStreamStore.getState().reset();
+  });
+
+  it("a real remount re-opens the stream (unmount aborts, the next mount connects again)", async () => {
+    const first = renderWithProviders(<NotificationStreamStarter />);
+    await waitFor(() => {
+      expect(handlers).toHaveLength(1);
+    });
+    first.unmount();
+    renderWithProviders(<NotificationStreamStarter />);
+    // The second mount must open a FRESH handler — the old startedRef guard
+    // early-returned here and the bell/toaster lived streamless forever.
+    await waitFor(() => {
+      expect(handlers).toHaveLength(2);
+    });
+  });
+
+  it("StrictMode's double-invoked effects end with ONE live connection (setup → abort → setup)", async () => {
+    // main.tsx mounts the app inside <StrictMode>: dev-mode effect cycle is
+    // setup → cleanup → setup. The FIRST setup's connection is aborted by
+    // the cleanup; the SECOND setup must open its own — with the old
+    // startedRef guard the second returned early (1 handler, 0 live).
+    renderWithProviders(
+      <StrictMode>
+        <NotificationStreamStarter />
+      </StrictMode>,
+    );
+    await waitFor(() => {
+      expect(handlers).toHaveLength(2);
+    });
   });
 });

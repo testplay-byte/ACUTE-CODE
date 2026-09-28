@@ -66,22 +66,27 @@ export function NotificationStreamStarter() {
   const demoData = useConfigStore((s) => s.demoData);
   const baseUrl = useConfigStore((s) => s.baseUrl);
   const token = useConfigStore((s) => s.token);
-  // Ref-guard: collapse duplicate subscriptions across React strict-mode
-  // double-mounts.
-  const startedRef = useRef(false);
+  // R132-V (the visual-battery fix — the StrictMode kill): the OLD
+  // `startedRef` guard ("collapse duplicate subscriptions across React
+  // strict-mode double-mounts") actually KILLED the stream in dev — run 1
+  // set the ref and opened the connection, the strict cleanup aborted that
+  // fresh connection, and run 2 returned early on the still-true ref → the
+  // bell/toaster lived with NO notification stream for the whole app life
+  // (browser dev; the sibling EventStreamStarter carried the same defect
+  // and the R132 visual battery's W2 caught it there first). The guard is
+  // GONE — each effect run OWNS its connection, the cleanup tears it down,
+  // every remount or dep change opens a fresh one; the abort precedes the
+  // new connect so no duplicate subscription can persist.
   // Track the active AbortController for force-abort on unmount.
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (startedRef.current) return;
-
     // Demo/fixture mode (no sidecar) — skip the stream entirely. The Bell +
     // Toaster render nothing (the store stays at the default zero state).
     if (demoData || !baseUrl || !token) {
       useNotificationStreamStore.getState().setStatus("demo");
       return;
     }
-    startedRef.current = true;
 
     let stopped = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
