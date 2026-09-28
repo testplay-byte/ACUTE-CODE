@@ -1,4 +1,4 @@
-<!-- last-reviewed: 2026-09-19 round-108 -->
+<!-- last-reviewed: 2026-09-28 round-131 -->
 # PROJECT MEMORY — the agent memory system (implemented R44)
 
 **Status:** reference (implemented) · **Established:** round-44 · **Audience:**
@@ -70,6 +70,63 @@ content/kind patch). The AGENT's channel during turns is still the
 `memory_save` tool; the write routes are the owner's manual surface, and
 REST-created rows are marked `source:"owner"` so the audit trail stays
 legible.
+
+## The `.acute/` workspace (round-131 — the project root's own drawer)
+
+R131-F shipped the owner-directed workspace scaffold: "it will create a hidden
+folder or our own folder where it will store its own things… or temporary
+things… so that the actual folder does not get affected by it." Every project
+root carries the app's OWN drawer, and `memory/` is one of its four subfolders
+— the file-carried complement to the DB-backed memory table above.
+
+```
+<root>/.acute/downloads/     files fetched/downloaded for the project
+<root>/.acute/tools/         the agent's self-built tools (see EXTENSIBILITY's
+                             create-tool skill — the tool-creation convention)
+<root>/.acute/memory/        file-carried memory artifacts (the drawer this
+                             runbook's section is about)
+<root>/.acute/tmp/           scratch space for one task's intermediates
+<root>/.acute/workspace.json  the MARKER: {version, createdAt, appVersion}
+```
+
+**The law** (`agent-core/src/storage/workspace.ts`,
+`ensureProjectWorkspace`):
+
+- **Scaffolded at create**: `POST /projects` creates the drawer + the four
+  subfolders + writes the marker. The Scratchpad root
+  (`<dataDir>/scratchpad`) is healed the same way at every boot (the
+  previously-used-folder path — this is also the legacy cure for the vanished
+  cwd behind the ledger's `spawn cmd.exe ENOENT` reports: a missing root is
+  re-created at boot, and `run_command` now pre-checks the cwd and names the
+  DIRECTORY in its refusal).
+- **Resume, never re-scaffold**: the marker file is the "previously used"
+  signal. When present, missing subfolders are HEALED and the marker is never
+  rewritten — `createdAt` is the workspace's own history and survives every
+  open. (A corrupt/unparseable marker still counts as present: subfolders
+  heal, the file stays as-is.)
+- **Only `.acute/`**: the scaffold never touches any other file in the root —
+  no enumeration, no cleanup, no deletion. The user's actual project files
+  are the user's.
+- **Hidden, not unreachable**: the Files tree hides dot-dirs (fs-ops.ts), so
+  `.acute/` never appears in the explorer — but the agent's tools reach it
+  like any path (`list_dir .acute/tools` works; `read_file` reads the marker).
+- **Where consumers write**: the pre-R131 `.acute/` consumers keep their own
+  subfolders (`skills/`, `prompts/`, `agents/`, `plugins/`,
+  `computer-use/audit.jsonl`) — the scaffold creates the FOUR named folders
+  only and leaves everything else it finds in place. New consumers that need
+  the drawer's subfolders write to `downloads/` (fetched files),
+  `tools/` (the create-tool convention), `memory/` (file-carried memory),
+  `tmp/` (per-task scratch). A scaffold failure degrades honestly: the
+  project still works (`workspaceWarning` on the create response; logged at
+  boot) — never a failed create.
+- **Honest scope note (round-131)**: the R131 browser download pipeline
+  writes `<root>/downloads/` (the ROUND-115 pin it shipped under) — the
+  `.acute/downloads/` drawer is the pinned location for NEW consumers; the
+  alignment of the browser path is a flagged follow-up, not a silent
+  re-point.
+
+Pins: `agent-core/tests/r131-workspace.test.ts` (the two paths, the
+never-touch law, the boot heal, the dot-dir hide + tool reach).
 
 ## How to verify (the live-battery pattern)
 

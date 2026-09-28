@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -13,7 +13,7 @@ import type { FastifyInstance, LightMyRequestResponse } from "fastify";
  * fail-closed, and the boot sweep expires crash-orphaned rows.
  */
 import { runCommand } from "../src/tools/exec";
-import { sweepStaleApprovals, pendingApprovalCount } from "../src/approvals";
+import { addApprovalRule, sweepStaleApprovals, pendingApprovalCount } from "../src/approvals";
 import { appendSessionEvent, listSessionEvents } from "../src/storage/sessions";
 import { ProviderKeyring } from "../src/providers/registry";
 import { openDatabase, type SqliteDatabase } from "../src/storage/db";
@@ -197,6 +197,34 @@ describe("ROUND-37: approval flow (ADR-0024)", () => {
     const second = await runCommand(projectRoot, command, deps);
     expect(second.ok).toBe(true);
     expect(emitted.filter((e) => e.type === "approval.requested")).toHaveLength(1);
+  });
+
+  it("R131-F: a PREFIX rule (the trailing-slash tool pattern) auto-runs a created tool with ANY args — no approval round-trip", async () => {
+    const { projectId, sessionId, agentId } = await setupProject();
+    const { deps, emitted } = makeDeps(sessionId, agentId, projectId);
+
+    // The create-tool convention's folder actually exists (the scaffold's
+    // tools drawer — POST /projects above materialized .acute/):
+    const toolDir = join(projectRoot, ".acute", "tools", "appr-tool");
+    mkdirSync(toolDir, { recursive: true });
+    writeFileSync(join(toolDir, "run.js"), "process.stdout.write('tool-ran');\n");
+
+    // The owner granted the PREFIX rule ONCE (trailing-slash form):
+    addApprovalRule(db, projectId, "node .acute/tools/appr-tool/");
+
+    // First invocation: the rule answers — the command RUNS, no ask.
+    const first = await runCommand(projectRoot, "node .acute/tools/appr-tool/run.js", deps);
+    expect(first.ok).toBe(true);
+    expect(first.output).toBe("tool-ran");
+
+    // ANY argument variation rides the same grant, silently — the whole
+    // point of the tier (re-invocation is cheap; no re-ask per arg list):
+    const second = await runCommand(projectRoot, "node .acute/tools/appr-tool/run.js --report x", deps);
+    expect(second.ok).toBe(true);
+    expect(second.output).toBe("tool-ran");
+
+    // No approval was ever requested across either call:
+    expect(emitted.filter((e) => e.type === "approval.requested")).toHaveLength(0);
   });
 
   it("destructive commands ask but can NEVER become an always-allow rule", async () => {

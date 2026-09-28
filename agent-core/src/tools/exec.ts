@@ -46,7 +46,7 @@
  *     "ran successfully and printed nothing" note (no silent empty output).
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import type { ToolResult } from "./index.js";
@@ -298,6 +298,31 @@ export async function runCommand(
     if (!gate.allowed) {
       return { ok: false, output: `command not approved: ${gate.note}` };
     }
+  }
+
+  // R131-F (Wave F3 — the ledger's honesty fix): the cwd EXISTENCE check.
+  // Node's spawn answers a missing `cwd` with ENOENT NAMING THE EXECUTABLE
+  // ("spawn cmd.exe ENOENT") — a lie about the binary when the real problem
+  // is the vanished project folder (the legacy-install root that can
+  // disappear between sessions). The check runs AFTER the approval gate so
+  // the denylist-supreme refusals stay supreme (a blocked command is
+  // refused for ITS reason, whatever the folder state), and BEFORE the
+  // spawn — naming the DIRECTORY, with the recovery the owner can actually
+  // take. A root that exists but is a FILE gets its own honest spelling.
+  let rootIsDirectory = false;
+  try {
+    rootIsDirectory = statSync(root).isDirectory();
+  } catch {
+    rootIsDirectory = false;
+  }
+  if (!rootIsDirectory) {
+    const rootExists = existsSync(root);
+    return {
+      ok: false,
+      output:
+        `the project working directory ${rootExists ? "is not a folder" : "does not exist"}: ${root} — ` +
+        `re-open the project or pick the folder again (the command was not run)`,
+    };
   }
 
   const timeoutMs = options?.timeoutMs ?? COMMAND_TIMEOUT_MS;

@@ -72,6 +72,15 @@
  * ui-design from the Settings UI (SkillsTab's per-row switch). The seed
  * leaves every row 0; nothing rides until the owner opts in, so every
  * existing project's prompt stays byte-identical (golden-pinned).
+ *
+ * ROUND-131 (R131-F, Wave F2): the tool-creation skill — "create-tool"
+ * (25 total, sortOrder 24) — the owner's directive: "giving it a skill
+ * which it can use to create tools for itself". Teaches the
+ * .acute/tools/<name>/ + tool.json + tools.json convention (the
+ * workspace scaffold's tools drawer, storage/workspace.ts) and the
+ * approvals PREFIX rule tier for cheap re-invocation. Same INSERT OR
+ * IGNORE contract: fresh AND existing DBs converge on 25; user edits
+ * persist; deleted rows revive with the new text.
  */
 import type { SqliteDatabase } from "./db.js";
 
@@ -941,6 +950,49 @@ ENTRY POINTS: <the files that matter for this task, path:line where relevant>
 MAP: <what calls what — one line per edge>
 CONFIDENCE: <[KNOWN] read / [ASSUMED] inferred / [UNKNOWN] not yet found>`;
 
+/* ── ROUND-131 (R131-F, Wave F2): the tool-creation skill ────────────────────
+ *
+ * The owner's directive: "giving it a skill which it can use to create
+ * tools for itself… in its own separate folder… it can create Python
+ * tools, it can create other scripts, and other kinds of tools which it
+ * can utilize… if there is a task which takes quite a lot long to do it
+ * manually by itself, then it can create a tool, and whenever the user
+ * needs to do that task, it can easily just use the pre-made tool which
+ * it has built."
+ *
+ * Same house style as the family (trigger-rich description with quoted
+ * phrasings + negative scope; imperative body; iron laws in caps; ACUTE's
+ * real tool names; no emoji). The convention it teaches pins to the
+ * `.acute/tools/` scaffold (storage/workspace.ts — the same round) and
+ * the approvals PREFIX tier (approvals.ts, the same round). */
+
+export const CREATE_TOOL_SKILL_ID = "skill_builtin_create_tool";
+
+export const CREATE_TOOL_SKILL_BODY = `# Skill: create-tool
+
+Build a tool ONCE, reuse it forever. A tool is a small script in the project's own tool folder that does a recurring multi-step task in ONE invocation — the point is never the script, it is the REUSE.
+
+## When to build (and when NOT to)
+- BUILD when the same chain of steps will recur: a report to regenerate, a folder to clean, a fixture to rebuild, a dataset to transform. The third time you type the same command chain by hand, it should already be a tool.
+- Do NOT build for one-offs — run the commands directly. Do NOT rebuild what read_file / search_code / browser_control already do.
+- CHECK FIRST: list_dir .acute/tools and read .acute/tools/tools.json — the tool may already exist (an earlier session may have built it). Reuse beats rebuild.
+
+## The convention (create)
+1. ONE folder per tool: .acute/tools/<name>/ holding the script (run.py or run.js) and tool.json.
+2. tool.json — the manifest: {"name", "description" (one line), "language": "python"|"node", "invocation": "python .acute/tools/<name>/run.py" (or node …run.js), "created" (ISO date)}.
+3. Write the script with a USAGE header (what it does, every argument, one example), REAL argument parsing (argparse / process.argv — never positional guesswork), and HONEST exit codes: 0 = did the job, non-zero = did not, reason on stderr. A tool that always exits 0 is a liar.
+4. REGISTER it: read .acute/tools/tools.json (an array of manifests; [] when absent), append yours, write it back. Read-on-demand — no service, no daemon; the index IS the file.
+5. INVOKE through run_command: \`python .acute/tools/<name>/run.py <args>\`. The first invocation asks the owner for approval like any command — that is correct. Suggest the owner grant the project a PREFIX rule \`python .acute/tools/<name>/\` (trailing slash) so every LATER invocation of THAT tool runs without re-asking; the owner decides, never assume the rule exists.
+6. VERIFY ONCE before trusting it: run the tool and check the work actually happened (the file exists, the count is right). An unverified tool is a liability, not a tool.
+
+## The reuse law (the whole point)
+WHENEVER THE TASK RECURS, USE THE PRE-MADE TOOL — never re-type the manual chain, never rebuild a tool that exists. If a tool breaks, FIX IT (edit the script in place) — never abandon it for manual steps; a fixed tool is cheaper than a task redone by hand.
+
+## Honesty rules
+- Tools are PROJECT-SCOPED: they live in this project's .acute/tools/ and never touch files outside the project root.
+- .acute/ is the app's own drawer (downloads/, tools/, memory/, tmp/) — a tool's OUTPUT goes wherever the task needs inside the root; its STORAGE lives under .acute/.
+- Say what happened: "built tool X (verified: <evidence>)" or "reused tool X" — never claim the tool ran when you typed the steps manually.`;
+
 const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "description" | "body" | "source" | "sortOrder">> = [
   {
     id: COMPUTER_USE_SKILL_ID,
@@ -1159,6 +1211,20 @@ const BUILTIN_SKILLS: ReadonlyArray<Pick<SkillRecord, "id" | "name" | "descripti
     body: LARGE_PROJECT_NAVIGATION_SKILL_BODY,
     source: "builtin",
     sortOrder: 23,
+  },
+  // ROUND-131 (R131-F, Wave F2): the tool-creation skill — the owner's
+  // "give it a skill which it can use to create tools for itself". Fixed
+  // id is the INSERT OR IGNORE key; sortOrder 24 slots it after the R96
+  // quartet. Teaches the .acute/tools/ convention + the prefix approval
+  // tier (both this round).
+  {
+    id: CREATE_TOOL_SKILL_ID,
+    name: "create-tool",
+    description:
+      "Use when a task will recur and deserves ONE command instead of a chain — 'make yourself a tool for this', 'automate this chore', or the same multi-step sequence keeps recurring. Delivers the build-once-reuse-forever convention: a script under .acute/tools/<name>/ with a tool.json manifest, registered in .acute/tools/tools.json, invoked through run_command, verified once, then REUSED whenever the task recurs. NOT for one-off commands (run them directly) or what read_file/search_code already do.",
+    body: CREATE_TOOL_SKILL_BODY,
+    source: "builtin",
+    sortOrder: 24,
   },
 ];
 

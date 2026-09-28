@@ -534,7 +534,10 @@ describe("R70-b D2: the seven new built-in skills", () => {
   // tests/r96-prompts-skills.test.ts for the four new skills' own pins;
   // their bodies deliberately EXCEED this block's 800-2200/60-line band —
   // the R96-D task spec's 40-120-line format).
-  it("all TWENTY-FOUR builtins seed (computer-use + the seven R70-b + the four R71-e3 + the six R72-b + the two R73-d + the four R96-D additions), ordered by sort_order", () => {
+  // ROUND-131 (R131-F) RE-PIN: 24 → 25 — the create-tool skill (see
+  // tests/r131-create-tool.test.ts for its own pins; its body rides the
+  // browser-use 800-3,000 re-calibrated band, also over this block's).
+  it("all TWENTY-FIVE builtins seed (computer-use + the seven R70-b + the four R71-e3 + the six R72-b + the two R73-d + the four R96-D + the R131-F addition), ordered by sort_order", () => {
     const skills = listSkills(db);
     const builtins = skills.filter((s) => s.source === "builtin");
     expect(builtins.map((s) => s.name)).toEqual([
@@ -562,9 +565,10 @@ describe("R70-b D2: the seven new built-in skills", () => {
       "ui-design",
       "error-testing",
       "large-project-navigation",
+      "create-tool",
     ]);
     expect(builtins.map((s) => s.sortOrder)).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
     ]);
     expect(builtins.every((s) => s.enabled)).toBe(true);
   });

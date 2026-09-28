@@ -31,6 +31,9 @@ import type { SqliteDatabase } from "./db.js";
 // The storage layer's logging idiom (skills-files.ts is the precedent):
 // structured JSON-lines via lib/log.ts — never a bare console call.
 import { log } from "../lib/log.js";
+// R131-F (Wave F1): the per-boot workspace heal for the Scratchpad root —
+// ensureProjectWorkspace (storage/workspace.ts) is the ONE scaffold law.
+import { ensureProjectWorkspace } from "./workspace.js";
 
 /** The stable row id — the frontend pins its list entry + hides its delete
  * affordance on this exact spelling (unchanged by the R129 rename). */
@@ -81,6 +84,10 @@ export const GENERAL_PROJECT_COLOR = "#64748B";
  * — never delete user data; new sessions' workspaces live under the
  * scratchpad root.
  *
+ * R131-F (Wave F1): the seed ALSO heals the root's `.acute/` workspace
+ * scaffold every boot (best-effort, logged — see the call below); the
+ * mkdir + the heal together are the legacy-install ENOENT cure.
+ *
  * Errors are the CALLER's contract: startServer wraps the call in a
  * fire-and-log-errors leg — a seeding failure must never kill boot.
  */
@@ -100,6 +107,25 @@ export function ensureGeneralProject(db: SqliteDatabase, dataDir: string): void 
         message: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+  // R131-F (Wave F1): the per-boot WORKSPACE heal — the Scratchpad root is
+  // the ONE project folder the sidecar owns outright (cheap: one marker
+  // stat + at most four recursive mkdirs), so every boot verifies/heals its
+  // `.acute/` scaffold (the previously-used-folder path: an upgrade-era
+  // root that pre-dates the scaffold, or a user-deleted subfolder, is
+  // healed here). Together with the mkdir above this directly heals the
+  // ledger's missing-cwd ENOENT on legacy installs: a vanished root is
+  // RECREATED at boot and the scaffold rides along. Best-effort by design
+  // (the ensureScratchpadSessionWorkspace posture): a heal failure is
+  // logged and NEVER fails the seed — the Scratchpad still works without
+  // the scaffold, and the next boot retries.
+  try {
+    ensureProjectWorkspace(rootPath);
+  } catch (err) {
+    log("warn", "general_project.workspace_heal_failed", {
+      rootPath,
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
   const existing = db
     .prepare("SELECT name, root_path FROM projects WHERE id = ?")

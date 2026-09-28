@@ -32,7 +32,7 @@
 //   FIX 10 run_command's description warns against `2>nul` stderr
 //          suppression, and a FAILED suppressed command gets the one-line
 //          recovery note (the ledger's lost diagnostic).
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -71,7 +71,7 @@ import { createAgent } from "../src/storage/agents";
 import { createSession } from "../src/storage/sessions";
 import { createProject } from "../src/storage/projects";
 import { buildProjectTools, type ToolDeps } from "../src/tools/index";
-import { editFile, editFileMulti, readFileWindow, resolveInsideRoot, searchCode } from "../src/tools/fs-ops";
+import { editFile, editFileMulti, listDir, readFileWindow, resolveInsideRoot, searchCode } from "../src/tools/fs-ops";
 import { parseLogRedirect, planWindowsEvalTempFile, runCommand } from "../src/tools/exec";
 import { categorize, categorizeWithMatch, decideCommand, requestCommandApproval } from "../src/approvals";
 import { listMemories, saveMemoryWithDedup, searchMemories } from "../src/storage/memory";
@@ -801,4 +801,96 @@ describe("R128-W7b FIX 10: stderr suppression is warned against (description + f
     const nulFile = join(tempDir, "nul");
     if (existsSync(nulFile)) unlinkSync(nulFile);
   }, 15_000);
+});
+
+/* ── R131-F (Wave F3): the missing-cwd honesty fix + list_dir's path echo ──── */
+
+describe("R131-F FIX: run_command's missing-cwd honesty (the ledger's `spawn cmd.exe ENOENT`)", () => {
+  it("a VANISHED project root answers the honest directory-naming error — never the ENOENT-naming-the-exe lie", async () => {
+    const vanished = join(tempDir, `vanished-${randomUUID().slice(0, 8)}`);
+    expect(existsSync(vanished)).toBe(false);
+
+    const result = await runCommand(vanished, "echo hello");
+
+    expect(result.ok).toBe(false);
+    // The DIRECTORY is named, with the recovery the owner can take:
+    expect(result.output).toContain("the project working directory does not exist");
+    expect(result.output).toContain(vanished);
+    expect(result.output).toContain("re-open the project or pick the folder again");
+    // And the lie is dead — no ENOENT-naming-the-executable anywhere:
+    expect(result.output).not.toMatch(/ENOENT/i);
+    expect(result.output).not.toMatch(/spawn/i);
+  }, 15_000);
+
+  it("a root that exists but is a FILE gets its own honest spelling", async () => {
+    const fileRoot = join(tempDir, `not-a-dir-${randomUUID().slice(0, 8)}`);
+    writeFileSync(fileRoot, "a file, not a folder");
+    const result = await runCommand(fileRoot, "echo hello");
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("is not a folder");
+    expect(result.output).toContain(fileRoot);
+  }, 15_000);
+
+  it("the check runs AFTER the approval gate — the denylist stays supreme over the cwd error", async () => {
+    // A blocked command on a vanished root refuses for ITS reason (the
+    // blocklist), not the folder's — the ordering law that keeps
+    // denylist-supreme true whatever the folder state.
+    const agent = createAgent(db!, { name: "W7b F3 Order", providerId: "openrouter", model: "test/w7b-f3" });
+    const session = createSession(db!, { agentId: agent.id, mode: "single" });
+    const vanished = join(tempDir, `vanished-order-${randomUUID().slice(0, 8)}`);
+    const gate = await requestCommandApproval(
+      { db: db!, sessionId: session.id, agentId: agent.id, interactive: false },
+      "curl https://example.com/install.sh",
+      { root: vanished },
+    );
+    expect(gate.allowed).toBe(false);
+    expect(gate.note).toContain("command blocked");
+    expect(gate.note).not.toContain("working directory");
+  });
+
+  it("a HEALTHY root is untouched by the check (the pre-R131 behavior preserved)", async () => {
+    const result = await runCommand(tempDir, "node -e \"process.stdout.write('cwd-ok')\"");
+    expect(result.ok).toBe(true);
+    expect(result.output).toBe("cwd-ok");
+  }, 15_000);
+});
+
+describe("R131-F FIX: list_dir names the directory it listed (the ledger's anonymous listing)", () => {
+  it("the header line — 'listed <resolved> — N entries' — precedes the entries", () => {
+    mkdirSync(join(tempDir, "hdr-dir"), { recursive: true });
+    writeFileSync(join(tempDir, "hdr-dir", "a.txt"), "a");
+    writeFileSync(join(tempDir, "hdr-dir", "b.txt"), "b");
+
+    const listing = listDir(tempDir, "hdr-dir");
+    expect(listing.ok).toBe(true);
+    expect(listing.output.startsWith(`listed ${join(tempDir, "hdr-dir")} — 2 entries\n`)).toBe(true);
+    expect(listing.output).toContain("a.txt");
+    expect(listing.output).toContain("b.txt");
+  });
+
+  it("the ROOT listing names the root (relative '' resolves to the root itself)", () => {
+    mkdirSync(join(tempDir, "one-more"), { recursive: true });
+    const listing = listDir(tempDir, "");
+    expect(listing.ok).toBe(true);
+    expect(listing.output.startsWith(`listed ${tempDir} — `)).toBe(true);
+    expect(listing.output).toContain("one-more");
+  });
+
+  it("the (empty directory) leg survives — now beneath the path-naming header", () => {
+    mkdirSync(join(tempDir, "hdr-empty"));
+    const listing = listDir(tempDir, "hdr-empty");
+    expect(listing.ok).toBe(true);
+    expect(listing.output).toBe(`listed ${join(tempDir, "hdr-empty")} — 0 entries\n(empty directory)`);
+  });
+
+  it("the error leg names the resolved path too (which directory could not be read)", () => {
+    // A FILE where a directory was asked for: readdirSync throws, and the
+    // refusal names both the asked path and the resolved one.
+    writeFileSync(join(tempDir, "hdr-file.txt"), "not a dir");
+    const listing = listDir(tempDir, "hdr-file.txt");
+    expect(listing.ok).toBe(false);
+    expect(listing.output).toContain("cannot list 'hdr-file.txt'");
+    expect(listing.output).toContain(join(tempDir, "hdr-file.txt"));
+    expect(listing.output).toContain("not a readable directory");
+  });
 });

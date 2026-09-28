@@ -24,9 +24,11 @@
  *        recognizes).
  *   P2 — the SKILLS section is BUDGETED: the default 24-builtin family
  *        lists INTACT (the caps engage only for extra skills — measured
- *        ~11.2K < the 12K char budget), and synthetic overflow trips BOTH
- *        caps with the honest "…and M more — search_skills to discover
- *        them" note; the header names BOTH read_skill and search_skills.
+ *        ~11.2K < the 12K char budget; ROUND-131 (R131-F): the family is
+ *        25 now — create-tool rides inside the same budget), and
+ *        synthetic overflow trips BOTH caps with the honest "…and M more
+ *        — search_skills to discover them" note; the header names BOTH
+ *        read_skill and search_skills.
  *   P3 — the four new seeded skills (planning, ui-design, error-testing,
  *        large-project-navigation): fixed ids, sortOrder 20-23, enabled,
  *        trigger-rich descriptions, 40-120-line WHEN TO USE / PROCEDURE /
@@ -236,14 +238,17 @@ describe("R96-D P2: the SKILLS section budget", () => {
     expect(section).toContain("- **demo** — A demo skill.");
   });
 
-  it("the DEFAULT 24-builtin family lists INTACT (the caps engage only for extra skills)", () => {
+  it("the DEFAULT 25-builtin family lists INTACT (the caps engage only for extra skills)", () => {
     // The measured rationale: the seeded core lists at ~11.2K chars — under
     // the 12K budget BY DESIGN (the task's suggested ~8K would have cut
     // spec-planning/performance out of every fresh install).
+    // ROUND-131 (R131-F) RE-PIN: 24 → 25 (create-tool — the family grew by
+    // one line, ~570 chars; the measured listing stays comfortably inside
+    // the 12K budget).
     const builtins = listSkills(db)
       .filter((s) => s.source === "builtin")
       .map((s) => ({ name: s.name, description: s.description }));
-    expect(builtins).toHaveLength(24);
+    expect(builtins).toHaveLength(25);
 
     const section = buildSectionText(promptCtx(builtins), "skills") ?? "";
     for (const skill of builtins) {
@@ -327,7 +332,8 @@ describe("R96-D P3: the four owner-named builtins seed", () => {
 
   it("each seeds with its fixed id, sortOrder 20-23, enabled, house-shaped description", () => {
     const byName = new Map(listSkills(db).filter((s) => s.source === "builtin").map((s) => [s.name, s]));
-    expect([...byName.keys()]).toHaveLength(24);
+    // ROUND-131 (R131-F) RE-PIN: 24 → 25 (create-tool).
+    expect([...byName.keys()]).toHaveLength(25);
     for (const expected of R96D_BUILTINS) {
       const skill = byName.get(expected.name);
       expect(skill).toBeDefined();
@@ -402,7 +408,8 @@ describe("R96-D P3: the four owner-named builtins seed", () => {
   it("INSERT OR IGNORE: idempotent re-seed, and a deleted R96-D row revives on reopen", () => {
     seedBuiltinSkills(db);
     seedBuiltinSkills(db);
-    expect(listSkills(db).filter((s) => s.source === "builtin")).toHaveLength(24);
+    // ROUND-131 (R131-F) RE-PIN: 24 → 25 (create-tool).
+    expect(listSkills(db).filter((s) => s.source === "builtin")).toHaveLength(25);
 
     db.prepare("DELETE FROM skills WHERE id = ?").run("skill_builtin_planning");
     const reopened = openDatabase(join(tempDir, "reopen.db"));
@@ -410,7 +417,7 @@ describe("R96-D P3: the four owner-named builtins seed", () => {
       const revived = getSkill(reopened, "skill_builtin_planning");
       expect(revived?.name).toBe("planning");
       expect(revived?.body).toContain("RE-PLAN ON SURPRISE");
-      expect(listSkills(reopened).filter((s) => s.source === "builtin")).toHaveLength(24);
+      expect(listSkills(reopened).filter((s) => s.source === "builtin")).toHaveLength(25);
     } finally {
       reopened.close();
     }
